@@ -1,0 +1,5 @@
+.example-textarea{display:grid;gap:6px;min-width:0;width:100%}
+.example-textarea>textarea{min-width:0;max-width:100%;width:100%;box-sizing:border-box}
+.example-textarea-hint{font-size:12px;line-height:1.6;color:var(--ui-fg-muted);font-weight:400}
+.example-textarea-hint kbd{display:inline-block;padding:0 5px;border:1px solid var(--ui-border);border-radius:4px;background:var(--ui-surface-subtle);color:var(--ui-fg-secondary);font:inherit;font-weight:600}
+.example-textarea:focus-within .example-textarea-hint{color:var(--ui-accent)}

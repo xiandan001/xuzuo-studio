@@ -1,0 +1,15 @@
+node_modules/
+dist/
+/docs/
+/output/
+/outputs/
+/work/
+outputs/release/
+outputs/release-*/
+work/ui-build/
+work/playwright-browsers/
+work/desktop-qa-*/
+work/packaged-smoke-*/
+*.log
+.env*
+!.env.example

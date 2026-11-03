@@ -1,0 +1,14 @@
+.modal.project-creation-recovery { width: 660px; max-height: calc(100vh - 48px); overflow: auto; }
+.project-creation-recovery > p { line-height: 1.7; font-size: 15px; }
+.project-connection-directory { padding: 14px; border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: 10px; }
+.project-connection-directory > span { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; }
+.project-connection-directory code { display: block; margin-top: 10px; color: var(--ui-fg); font-family: inherit; font-size: 14px; overflow-wrap: anywhere; }
+.project-connection-message { color: var(--ui-warning); }
+.project-creation-recovery .project-connection-note { color: var(--ui-fg-secondary); font-size: 14px; }
+.project-creation-recovery .modal-actions { flex-wrap: wrap; }
+.project-recovery-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.project-recovery-option { display: flex; flex-direction: column; padding: 16px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); }
+.project-recovery-option > h3 { margin: 0; color: var(--ui-fg); font-size: 16px; line-height: 1.5; }
+.project-recovery-option > p { flex: 1; margin: 9px 0 16px; color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.7; }
+.project-recovery-option > .btn { width: 100%; min-height: 42px; white-space: normal; font-size: 14px; }
+@media (max-width: 660px) { .project-recovery-options { grid-template-columns: 1fr; } }

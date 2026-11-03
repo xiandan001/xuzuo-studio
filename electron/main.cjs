@@ -1,0 +1,368 @@
+const { app, BrowserWindow, ipcMain, Menu, safeStorage, shell, net, nativeImage, nativeTheme, screen } = require('electron');
+const path = require('node:path');
+const fs = require('node:fs/promises');
+const { pathToFileURL } = require('node:url');
+const { createCustomDialogs } = require('./custom-dialogs.cjs');
+const { createAppMaintenance } = require('./app-maintenance.cjs');
+const { writeDialogFile } = require('./dialog-save.cjs');
+const { createCredentialStore, isTrustedCredentialSender } = require('./credential-store.cjs');
+const { createArtifactStore } = require('./artifact-store.cjs');
+const { createModelRuntime } = require('./model-runtime.cjs');
+const { createLiveWorkflowEngine } = require('./live-workflow-engine.cjs');
+const { probeConnection } = require('./connection-probe.cjs');
+const { extractReferenceText } = require('./reference-text.cjs');
+const { artifactTrashError, artifactRequestError } = require('./artifact-lifecycle.cjs');
+const { createFxRateService } = require('./fx-rates.cjs');
+const { createAutomaticBilling, pendingBilling } = require('./automatic-billing.cjs');
+const { createCpuTasks } = require('./cpu-tasks.cjs');
+const { createProjectBackup } = require('./project-backup.cjs');
+const { registerProductionHandlers } = require('./production-handlers.cjs');
+const { registerProjectCreation } = require('./project-creation.cjs');
+const { createDeliveryStore } = require('./delivery-store.cjs');
+const { createBatchProduction } = require('./batch-production.cjs');
+const { createWorkspaceStorage } = require('./workspace-storage.cjs');
+const { createEditorStore } = require('./editor-store.cjs');
+const { createSpreadsheetStore } = require('./spreadsheet-store.cjs');
+const { createDocumentArtifactPreview } = require('./artifact-document-preview.cjs');
+const { createAssetLibrary } = require('./asset-library.cjs');
+const { createBuiltinAssets } = require('./builtin-assets.cjs');
+const { createAssetCategories } = require('./asset-categories.cjs');
+const { createApplicationExit } = require('./application-exit.cjs');
+const { readValidationOwner, startValidationLifecycle } = require('./validation-lifecycle.cjs');
+
+let mainWindow;
+let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs;
+let runtimeClosing = false, drainRuntime = async () => undefined;
+const runtimeRequests = new Set();
+let closingWriteFailed = false;
+function trackRuntimeTask(task, write = false) {
+  runtimeRequests.add(task);
+  task.then(() => runtimeRequests.delete(task), () => { runtimeRequests.delete(task); if (write && runtimeClosing) closingWriteFailed = true; });
+}
+const validationRequested = Boolean(process.env.XUZUO_QA_PROFILE && (!app.isPackaged || process.argv.includes('--isolated-validation')));
+if (validationRequested) {
+  app.setName('序作工作台独立验证');
+  app.setPath('userData', path.resolve(process.env.XUZUO_QA_PROFILE));
+}
+const validationOwner = validationRequested ? readValidationOwner(app.getPath('userData')) : null;
+const visibleValidation = process.env.XUZUO_QA_VISIBLE === '1';
+const ownsInstance = app.requestSingleInstanceLock();
+if (!ownsInstance) app.quit();
+app.on('second-instance', () => { if (mainWindow && !mainWindow.isDestroyed() && !runtimeClosing) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); } });
+const applicationUrl = pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html')).href;
+
+function trustedSender(event) {
+  return isTrustedCredentialSender(event, mainWindow?.webContents, applicationUrl);
+}
+
+function registerCredentials() {
+  const credentials = createCredentialStore({ directory: app.getPath('userData'), safeStorage });
+  const handle = (name, action) => ipcMain.handle(`credentials:${name}`, (event, input) => {
+    if (!trustedSender(event)) throw new Error('此页面无权访问本机凭证。');
+    if (runtimeClosing && !['list', 'status'].includes(name)) throw new Error('应用正在保存并退出，未修改密钥。');
+    const task = Promise.resolve().then(() => action(input));
+    if (['save', 'set-enabled'].includes(name)) trackRuntimeTask(task, true);
+    return task;
+  });
+  handle('status', () => credentials.status());
+  handle('list', () => credentials.list());
+  handle('save', input => credentials.save(input));
+  handle('set-enabled', input => credentials.setEnabled(input));
+  return credentials;
+}
+
+function registerRuntime(credentials) {
+  studioDialogs = createCustomDialogs({ app, BrowserWindow, ipcMain, getWindow: () => mainWindow, trustedSender, canStart: () => !runtimeClosing, trackTask: trackRuntimeTask, hidden: Boolean(validationOwner && !visibleValidation), initialAppearance: { mode: nativeTheme.shouldUseDarkColors ? 'dark' : 'light', palette: 'violet' }, getWorkArea: window => window ? screen.getDisplayMatching(window.getBounds()).workAreaSize : screen.getPrimaryDisplay().workAreaSize });
+  const dialog = studioDialogs;
+  const cpuTasks = createCpuTasks();
+  const workspaceStorage = createWorkspaceStorage({ directory: app.getPath('userData') });
+  const artifactStore = createArtifactStore({ directory: path.join(app.getPath('userData'), 'artifacts-v1'), workspaceStorage, renderOffice: input => cpuTasks.run('office', input), convertImage: buffer => { const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('这张图像无法转换为 Office 所需的 PNG，请先检查原文件。'); return image.toPNG(); } });
+  workspaceStorage.setArtifactMigrator((projectId, destination, options) => artifactStore.migrateProject(projectId, destination, options));
+  const editorStore = createEditorStore({ workspaceStorage, artifactStore });
+  const spreadsheetStore = createSpreadsheetStore({ workspaceStorage, artifactStore });
+  const assets = createAssetLibrary({ workspaceStorage, artifactStore });
+  const builtinAssets = createBuiltinAssets({ workspaceStorage, artifactStore, assetLibrary: assets });
+  const assetCategories = createAssetCategories({ workspaceStorage, assetLibrary: assets, builtinAssets });
+  const fetchImpl = (url, options) => net.fetch(url, options);
+  const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl });
+  const fxRates = createFxRateService({ directory: app.getPath('userData'), fetchImpl });
+  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates });
+  const documentArtifactPreview = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
+  automaticBilling = createAutomaticBilling({ needsRecalculation: async () => !runtimeClosing && pendingBilling((await liveEngine.snapshot(undefined, { summaryOnly: true })).ledger), recalculate: options => liveEngine.recalculateCosts(options) });
+  automaticBilling.start();
+  const backupManager = createProjectBackup({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, batchProduction: () => batches });
+  const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, inspectImage: async buffer => {
+    const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('实际图像无法解码，请检查源文件。');
+    const { width, height } = image.getSize();
+    if (width * height > 16777216) return { width, height, transparency: 'unknown' };
+    return cpuTasks.run('image-alpha', { width, height, bitmap: image.toBitmap() });
+  } });
+  const batches = createBatchProduction({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, assertAdmission: async project => { if (runtimeClosing || relocatingProjects.has(project.id)) throw new Error('目录或应用正在退出处理，请稍后显式继续队列。'); } });
+  const movingArtifacts = new Map();
+  const relocatingProjects = new Set();
+  const writingProjects = new Map();
+  const withProjectWrite = async (id, action) => {
+    if (!id || relocatingProjects.has(id)) throw new Error('项目目录正在处理，请稍后再试。');
+    writingProjects.set(id, (writingProjects.get(id) || 0) + 1);
+    try { return await action(); } finally { const count = writingProjects.get(id) - 1; if (count) writingProjects.set(id, count); else writingProjects.delete(id); }
+  };
+  const assertFilesReady = input => { const error = artifactRequestError(input, [...movingArtifacts.values()]); if (error) throw new Error(error); };
+  const assertProjectReady = async input => {
+    assertFilesReady(input);
+    if (!input?.project?.id || relocatingProjects.has(input.project.id)) throw new Error('项目目录正在处理，请稍后再试。');
+    await workspaceStorage.assertProject(input.project.id, input.project.workspaceId);
+  };
+  const handle = (name, action) => ipcMain.handle(`runtime:${name}`, (event, input) => {
+    if (!trustedSender(event)) throw new Error('此页面无权执行本机模型任务。');
+    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
+    const task = Promise.resolve().then(() => action(input));
+    if (!['status', 'snapshot', 'poll-snapshot'].includes(name)) trackRuntimeTask(task, /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || ['asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name));
+    return task;
+  });
+  drainRuntime = async () => {
+    runtimeClosing = true;
+    studioDialogs.cancelPickers();
+    await automaticBilling.stop();
+    await batches.shutdown();
+    await liveEngine.shutdown();
+    await Promise.allSettled([...runtimeRequests]);
+    await Promise.all([editorStore.drain(), spreadsheetStore.drain(), artifactStore.drain(), assets.flush(), assetCategories.flush(), backupManager.flush(), deliveries.drain(), cpuTasks.drain()]);
+    await liveEngine.flush();
+    if (closingWriteFailed) throw new Error('退出期间有本地文件或密钥未能保存。');
+  };
+  registerProductionHandlers({ handle, dialog, getWindow: () => mainWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, writingProjects, withProjectWrite });
+  registerProjectCreation({ handle, dialog, getWindow: () => mainWindow, workspaceStorage, withProjectWrite, beforeReconnect: async workspaceId => {
+    const ids = (await workspaceStorage.list()).projects.filter(item => item.workspaceId === workspaceId).map(item => item.projectId);
+    const snapshot = await liveEngine.snapshot(undefined, { summaryOnly: true });
+    if (ids.some(id => writingProjects.has(id) || relocatingProjects.has(id)) || snapshot.runs.some(run => run.workspaceId === workspaceId && run.status === 'running')) throw new Error('请等待本工作区当前请求或文件操作结束，再重新连接目录。');
+  } });
+  handle('asset-builtin-import', input => assets.flush().then(() => builtinAssets.import(input)));
+  handle('asset-builtin-attach', input => withProjectWrite(input?.projectId, () => builtinAssets.attach(input)));
+  handle('asset-builtin-save', async input => {
+    if (input?.format !== undefined && !['png', 'bundle'].includes(input.format)) throw new Error('请选择 PNG 或完整素材包。');
+    const bundle = input?.format === 'bundle', file = await builtinAssets[bundle ? 'bundle' : 'read'](input);
+    const result = await dialog.showSaveDialog(mainWindow, { title: bundle ? '另存完整素材包（含 SVG 与许可证）' : '另存内置 PNG 素材', defaultPath: file.name, filters: [{ name: bundle ? '完整素材包' : 'PNG 图片', extensions: [bundle ? 'zip' : 'png'] }] });
+    return result.canceled || !result.filePath ? { saved: false } : writeDialogFile(result, file.buffer);
+  });
+  handle('asset-builtin-link', async input => { await shell.openExternal(await builtinAssets.link(input)); });
+  handle('asset-categories', input => assetCategories.list(input));
+  handle('asset-category-save', input => assetCategories.save(input));
+  handle('asset-category-remove', input => assetCategories.remove(input));
+  handle('asset-category-assign', input => assetCategories.assign(input));
+  handle('asset-list', async input => { const [items, categories] = await Promise.all([assets.list(input), assetCategories.list(input)]); return items.map(item => ({ ...item, ...(categories.assignments[item.id] ? { categoryId: categories.assignments[item.id] } : {}) })); });
+  handle('asset-import', async input => {
+    await workspaceStorage.validateWorkspace(input?.workspaceId);
+    const result = await dialog.showOpenDialog(mainWindow, { title: '添加到当前工作区素材库', properties: ['openFile', 'multiSelections'], filters: [{ name: '素材文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'pdf', 'pptx', 'xlsx', 'docx', 'txt', 'md', 'json', 'csv', 'tsv', 'mp3', 'wav', 'm4a', 'mp4'] }] });
+    return result.canceled ? [] : assets.importPaths({ workspaceId: input.workspaceId, paths: result.filePaths });
+  });
+  handle('asset-update', input => assets.update(input));
+  handle('asset-attach', input => withProjectWrite(input?.projectId, () => assets.attach(input)));
+  handle('asset-preview', async input => {
+    const file = await assets.read(input);
+    if (['image', 'audio', 'video'].includes(file.kind)) {
+      if (file.bytes > 32 * 1024 * 1024) throw new Error('素材超过内嵌预览大小，请另存后查看。');
+      if (file.kind === 'image' && nativeImage.createFromBuffer(file.buffer).isEmpty()) throw new Error('素材图片无法解码，请另存检查原文件或重新导入。');
+      return { mimeType: file.mimeType, dataUrl: `data:${file.mimeType};base64,${file.buffer.toString('base64')}` };
+    }
+    if (file.kind === 'office' || file.kind === 'text') return { mimeType: file.mimeType, text: await extractReferenceText(file) };
+    return { mimeType: file.mimeType };
+  });
+  handle('asset-save', async input => {
+    const file = await assets.read(input);
+    const result = await dialog.showSaveDialog(mainWindow, { title: '另存真实素材文件', defaultPath: file.name, filters: [{ name: '原始文件格式', extensions: [path.extname(file.name).slice(1) || '*'] }] });
+    if (result.canceled || !result.filePath) return { saved: false };
+    return writeDialogFile(result, file.buffer);
+  });
+  handle('status', () => ({ available: true }));
+  handle('preflight', async input => { await assertProjectReady(input); return liveEngine.preflight(input); });
+  handle('start', input => withProjectWrite(input?.project?.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }));
+  handle('snapshot', () => liveEngine.snapshot());
+  handle('poll-snapshot', afterRevision => liveEngine.snapshot(afterRevision, { summaryOnly: true }));
+  handle('run-detail', id => liveEngine.runDetail(id));
+  handle('control', async input => {
+    if (['resume', 'continue', 'retry'].includes(input?.action)) {
+      const run = (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.find(item => item.id === input.id);
+      if (run) return withProjectWrite(run.projectId, async () => {
+        await assertProjectReady({ project: { id: run.projectId, workspaceId: input.project?.workspaceId || run.workspaceId }, attachmentIds: [...(run.attachmentIds || []), ...run.attempts.flatMap(attempt => (attempt.artifacts || []).map(artifact => artifact.id))] });
+        return liveEngine.control(input);
+      });
+    }
+    return liveEngine.control(input);
+  });
+  handle('reconcile', input => liveEngine.reconcile(input));
+  handle('recalculate-costs', () => liveEngine.recalculateCosts());
+  handle('manage-run', input => liveEngine.manageRun(input));
+  handle('workspace-list', () => workspaceStorage.list());
+  handle('workspace-repair', async input => {
+    if (!input || typeof input.workspaceId !== 'string') throw new Error('工作区参数无效。');
+    const locations = await workspaceStorage.list();
+    if (!locations.workspaces.some(item => item.workspaceId === input.workspaceId)) throw new Error('工作区尚未绑定本地文件夹。');
+    const ids = locations.projects.filter(item => item.workspaceId === input.workspaceId).map(item => item.projectId);
+    const runs = (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs;
+    if (runs.some(run => (run.workspaceId === input.workspaceId || ids.includes(run.projectId)) && run.status === 'running') || ids.some(id => writingProjects.has(id) || relocatingProjects.has(id))) throw new Error('请等待当前模型请求、文件写入或目录操作结束，再恢复工作区连接。');
+    for (const id of ids) relocatingProjects.add(id);
+    try { return await workspaceStorage.repair(input); }
+    finally { for (const id of ids) relocatingProjects.delete(id); }
+  });
+  handle('workspace-choose', async input => {
+    if (!input || typeof input.workspaceId !== 'string' || typeof input.name !== 'string' || !Array.isArray(input.projects)) throw new Error('工作区参数无效。');
+    const projects = input.projects.filter(project => project.workspaceId === input.workspaceId);
+    const ids = new Set(projects.map(project => project.id));
+    const runs = (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs;
+    if (runs.some(run => ids.has(run.projectId) && run.status === 'running') || [...ids].some(id => relocatingProjects.has(id) || writingProjects.has(id))) throw new Error('请等待项目当前请求结束，再绑定工作区目录。');
+    const result = await dialog.showOpenDialog(mainWindow, { title: `为“${input.name}”选择或新建工作区文件夹`, properties: ['openDirectory', 'createDirectory'], buttonLabel: '使用此工作区' });
+    if (result.canceled || !result.filePaths[0]) return null;
+    // Recheck after the native dialog, because a task may have started meanwhile.
+    if ((await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.some(run => ids.has(run.projectId) && run.status === 'running') || [...ids].some(id => writingProjects.has(id) || relocatingProjects.has(id))) throw new Error('项目已开始运行，请完成当前请求后再绑定目录。');
+    for (const id of ids) relocatingProjects.add(id);
+    try { const location = await workspaceStorage.bindRoot({ ...input, projects, directory: result.filePaths[0] }); await liveEngine.refreshArtifactLocations(); return location; }
+    finally { for (const id of ids) relocatingProjects.delete(id); }
+  });
+  handle('workspace-ensure-project', input => withProjectWrite(input?.projectId, () => workspaceStorage.ensureProject(input)));
+  handle('workspace-move-project', async input => {
+    if (relocatingProjects.has(input?.projectId) || writingProjects.has(input?.projectId)) throw new Error('项目目录正在移动。');
+    if ((await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.some(run => run.projectId === input?.projectId && ['running', 'paused', 'waiting-review'].includes(run.status))) throw new Error('请先完成或取消项目任务，再移动工作区。');
+    if (writingProjects.has(input.projectId) || relocatingProjects.has(input.projectId)) throw new Error('项目有本地写入或目录操作尚未完成，请稍后再移动。');
+    relocatingProjects.add(input.projectId);
+    try { const location = await workspaceStorage.moveProject(input); await liveEngine.refreshArtifactLocations(); return location; } finally { relocatingProjects.delete(input.projectId); }
+  });
+  handle('workspace-open', async input => {
+    let directory;
+    if (input?.projectId) directory = await workspaceStorage.projectDirectory(input.projectId);
+    else {
+      const location = (await workspaceStorage.list()).workspaces.find(item => item.workspaceId === input?.workspaceId);
+      if (!location) throw new Error('请先绑定工作区文件夹。');
+      directory = await workspaceStorage.validateWorkspace(location.workspaceId);
+    }
+    if (await shell.openPath(directory)) throw new Error('系统无法打开这个文件夹，请检查它是否仍可用。');
+  });
+  const editorProject = async projectId => {
+    const location = (await workspaceStorage.list()).projects.find(item => item.projectId === projectId);
+    if (!location || relocatingProjects.has(projectId)) throw new Error('请先为当前工作区绑定文件夹，或等待目录移动完成。');
+    await workspaceStorage.assertProject(projectId, location.workspaceId); return location;
+  };
+  for (const action of ['load', 'save', 'history', 'loadVersion']) handle(`editor-${action}`, input => { const execute = async () => { await editorProject(input?.projectId); return editorStore[action](input); }; return action === 'save' ? withProjectWrite(input?.projectId, execute) : execute(); });
+  handle('editor-restore', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); return editorStore.restore(input); }));
+  handle('editor-export', input => withProjectWrite(input?.projectId, async () => {
+    const location = await editorProject(input?.projectId);
+    const result = await editorStore.export(input);
+    await liveEngine.recordLocalExport({ projectId: location.projectId, workspaceId: location.workspaceId, name: result.record.document.title, kind: result.record.document.kind, sourceRevision: result.record.revision, artifacts: result.artifacts, sourceArtifactIds: result.record.sourceArtifactIds });
+    return result;
+  }));
+  for (const action of ['load', 'save', 'history', 'loadVersion']) handle(`spreadsheet-${action}`, input => {
+    const execute = async () => { await editorProject(input?.projectId); return spreadsheetStore[action](input); };
+    return action === 'save' ? withProjectWrite(input?.projectId, execute) : execute();
+  });
+  handle('spreadsheet-export', input => withProjectWrite(input?.projectId, async () => {
+    const location = await editorProject(input?.projectId);
+    const result = await spreadsheetStore.export(input);
+    await liveEngine.recordLocalExport({ projectId: location.projectId, workspaceId: location.workspaceId, name: result.record.document.title, kind: 'excel', sourceRevision: result.record.revision, artifacts: result.artifacts, sourceArtifactIds: result.record.sourceArtifactIds });
+    return result;
+  }));
+  handle('spreadsheet-restore', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); return spreadsheetStore.restore(input); }));
+  handle('probe', input => probeConnection(input, credentials, fetchImpl));
+  handle('export-draft', input => withProjectWrite(input?.project?.id, async () => {
+    if (!input?.project || typeof input.title !== 'string' || typeof input.text !== 'string' || !input.text.trim()) throw new Error('草稿内容为空，请先编辑正文。');
+    await assertProjectReady(input);
+    const id = `local-export-${Date.now()}`;
+    const workflow = { id, workspaceId: input.project.workspaceId, name: `${input.title} · 本地导出`, description: '本地草稿生成文件，不调用模型。', outputKind: input.project.kind, updatedAt: new Date().toISOString(), steps: [{ id: `${id}-file`, name: '生成实际文件', kind: 'export', prompt: '', inputSource: 'project', budgetCents: 0, enabled: true }] };
+    const run = await liveEngine.start({ workflow, project: { ...input.project, name: input.title }, connections: [], models: [], input: input.text, variables: {}, attachmentIds: input.attachmentIds || [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const snapshot = await liveEngine.snapshot(undefined, { summaryOnly: true });
+      const current = snapshot.runs.find(item => item.id === run.id);
+      if (current.status === 'complete') return current.attempts.flatMap(attempt => attempt.artifacts || []);
+      if (['failed', 'cancelled', 'interrupted'].includes(current.status)) throw new Error(current.error || '本地文件导出未完成。');
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    throw new Error('文件仍在后台处理，可在工作流运行记录中查看，未重复生成。');
+  }));
+  handle('import-files', projectId => withProjectWrite(projectId, async () => {
+    if (!projectId) throw new Error('请先选择导入资料所属的项目。');
+    await editorProject(projectId);
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择工作流参考文件', properties: ['openFile', 'multiSelections'], filters: [{ name: '参考文字、Office、图片与音视频', extensions: ['txt', 'md', 'json', 'csv', 'docx', 'pptx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'mp3', 'wav', 'm4a', 'mp4'] }] });
+    return result.canceled ? [] : artifactStore.importPaths(result.filePaths, { projectId });
+  }));
+  handle('preview-artifact', async id => { const file = await artifactStore.read(id); if (file.kind === 'office') { const [artifact] = await artifactStore.list([id]); const structured = await documentArtifactPreview(artifact).catch(() => undefined); return { mimeType: file.mimeType, artifact, ...(structured || { text: await extractReferenceText(file) }), supported: true }; } const preview = await artifactStore.preview(id); return { mimeType: preview.artifact?.mimeType || preview.mimeType, ...preview }; });
+  handle('trash-artifact', async id => {
+    if (movingArtifacts.has(id)) throw new Error('这个文件正在处理，请稍后再试。');
+    const [artifact] = await artifactStore.list([id]);
+    movingArtifacts.set(id, artifact);
+    try {
+      const error = artifactTrashError(artifact, (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs);
+      if (error) throw new Error(error);
+      const execute = async () => { const metadata = await artifactStore.trash(id); await liveEngine.refreshArtifactLocations(); return metadata; };
+      return artifact.projectId ? await withProjectWrite(artifact.projectId, execute) : await execute();
+    } finally { movingArtifacts.delete(id); }
+  });
+  handle('restore-artifact', async id => {
+    if (movingArtifacts.has(id)) throw new Error('这个文件正在处理，请稍后再恢复。');
+    const artifact = (await artifactStore.listTrash()).find(item => item.id === id);
+    const execute = async () => { const metadata = await artifactStore.restore(id); await liveEngine.refreshArtifactLocations(); return metadata; };
+    return artifact?.projectId ? withProjectWrite(artifact.projectId, execute) : execute();
+  });
+  handle('list-trashed-artifacts', () => artifactStore.listTrash());
+  handle('list-project-artifacts', projectId => artifactStore.listProject(projectId));
+  handle('open-artifact', async id => {
+    const [artifact] = await artifactStore.list([id]);
+    if (!artifact || !['pptx', 'docx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'mp3', 'wav', 'm4a', 'mp4', 'txt', 'md', 'json', 'csv'].includes(path.extname(artifact.path).slice(1).toLowerCase())) throw new Error('这个文件类型不支持直接打开，请使用另存。');
+    const error = await shell.openPath(artifact.path); if (error) throw new Error('系统无法打开文件，请另存后使用相应软件打开。');
+  });
+  handle('save-artifact', async id => {
+    const file = await artifactStore.read(id);
+    const result = await dialog.showSaveDialog(mainWindow, { title: '另存工作流产物', defaultPath: file.name, filters: [{ name: '原始文件格式', extensions: [path.extname(file.name).slice(1) || '*'] }] });
+    if (result.canceled || !result.filePath) return { saved: false };
+    return writeDialogFile(result, file.buffer);
+  });
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1480,
+    height: 980,
+    minWidth: 1120,
+    minHeight: 760,
+    show: false,
+    skipTaskbar: Boolean(validationOwner && !visibleValidation),
+    frame: false,
+    backgroundColor: '#f5f6fa',
+    title: '序作工作台',
+    icon: path.join(__dirname, '..', 'assets', 'app-icon.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: !validationOwner,
+      additionalArguments: validationRequested ? ['--xuzuo-isolated-validation'] : [],
+    },
+  });
+  applicationExit.install(mainWindow);
+  studioDialogs.installOwner(mainWindow);
+  mainWindow.on('focus', () => { void automaticBilling?.trigger(); });
+  mainWindow.on('restore', () => { void automaticBilling?.trigger(); });
+  Menu.setApplicationMenu(null);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== applicationUrl) event.preventDefault();
+  });
+  mainWindow.webContents.on('will-redirect', event => event.preventDefault());
+  mainWindow.once('ready-to-show', () => { if (!validationOwner || visibleValidation) mainWindow.show(); });
+  if (validationRequested) mainWindow.on('page-title-updated', event => { event.preventDefault(); mainWindow.setTitle('序作工作台 · 独立测试窗口'); });
+  mainWindow.loadURL(applicationUrl);
+}
+app.whenReady().then(() => {
+  if (!ownsInstance) return;
+  const credentials = registerCredentials();
+  registerRuntime(credentials);
+  applicationExit = createApplicationExit({ app, dialog: studioDialogs, ipcMain, getWindow: () => mainWindow, trustedSender, getTaskState: async () => ({ running: (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.filter(run => run.status === 'running').length }), drain: () => drainRuntime(), validationOwner, visibleValidation, onStatus: state => { if (state.phase === 'cancelled') { runtimeClosing = false; closingWriteFailed = false; } else runtimeClosing = true; } });
+  const maintenance = createAppMaintenance({ app, appId: 'local.xuzuo.studio' });
+  ipcMain.handle('maintenance:status', event => { if (!trustedSender(event)) throw new Error('此页面无权读取应用维护状态。'); return maintenance.status(); });
+  ipcMain.handle('maintenance:uninstall', event => { if (!trustedSender(event) || runtimeClosing) throw new Error('应用正在退出或当前页面无权启动维护。'); return maintenance.openUninstall(); });
+  ipcMain.on('window:minimize', event => { if (trustedSender(event)) mainWindow.minimize(); });
+  ipcMain.on('window:maximize', event => { if (trustedSender(event)) mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); });
+  ipcMain.on('window:close', event => { if (trustedSender(event)) mainWindow.close(); });
+  createWindow();
+  if (validationOwner) stopValidationLifecycle = startValidationLifecycle({ ...validationOwner, requestExit: async () => { await drainRuntime(); app.exit(0); }, forceExit: () => app.exit(0) });
+  app.on('quit', () => { stopValidationLifecycle?.(); studioDialogs?.dispose(); });
+});

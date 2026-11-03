@@ -1,0 +1,9 @@
+import { Redo2, Undo2 } from 'lucide-react';
+import './selection-history-toolbar.css';
+
+export interface SelectionHistoryToolbarProps { label: string; selectionPreview?: string; selectedCount?: number; exactSelection?: boolean; scopeDescription?: string; canUndo: boolean; canRedo: boolean; reason?: string; disabled?: boolean; onUndo: () => void; onRedo: () => void; onClearSelection?: () => void; image?: boolean; }
+export function SelectionHistoryToolbar({ label, selectionPreview, selectedCount = 0, exactSelection = false, scopeDescription, canUndo, canRedo, reason, disabled, onUndo, onRedo, onClearSelection, image }: SelectionHistoryToolbarProps) {
+  const selected = exactSelection || selectedCount > 0;
+  const scope = selected ? '选中内容' : image ? '所选图片' : '当前字段';
+  return <section className="selection-history-toolbar" aria-label="局部撤销与重做"><div className="selection-history-context"><strong>{label}</strong><span>{scopeDescription || (selected ? selectedCount > 0 ? `已选择 ${selectedCount} 字` : '已保留选区位置' : image ? '仅当前图片位置' : '未选中文字，按当前完整字段操作')}</span>{selectionPreview && <q title={selectionPreview}>{selectionPreview.slice(0, 45)}{selectionPreview.length > 45 ? '…' : ''}</q>}</div><div className="selection-history-actions"><button type="button" className="btn btn-secondary" disabled={disabled || !canUndo} aria-label={`仅撤销${scope}`} onMouseDown={event => event.preventDefault()} onClick={onUndo}><Undo2 size={14} />{selected ? '撤销选区' : image ? '撤销此图' : '撤销此处'}</button><button type="button" className="btn btn-secondary" disabled={disabled || !canRedo} aria-label={`仅重做${scope}`} onMouseDown={event => event.preventDefault()} onClick={onRedo}><Redo2 size={14} />重做</button>{selected && onClearSelection && <button type="button" className="btn btn-ghost" onMouseDown={event => event.preventDefault()} onClick={onClearSelection}>按完整字段</button>}</div><p>{reason || '只改所选内容，其余编辑保留。'} <span>已发生的调用费用始终保留。</span></p></section>;
+}

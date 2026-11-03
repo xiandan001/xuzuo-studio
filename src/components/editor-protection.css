@@ -1,0 +1,2 @@
+.editor-recovery-notice{margin:12px 0;padding:16px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-surface);color:var(--ui-fg);font-size:15px;line-height:1.8}.editor-recovery-notice p{margin:0 0 10px}.editor-recovery-notice>div{display:flex;gap:10px;flex-wrap:wrap}.editor-history-actions{display:flex;align-items:center;gap:6px}
+.editor-recovery-notice pre{max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:14px;line-height:1.8}.editor-recovery-notice h3{font-size:17px;margin:0 0 10px}

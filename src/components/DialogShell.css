@@ -1,0 +1,19 @@
+.studio-modal-layer { position: relative; z-index: 1200; }
+.studio-modal-layer .dialog-unified-overlay { position: fixed; inset: 0; padding: 24px; background: var(--ui-backdrop); backdrop-filter: none; }
+[role="dialog"].dialog-unified, [role="alertdialog"].dialog-unified { color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 18px; box-shadow: var(--ui-shadow-lg); max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px); overflow-y: auto; font-size: 15px; line-height: 1.6; }
+.studio-modal-layer .dialog-unified h2:not(.dap-word *, .dap-slide *) { color: var(--ui-fg); font-size: 22px; line-height: 1.35; letter-spacing: -.02em; }
+.studio-modal-layer .dialog-unified :is(p,label,input,textarea,[role="combobox"]):not(.dap-word *, .dap-slide *) { font-size: 15px; }
+.studio-modal-layer .dialog-unified label { color: var(--ui-fg); font-weight: 600; }
+.studio-modal-layer .dialog-unified :is(input,textarea) { font-weight: 500; }
+.studio-modal-layer .dialog-unified :is(.modal-heading-icon,.mdl-dialog-icon,.wf-dialog-icon,.pr-dialog-icon,.op-modal-icon,.ar-file-icon) { background: var(--ui-surface-subtle); color: var(--ui-accent); border: 1px solid var(--ui-border); box-shadow: none; }
+.studio-modal-layer .dialog-unified .btn-icon { min-width: 36px; min-height: 36px; }
+.dialog-unified :is(small,.muted):not(.dap-word *, .dap-slide *) { color: var(--ui-fg-secondary); font-size: 13px; }
+.dialog-unified input,.dialog-unified textarea { color: var(--ui-fg); }
+.studio-modal-layer .dialog-unified :is(input.field,textarea.field):not(.dap-word *, .dap-slide *) { box-sizing: border-box; min-width: 0; max-width: 100%; }
+.studio-modal-layer .dialog-unified :is(input.field,textarea.field):focus:not(.dap-word *, .dap-slide *) { box-shadow: inset 0 0 0 1px var(--ui-focus-soft); }
+.studio-modal-layer .dialog-unified :is(input.field,textarea.field):focus-visible:not(.dap-word *, .dap-slide *) { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+.dialog-unified > footer,.dialog-unified .modal-actions,.dialog-unified form > footer { position: sticky; bottom: 0; z-index: 2; flex-shrink: 0; background: var(--ui-surface); border-top: 1px solid var(--ui-border); padding-top: 16px; padding-bottom: 4px; }
+.dialog-unified :is(footer,.modal-actions) .btn { min-height: 40px; }
+.dialog-unified [role="alert"],.dialog-unified .form-error { color: var(--ui-danger); }
+@media(max-height: 800px) { .studio-modal-layer .dialog-unified-overlay { padding: 16px; } [role="dialog"].dialog-unified,[role="alertdialog"].dialog-unified { max-height: calc(100dvh - 32px); } }
+html[data-app-inactive="true"] *,html[data-app-inactive="true"] *::before,html[data-app-inactive="true"] *::after { animation-play-state: paused !important; transition: none !important; }

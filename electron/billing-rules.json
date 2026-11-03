@@ -1,0 +1,1692 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-30",
+  "rules": [
+    {
+      "id": "openai-gpt-6-luna",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-6-luna",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.10",
+        "output": "0.50"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.10",
+        "output": "0.50",
+        "cachedInput": "0.01",
+        "cacheWrite30m": "0.125"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-6-1-terra",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-6.1-terra",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "1",
+        "output": "5"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "1",
+        "output": "5",
+        "cachedInput": "0.05",
+        "cacheWrite30m": "1.25",
+        "cacheWrite12h": "2.50"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-6-1-sol",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-6.1-sol",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "10"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.10",
+        "cacheWrite30m": "2.50",
+        "cacheWrite12h": "5"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-6-astra",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-6-astra",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "10",
+        "output": "50"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "10",
+        "output": "50",
+        "cachedInput": "1",
+        "cacheWrite30m": "12.50",
+        "cacheWrite12h": "25"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-image-2-5-flare",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-image-2.5-flare",
+      "providerId": "openai",
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": ""
+      },
+      "currency": "USD",
+      "scheme": "direct-image-tokens",
+      "rates": {
+        "inputText": "5",
+        "inputImage": "8",
+        "outputImage": "30"
+      },
+      "basis": "官方直接 Images 接口：文字输入、图片输入、图片输出分别计费，不套用 Responses 图片工具缓存优惠。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "operations": [
+        "image-generation",
+        "image-editing"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-image-2-5-sunburst",
+      "version": "2026-10-30.1",
+      "modelId": "gpt-image-2.5-sunburst",
+      "providerId": "openai",
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": ""
+      },
+      "currency": "USD",
+      "scheme": "direct-image-tokens",
+      "rates": {
+        "inputText": "5",
+        "inputImage": "8",
+        "outputImage": "30"
+      },
+      "basis": "官方直接 Images 接口：文字输入、图片输入、图片输出分别计费，不套用 Responses 图片工具缓存优惠。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing"
+      ],
+      "operations": [
+        "image-generation",
+        "image-editing"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "deepseek-deepseek-flash",
+      "version": "2026-10-30.1",
+      "modelId": "deepseek-flash",
+      "providerId": "deepseek",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.deepseek.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.30",
+        "output": "1.20"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.30",
+        "output": "1.20",
+        "cachedInput": "0.006"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/pricing/"
+      ],
+      "schedule": {
+        "timezone": "Asia/Shanghai",
+        "calendarYear": 2026,
+        "offPeakRates": {
+          "input": "0.15",
+          "output": "0.60",
+          "cachedInput": "0.003"
+        },
+        "holidays": [
+          [
+            "2026-01-01",
+            "2026-01-03"
+          ],
+          [
+            "2026-02-15",
+            "2026-02-23"
+          ],
+          [
+            "2026-04-04",
+            "2026-04-06"
+          ],
+          [
+            "2026-05-01",
+            "2026-05-05"
+          ],
+          [
+            "2026-06-19",
+            "2026-06-21"
+          ],
+          [
+            "2026-09-25",
+            "2026-09-27"
+          ],
+          [
+            "2026-10-01",
+            "2026-10-07"
+          ]
+        ],
+        "source": "https://www.beijing.gov.cn/cs/gncs/zcwj/202603/t20260327_4568275.html"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "deepseek-deepseek-v4-pro",
+      "version": "2026-10-30.1",
+      "modelId": "deepseek-v4-pro",
+      "providerId": "deepseek",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.deepseek.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "1.32",
+        "output": "3.96"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "1.32",
+        "output": "3.96",
+        "cachedInput": "0.044"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/pricing/"
+      ],
+      "schedule": {
+        "timezone": "Asia/Shanghai",
+        "calendarYear": 2026,
+        "offPeakRates": {
+          "input": "0.66",
+          "output": "1.98",
+          "cachedInput": "0.022"
+        },
+        "holidays": [
+          [
+            "2026-01-01",
+            "2026-01-03"
+          ],
+          [
+            "2026-02-15",
+            "2026-02-23"
+          ],
+          [
+            "2026-04-04",
+            "2026-04-06"
+          ],
+          [
+            "2026-05-01",
+            "2026-05-05"
+          ],
+          [
+            "2026-06-19",
+            "2026-06-21"
+          ],
+          [
+            "2026-09-25",
+            "2026-09-27"
+          ],
+          [
+            "2026-10-01",
+            "2026-10-07"
+          ]
+        ],
+        "source": "https://www.beijing.gov.cn/cs/gncs/zcwj/202603/t20260327_4568275.html"
+      },
+      "operations": [
+        "text"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "aliyun-qwen3-8-max",
+      "version": "2026-10-30.1",
+      "modelId": "qwen3.8-max",
+      "providerId": "aliyun",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "dashscope.aliyuncs.com",
+        "*.cn-beijing.maas.aliyuncs.com"
+      ],
+      "allowedPaths": [
+        "/compatible-mode/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "12",
+        "output": "36"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "12",
+        "output": "36"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "maxInput": 1000000,
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "aliyun-qwen3-8-flash",
+      "version": "2026-10-30.1",
+      "modelId": "qwen3.8-flash",
+      "providerId": "aliyun",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "dashscope.aliyuncs.com",
+        "*.cn-beijing.maas.aliyuncs.com"
+      ],
+      "allowedPaths": [
+        "/compatible-mode/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "0.8",
+        "output": "2.7"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.8",
+        "output": "2.7"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "maxInput": 1000000,
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "aliyun-qwen3-7-plus",
+      "version": "2026-10-30.1",
+      "modelId": "qwen3.7-plus",
+      "providerId": "aliyun",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "dashscope.aliyuncs.com",
+        "*.cn-beijing.maas.aliyuncs.com"
+      ],
+      "allowedPaths": [
+        "/compatible-mode/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "8"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2",
+        "output": "8"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "tiers": [
+        {
+          "upTo": 256000,
+          "rates": {
+            "input": "2",
+            "output": "8"
+          }
+        },
+        {
+          "upTo": 1000000,
+          "rates": {
+            "input": "6",
+            "output": "24"
+          }
+        }
+      ],
+      "uncertainPromotion": "官方当前展示临时8折，但活动截止时间和账户适用条件尚未核实，所列原价仅为可核对的小计。",
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "aliyun-qwen3-7-flash",
+      "version": "2026-10-30.1",
+      "modelId": "qwen3.7-flash",
+      "providerId": "aliyun",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "dashscope.aliyuncs.com",
+        "*.cn-beijing.maas.aliyuncs.com"
+      ],
+      "allowedPaths": [
+        "/compatible-mode/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "0.2",
+        "output": "0.8"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.2",
+        "output": "0.8"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "tiers": [
+        {
+          "upTo": 32000,
+          "rates": {
+            "input": "0.2",
+            "output": "0.8"
+          }
+        },
+        {
+          "upTo": 256000,
+          "rates": {
+            "input": "0.6",
+            "output": "2.4"
+          }
+        },
+        {
+          "upTo": 1000000,
+          "rates": {
+            "input": "1.2",
+            "output": "4.8"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "volcengine-doubao-seed-2-1-pro-260915",
+      "version": "2026-10-30.1",
+      "modelId": "doubao-seed-2-1-pro-260915",
+      "providerId": "volcengine",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "ark.cn-beijing.volces.com"
+      ],
+      "allowedPaths": [
+        "/api/v3"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.volcengine.com/docs/ark/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "6",
+        "output": "30"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "6",
+        "output": "30",
+        "cachedInput": "1.2"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.volcengine.com/docs/ark/model-pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "volcengine-doubao-seed-2-1-lite-260915",
+      "version": "2026-10-30.1",
+      "modelId": "doubao-seed-2-1-lite-260915",
+      "providerId": "volcengine",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "ark.cn-beijing.volces.com"
+      ],
+      "allowedPaths": [
+        "/api/v3"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.volcengine.com/docs/ark/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "0.8",
+        "output": "2.7"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.8",
+        "output": "2.7",
+        "cachedInput": "0.16"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.volcengine.com/docs/ark/model-pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "volcengine-doubao-seed-2-1-turbo-260628",
+      "version": "2026-10-30.1",
+      "modelId": "doubao-seed-2-1-turbo-260628",
+      "providerId": "volcengine",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "ark.cn-beijing.volces.com"
+      ],
+      "allowedPaths": [
+        "/api/v3"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.volcengine.com/docs/ark/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "3",
+        "output": "15"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "3",
+        "output": "15",
+        "cachedInput": "0.6"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.volcengine.com/docs/ark/model-pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "volcengine-doubao-seed-2-0-mini-260428",
+      "version": "2026-10-30.1",
+      "modelId": "doubao-seed-2-0-mini-260428",
+      "providerId": "volcengine",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "ark.cn-beijing.volces.com"
+      ],
+      "allowedPaths": [
+        "/api/v3"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.volcengine.com/docs/ark/model-pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "0.2",
+        "output": "2"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.2",
+        "output": "2",
+        "cachedInput": "0.04"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.volcengine.com/docs/ark/model-pricing"
+      ],
+      "tiers": [
+        {
+          "upTo": 32000,
+          "rates": {
+            "input": "0.2",
+            "output": "2",
+            "cachedInput": "0.04"
+          }
+        },
+        {
+          "upTo": 128000,
+          "rates": {
+            "input": "0.4",
+            "output": "4",
+            "cachedInput": "0.08"
+          }
+        },
+        {
+          "upTo": 256000,
+          "rates": {
+            "input": "0.8",
+            "output": "8",
+            "cachedInput": "0.16"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "tencent-hy4-preview",
+      "version": "2026-10-30.1",
+      "modelId": "hy4-preview",
+      "providerId": "tencent",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "tokenhub.tencentmaas.com",
+        "tokenhub.tencentmaas.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://cloud.tencent.com/document/product/1823/130055",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "6",
+        "output": "18"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "6",
+        "output": "18",
+        "cachedInput": "0.3"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://cloud.tencent.com/document/product/1823/130055"
+      ],
+      "operations": [
+        "text"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "tencent-hy3",
+      "version": "2026-10-30.1",
+      "modelId": "hy3",
+      "providerId": "tencent",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "tokenhub.tencentmaas.com",
+        "tokenhub.tencentmaas.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://cloud.tencent.com/document/product/1823/130055",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "1",
+        "output": "4"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "1",
+        "output": "4",
+        "cachedInput": "0.25"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://cloud.tencent.com/document/product/1823/130055"
+      ],
+      "operations": [
+        "text"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "anthropic-claude-fable-5-1",
+      "version": "2026-10-30.1",
+      "modelId": "claude-fable-5-1",
+      "providerId": "anthropic",
+      "protocols": [
+        "anthropic"
+      ],
+      "allowedHosts": [
+        "api.anthropic.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "10",
+        "output": "50"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "10",
+        "output": "50",
+        "cachedInput": "0.25",
+        "cacheWrite5m": "12.50",
+        "cacheWrite1h": "20"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "anthropic-claude-opus-5-5",
+      "version": "2026-10-30.1",
+      "modelId": "claude-opus-5-5",
+      "providerId": "anthropic",
+      "protocols": [
+        "anthropic"
+      ],
+      "allowedHosts": [
+        "api.anthropic.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "4",
+        "output": "20"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "4",
+        "output": "20",
+        "cachedInput": "0.20",
+        "cacheWrite5m": "5",
+        "cacheWrite1h": "8"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "anthropic-claude-sonnet-5-5",
+      "version": "2026-10-30.1",
+      "modelId": "claude-sonnet-5-5",
+      "providerId": "anthropic",
+      "protocols": [
+        "anthropic"
+      ],
+      "allowedHosts": [
+        "api.anthropic.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "10"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.10",
+        "cacheWrite5m": "2.50",
+        "cacheWrite1h": "4"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "anthropic-claude-haiku-5-5",
+      "version": "2026-10-30.1",
+      "modelId": "claude-haiku-5-5",
+      "providerId": "anthropic",
+      "protocols": [
+        "anthropic"
+      ],
+      "allowedHosts": [
+        "api.anthropic.com"
+      ],
+      "allowedPaths": [
+        "/",
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.10",
+        "output": "0.50"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.10",
+        "output": "0.50",
+        "cachedInput": "0.01",
+        "cacheWrite5m": "0.125",
+        "cacheWrite1h": "0.20"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing"
+      ],
+      "tiers": [
+        {
+          "upTo": 100000,
+          "rates": {
+            "input": "0.10",
+            "output": "0.50",
+            "cachedInput": "0.01",
+            "cacheWrite5m": "0.125",
+            "cacheWrite1h": "0.20"
+          }
+        },
+        {
+          "upTo": null,
+          "rates": {
+            "input": "0.50",
+            "output": "2.50",
+            "cachedInput": "0.05",
+            "cacheWrite5m": "0.625",
+            "cacheWrite1h": "1.00"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "google-gemini-4-argon",
+      "version": "2026-10-30.1",
+      "modelId": "gemini-4-argon",
+      "providerId": "google",
+      "protocols": [
+        "gemini"
+      ],
+      "allowedHosts": [
+        "generativelanguage.googleapis.com"
+      ],
+      "allowedPaths": [
+        "/v1beta"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "2.00",
+        "output": "10.00"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2.00",
+        "output": "10.00",
+        "cachedInput": "0.10"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/pricing"
+      ],
+      "phases": [
+        {
+          "from": "2026-12-01",
+          "rates": {
+            "input": "4.00",
+            "output": "20.00",
+            "cachedInput": "0.20"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "google-gemini-3-8-flash",
+      "version": "2026-10-30.1",
+      "modelId": "gemini-3.8-flash",
+      "providerId": "google",
+      "protocols": [
+        "gemini"
+      ],
+      "allowedHosts": [
+        "generativelanguage.googleapis.com"
+      ],
+      "allowedPaths": [
+        "/v1beta"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.75",
+        "output": "3.75"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.75",
+        "output": "3.75",
+        "cachedInput": "0.075"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/pricing"
+      ],
+      "phases": [
+        {
+          "from": "2027-01-01",
+          "rates": {
+            "input": "1.50",
+            "output": "7.50",
+            "cachedInput": "0.15"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "google-gemini-3-5-flash-lite",
+      "version": "2026-10-30.1",
+      "modelId": "gemini-3.5-flash-lite",
+      "providerId": "google",
+      "protocols": [
+        "gemini"
+      ],
+      "allowedHosts": [
+        "generativelanguage.googleapis.com"
+      ],
+      "allowedPaths": [
+        "/v1beta"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.30",
+        "output": "2.50"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.30",
+        "output": "2.50",
+        "cachedInput": "0.03"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "zhipu-glm-5-3",
+      "version": "2026-10-30.1",
+      "modelId": "glm-5.3",
+      "providerId": "zhipu",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "open.bigmodel.cn"
+      ],
+      "allowedPaths": [
+        "/api/paas/v4/"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "8",
+        "output": "28"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "8",
+        "output": "28",
+        "cachedInput": "2"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.bigmodel.cn/cn/guide/start/pricing"
+      ],
+      "operations": [
+        "text"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "zhipu-glm-5-3-flash",
+      "version": "2026-10-30.1",
+      "modelId": "glm-5.3-flash",
+      "providerId": "zhipu",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "open.bigmodel.cn"
+      ],
+      "allowedPaths": [
+        "/api/paas/v4/"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "0.8",
+        "output": "2.8"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.8",
+        "output": "2.8",
+        "cachedInput": "0.23"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.bigmodel.cn/cn/guide/start/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "zhipu-glm-5-3-flashx",
+      "version": "2026-10-30.1",
+      "modelId": "glm-5.3-flashx",
+      "providerId": "zhipu",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "open.bigmodel.cn"
+      ],
+      "allowedPaths": [
+        "/api/paas/v4/"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "7"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2",
+        "output": "7",
+        "cachedInput": "0.57"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://docs.bigmodel.cn/cn/guide/start/pricing"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "moonshot-kimi-k3-1-pro",
+      "version": "2026-10-30.1",
+      "modelId": "kimi-k3.1-pro",
+      "providerId": "moonshot",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.moonshot.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.kimi.com/",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "13",
+        "output": "68"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "13",
+        "output": "68",
+        "cachedInput": "1.30",
+        "cacheWrite5m": "13"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.kimi.com/"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "moonshot-kimi-k3-1-pro-highspeed",
+      "version": "2026-10-30.1",
+      "modelId": "kimi-k3.1-pro-highspeed",
+      "providerId": "moonshot",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.moonshot.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.kimi.com/",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "26",
+        "output": "136"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "26",
+        "output": "136",
+        "cachedInput": "1.30",
+        "cacheWrite5m": "26"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.kimi.com/"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "moonshot-kimi-k3",
+      "version": "2026-10-30.1",
+      "modelId": "kimi-k3",
+      "providerId": "moonshot",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.moonshot.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.kimi.com/",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "20",
+        "output": "100"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "20",
+        "output": "100",
+        "cachedInput": "2",
+        "cacheWrite5m": "20"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.kimi.com/"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "minimax-minimax-m3-1-flash-cn",
+      "version": "2026-10-30.1",
+      "modelId": "MiniMax-M3.1-Flash",
+      "providerId": "minimax",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.minimax.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.minimax.cn/docs/pricing/overview",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "1.00",
+        "output": "4.00"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "1.00",
+        "output": "4.00",
+        "cachedInput": "0.10"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.minimax.cn/docs/pricing/overview"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "minimax-minimax-m3-1-flash-io",
+      "version": "2026-10-30.1",
+      "modelId": "MiniMax-M3.1-Flash",
+      "providerId": "minimax",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.minimax.io"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.minimax.io/docs/pricing/overview",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.15",
+        "output": "0.60"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.15",
+        "output": "0.60",
+        "cachedInput": "0.015"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.minimax.io/docs/pricing/overview"
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "minimax-minimax-m3-cn",
+      "version": "2026-10-30.1",
+      "modelId": "MiniMax-M3",
+      "providerId": "minimax",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.minimax.cn"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.minimax.cn/docs/pricing/overview",
+      "expectedPricing": {
+        "currency": "CNY",
+        "unit": "million-tokens",
+        "input": "2.10",
+        "output": "8.40"
+      },
+      "currency": "CNY",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2.10",
+        "output": "8.40",
+        "cachedInput": "0.42"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.minimax.cn/docs/pricing/overview"
+      ],
+      "ambiguousThreshold": {
+        "lower": 512000,
+        "upper": 524288,
+        "label": "512K"
+      },
+      "tiers": [
+        {
+          "upTo": 512000,
+          "rates": {
+            "input": "2.10",
+            "output": "8.40",
+            "cachedInput": "0.42"
+          }
+        },
+        {
+          "upTo": null,
+          "rates": {
+            "input": "4.20",
+            "output": "16.80",
+            "cachedInput": "0.84"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    },
+    {
+      "id": "minimax-minimax-m3-io",
+      "version": "2026-10-30.1",
+      "modelId": "MiniMax-M3",
+      "providerId": "minimax",
+      "protocols": [
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.minimax.io"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-10-30",
+      "officialUrl": "https://platform.minimax.io/docs/pricing/overview",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "0.30",
+        "output": "1.20"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "0.30",
+        "output": "1.20",
+        "cachedInput": "0.06"
+      },
+      "basis": "官方普通实时按量价；输出含思考 Token；不含订阅、账户赠送/折扣、工具或非本工作流参数的附加费用。",
+      "sources": [
+        "https://platform.minimax.io/docs/pricing/overview"
+      ],
+      "ambiguousThreshold": {
+        "lower": 512000,
+        "upper": 524288,
+        "label": "512K"
+      },
+      "tiers": [
+        {
+          "upTo": 512000,
+          "rates": {
+            "input": "0.30",
+            "output": "1.20",
+            "cachedInput": "0.06"
+          }
+        },
+        {
+          "upTo": null,
+          "rates": {
+            "input": "0.60",
+            "output": "2.40",
+            "cachedInput": "0.12"
+          }
+        }
+      ],
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-10-30"
+    }
+  ]
+}

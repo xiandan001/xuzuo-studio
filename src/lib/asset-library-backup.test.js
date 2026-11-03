@@ -1,0 +1,53 @@
+import { describe, expect, it } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+const require = createRequire(import.meta.url), root = fileURLToPath(new URL('../../', import.meta.url)), deps = createRequire(path.join(root, 'work/ui-build/package.json'));
+const { createWorkspaceStorage } = require('../../electron/workspace-storage.cjs');
+const { createArtifactStore } = require('../../electron/artifact-store.cjs');
+const { createAssetLibrary } = require('../../electron/asset-library.cjs');
+const { createBuiltinAssets } = require('../../electron/builtin-assets.cjs');
+const { createAssetCategories } = require('../../electron/asset-categories.cjs');
+const { createProjectBackup } = require('../../electron/project-backup.cjs');
+const { createLiveWorkflowEngine } = require('../../electron/live-workflow-engine.cjs');
+const catalog = JSON.parse(await fs.readFile(path.join(root, 'assets/library/catalog.json'), 'utf8'));
+async function profile(directory) {
+  await fs.mkdir(directory);
+  const storage = createWorkspaceStorage({ directory }), store = createArtifactStore({ directory: path.join(directory, 'artifacts-v1'), workspaceStorage: storage, loadModule: deps });
+  storage.setArtifactMigrator((id, target) => store.migrateProject(id, target));
+  const engine = createLiveWorkflowEngine({ directory, artifactStore: store, credentials: {}, modelRuntime: {} });
+  const library = createAssetLibrary({ workspaceStorage: storage, artifactStore: store }), builtin = createBuiltinAssets({ directory: path.join(root, 'assets/library'), workspaceStorage: storage, artifactStore: store, assetLibrary: library, loadModule: deps });
+  const categories = createAssetCategories({ workspaceStorage: storage, assetLibrary: library, builtinAssets: builtin });
+  return { storage, store, engine, library, builtin, categories, backup: createProjectBackup({ directory, workspaceStorage: storage, artifactStore: store, liveEngine: engine, loadModule: deps }) };
+}
+describe('素材分类与授权的真实备份恢复', () => {
+  it('重绑自己素材与分类编号，内置引用和许可保持稳定，文件和费用保留', async () => {
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-asset-backup-')), source = await profile(path.join(folder, 'source'));
+    const workspace = path.join(folder, 'workspace'); await fs.mkdir(workspace);
+    await source.storage.bindRoot({ workspaceId: 'workspace-one', name: '素材工作区', directory: workspace });
+    await source.storage.ensureProject({ projectId: 'project-one', workspaceId: 'workspace-one', name: '项目一' });
+    const item = catalog.assets.find(item => item.origin === 'open-source'), own = await source.builtin.import({ workspaceId: 'workspace-one', id: item.id });
+    const state = await source.categories.save({ workspaceId: 'workspace-one', name: '品牌资料' }), category = state.categories[0];
+    await source.categories.assign({ workspaceId: 'workspace-one', id: own.id, categoryId: category.id });
+    await source.categories.assign({ workspaceId: 'workspace-one', id: item.id, categoryId: category.id, builtin: true });
+    const artifact = await source.builtin.attach({ workspaceId: 'workspace-one', projectId: 'project-one', id: item.id });
+    const time = new Date().toISOString(), project = { id: 'project-one', workspaceId: 'workspace-one', name: '项目一', kind: 'word', status: 'draft', description: '', updatedAt: time, costCents: 17, version: 1, accent: 'purple' };
+    const meta = { workspaces: [{ id: 'workspace-one', name: '素材工作区', createdAt: time }], projects: [project], ledger: [{ id: 'paid-one', projectId: project.id, projectName: project.name, action: '初次生成', model: '历史', costCents: 17, billingMode: 'live', costState: 'manual', status: 'complete', time }], preferencesByWorkspace: {}, customPrompts: [], configuration: { version: 1, connections: [], models: [], workflows: [], categories: [], studioActions: [], useTemplates: [] } };
+    const archive = path.join(folder, 'assets.zip');
+    await source.backup.exportBackup({ meta, workspaceIds: ['workspace-one'], filePath: archive });
+    const target = await profile(path.join(folder, 'target')), destination = path.join(folder, 'restore'); await fs.mkdir(destination);
+    const restored = await target.backup.importBackup({ filePath: archive, directory: destination });
+    const workspaceId = restored.idMap['workspace-one'], categoryId = restored.idMap[category.id], assetId = restored.idMap[own.id];
+    expect(categoryId).not.toBe(category.id); expect(assetId).not.toBe(own.id);
+    const actual = await target.categories.list({ workspaceId });
+    expect(actual.categories).toEqual([{ id: categoryId, name: '品牌资料' }]);
+    expect(actual.assignments).toEqual({ [assetId]: categoryId }); expect(actual.builtinAssignments).toEqual({ [item.id]: categoryId });
+    const assets = await target.library.list({ workspaceId }); expect(assets[0].provenance.builtinId).toBe(item.id);
+    const image = await target.store.read(restored.idMap[artifact.id]); expect(image.provenance.licenseId).toBe('ISC');
+    expect(image.buffer).toEqual(await fs.readFile(path.join(root, 'assets/library', item.path)));
+    expect(restored.meta.ledger.reduce((sum, item) => sum + item.costCents, 0)).toBe(17);
+    await Promise.all([source.engine.flush(), target.engine.flush()]);
+  });
+});

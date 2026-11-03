@@ -1,0 +1,11 @@
+.data-management header h2,.data-management h3,.data-management-inspection>b{display:flex;align-items:center;gap:8px}
+.data-management-block{padding:18px 0;border-top:1px solid var(--ui-border)}
+.data-management-block h3{font-size:16px;margin:0 0 10px}
+.data-management-block p,.data-management-note{font-size:14px;line-height:1.7;color:var(--ui-fg-secondary);margin:8px 0 14px}
+.data-management-choice,.data-management-projects label{display:flex;align-items:center;gap:8px;font-size:14px;margin:10px 0}
+.data-management-choice input,.data-management-projects input{accent-color:var(--ui-accent)}
+.data-management-projects{max-height:180px;overflow:auto;padding:4px 14px;margin:10px 0;border:1px solid var(--ui-border);border-radius:10px}
+.data-management-inspection{margin-top:14px;padding:14px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface-subtle)}
+.data-management-inspection>b{font-size:14px}
+.data-management-inspection small{display:block;font-size:13px;color:var(--ui-fg-secondary);line-height:1.7;margin-bottom:12px;overflow-wrap:anywhere}
+.data-management-buttons{display:flex;flex-wrap:wrap;gap:10px}

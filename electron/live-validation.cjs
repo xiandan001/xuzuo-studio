@@ -1,0 +1,112 @@
+const { estimateCost } = require('./live-cost.cjs');
+const { extractReferenceText } = require('./reference-text.cjs');
+
+const modelStep = step => !['manual-review', 'export'].includes(step.kind);
+const text = (value, limit) => typeof value === 'string' && value.trim() && value.length <= limit;
+function replaceVariables(prompt, values) {
+  const missing = new Set();
+  const content = prompt.replace(/{{\s*([^{}\r\n]+?)\s*}}/g, (whole, name) => {
+    const key = name.trim();
+    if (!Object.hasOwn(values || {}, key) || !text(values[key], 10000)) { missing.add(key); return whole; }
+    return values[key].trim();
+  });
+  return { content, missing: [...missing] };
+}
+function validateUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.search || url.hash) return '连接地址不能含账号密码或查询参数。';
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return '真实连接需要 HTTPS，本机测试接口除外。';
+    return '';
+  } catch { return '连接地址无效。'; }
+}
+async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds = new Set() }) {
+  const errors = [], issues = [], warnings = [], steps = [];
+  const addError = (message, field, stepId) => { errors.push(message); issues.push({ message, ...(stepId ? { stepId } : {}), ...(field ? { field } : {}) }); };
+  const failure = (message, field) => ({ ok: false, errors: [message], issues: [{ message, ...(field ? { field } : {}) }], warnings, steps, unknownCost: true });
+  const workflow = request?.workflow;
+  const project = request?.project;
+  if (!workflow || !project || !text(workflow.id, 160) || !text(project.id, 160) || !text(workflow.workspaceId, 160) || project.workspaceId !== workflow.workspaceId || project.kind !== workflow.outputKind) return failure('项目、工作区或作品类型不匹配。', 'project');
+  if (!Number.isSafeInteger(project.costCents) || project.costCents < 0 || project.budgetCents != null && (!Number.isSafeInteger(project.budgetCents) || project.budgetCents < 0)) addError('项目成本或已填写的金额上限无效。', 'budgetCents');
+  if (!text(request.input, 100000)) addError('请填写本次需求，最多 10 万字。', 'input');
+  if (!Array.isArray(workflow.steps) || !workflow.steps.length || workflow.steps.length > 40) return failure('工作流需要 1 到 40 个步骤。');
+  if (!Array.isArray(request.models) || !Array.isArray(request.connections) || !Array.isArray(request.attachmentIds) || request.attachmentIds.length > 12) return failure('模型、连接或附件配置无效。', !Array.isArray(request.models) ? 'modelConfigId' : !Array.isArray(request.connections) ? 'connection' : 'attachments');
+  const enabled = workflow.steps.filter(step => step.enabled);
+  const metadata = enabled.some(modelStep) ? await credentials.list() : [];
+  const inputKinds = new Set();
+  for (const id of request.attachmentIds) {
+    try {
+      const file = await artifactStore.read(id); inputKinds.add(file.kind);
+      if (file.kind === 'text' || file.kind === 'office') { try { await extractReferenceText(file); } catch (error) { addError(error.message, 'attachments'); } }
+      if (file.mimeType === 'application/pdf') addError('当前 PDF 参考文件不执行 OCR 或正文提取，请先转换成文字或受支持的 Office 文件。', 'attachments');
+    } catch { addError('有参考文件已不可用，请重新添加。', 'attachments'); }
+  }
+  if (!enabled.length) addError('请启用至少一个步骤。');
+  if (enabled[0]?.inputSource === 'previous') addError('第一个启用步骤必须使用项目需求。', 'inputSource', enabled[0].id);
+  const ids = new Set();
+  let estimatedCents = 0, unknownCost = false, previousKind;
+  for (const step of enabled) {
+    const detail = { id: step.id, name: step.name, kind: step.kind };
+    steps.push(detail);
+    if (!text(step.id, 160) || ids.has(step.id)) addError('工作流步骤 ID 无效或重复。', undefined, step.id);
+    ids.add(step.id);
+    if (!text(step.name, 100)) addError('请为每个步骤填写名称。', undefined, step.id);
+    if (step.budgetCents != null && (!Number.isSafeInteger(step.budgetCents) || step.budgetCents < 0)) addError(`“${step.name}”的金额上限无效，请填写非负金额或留空。`, 'budgetCents', step.id);
+    if (step.kind === 'export' && step.contentSourceStepId) {
+      const source = workflow.steps.findIndex(item => item.id === step.contentSourceStepId && item.enabled && modelStep(item));
+      if (source < 0 || source >= workflow.steps.indexOf(step)) addError(`“${step.name}”的正文来源必须是前面启用的模型步骤。`, 'inputSource', step.id);
+    }
+    if (step.documentImageSource !== undefined) {
+      if (!['references', 'previous'].includes(step.documentImageSource) || step.kind !== 'text' || !['word', 'ppt'].includes(project.kind)) addError(`“${step.name}”的图文排版配置无效。`, 'inputSource', step.id);
+      else if (step.documentImageSource === 'references') {
+        let pictures = [];
+        try { pictures = (await artifactStore.list(request.attachmentIds)).filter(item => item.kind === 'image'); } catch { /* Missing references already produce an attachment issue above. */ }
+        if (!pictures.length || pictures.length > 12 || pictures.some(item => item.projectId !== project.id || !['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType))) addError(`“${step.name}”请选择当前项目的 1–12 张 PNG、JPEG 或 WebP 插图。`, 'attachments', step.id);
+      } else if (previousKind !== 'image' && !(Array.isArray(step.documentImageStepIds) && step.documentImageStepIds.every(id => completedImageStepIds.has(id)))) addError(`“${step.name}”需要前一步先生成实际配图。`, 'inputSource', step.id);
+    }
+    if (step.documentImageStepIds !== undefined) {
+      const imageIds = step.documentImageStepIds;
+      if (step.documentImageSource !== 'previous' || step.kind !== 'text' || !Array.isArray(imageIds) || !imageIds.length || imageIds.length > 20 || new Set(imageIds).size !== imageIds.length) addError(`“${step.name}”的配图步骤列表无效。`, 'inputSource', step.id);
+      else {
+        const sources = imageIds.map(id => workflow.steps.find(item => item.id === id));
+        if (sources.some(source => !source || !source.enabled && !completedImageStepIds.has(source.id) || !['image-generation', 'image-editing'].includes(source.kind) || workflow.steps.indexOf(source) >= workflow.steps.indexOf(step))) addError(`“${step.name}”的配图来源必须是前面启用的图片步骤。`, 'inputSource', step.id);
+        else if (sources.reduce((total, source) => total + (source.count || 1), 0) > 20) addError(`“${step.name}”一次最多安排 20 张文档配图。`, 'count', step.id);
+      }
+    }
+    if (!modelStep(step)) continue;
+    const hasInput = kind => inputKinds.has(kind) || (step.inputSource === 'previous' && previousKind === kind);
+    if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image')) addError(`“${step.name}”需要参考图片，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
+    if (step.kind === 'transcription' && !hasInput('audio') && !hasInput('video')) addError(`“${step.name}”需要添加音频参考文件。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
+    if (step.kind === 'video-understanding' && !hasInput('video')) addError(`“${step.name}”需要添加视频文件，或前一步生成的视频。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
+    if (step.kind === 'image-generation' && inputKinds.has('image')) warnings.push(`“${step.name}”采用纯文字生图，不使用附图；需要保留人物或商品参考时请选择图片编辑步骤。`);
+    previousKind = ['image-generation', 'image-editing'].includes(step.kind) ? 'image' : step.kind === 'speech' ? 'audio' : step.kind === 'video-generation' ? 'video' : 'text';
+    const resolved = replaceVariables(typeof step.prompt === 'string' ? step.prompt : '', request.variables || {});
+    if (!text(step.prompt, 20000)) addError(`“${step.name}”需要提示词，最多 2 万字。`, 'prompt', step.id);
+    if (resolved.missing.length) addError(`“${step.name}”缺少变量：${resolved.missing.join('、')}。`, 'variables', step.id);
+    const model = request.models.find(item => item.id === step.modelConfigId && item.enabled && !item.demo);
+    const connection = request.connections.find(item => item.id === model?.connectionId && item.enabled && !item.demo);
+    const credential = metadata.find(item => item.id === step.credentialId && item.enabled && item.connectionId === connection?.id);
+    if (!model || !connection) { addError(`“${step.name}”请选择启用的真实模型和连接。`, !model ? 'modelConfigId' : 'connection', step.id); continue; }
+    detail.modelName = model.name;
+    const addressError = validateUrl(connection.baseUrl);
+    if (addressError) addError(`${step.name}：${addressError}`, 'connection', step.id);
+    else detail.domain = new URL(connection.baseUrl).host;
+    if (!credential) addError(`“${step.name}”需要选择该连接下启用的 API Key。`, 'credentialId', step.id);
+    else detail.credentialName = credential.name;
+    if (!model.capabilities?.includes(step.kind) || !modelRuntime.supports(connection, step.kind)) addError(`“${step.name}”的模型能力或接口协议尚未适配。`, !model.capabilities?.includes(step.kind) ? 'modelConfigId' : 'connection', step.id);
+    if (!Number.isInteger(step.maxOutputTokens ?? 2048) || (step.maxOutputTokens ?? 2048) < 16 || (step.maxOutputTokens ?? 2048) > 16384) addError(`“${step.name}”的最大输出需要在 16 到 16384 Token 之间。`, 'maxOutputTokens', step.id);
+    if (!Number.isInteger(step.count ?? 1) || (step.count ?? 1) < 1 || (step.count ?? 1) > 4) addError(`“${step.name}”的生成数量应为 1 到 4。`, 'count', step.id);
+    if (step.id === queryOnlyStepId) { detail.estimatedCents = 0; warnings.push(`“${step.name}”仅查询已提交任务，不新建生成请求；原请求费用仍需按历史流水核对。`); continue; }
+    const estimate = estimateCost(model, step, `${resolved.content}\n${request.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: new Date().toISOString(), fx: await fxRates?.get() });
+    detail.costNote = estimate.reason;
+    if (estimate.costState === 'unknown' || estimate.calculation && estimate.calculation.cnyAmount === undefined) { unknownCost = true; if (step.budgetCents === 0) addError(`“${step.name}”设置了零元上限，但费用尚不确定，请补全价格或清除此上限。`, 'budgetCents', step.id); }
+    else { detail.estimatedCents = estimate.costCents; estimatedCents += estimate.costCents; if (step.budgetCents != null && estimate.costCents > step.budgetCents) addError(`“${step.name}”的估算费用超过单步预算。`, 'budgetCents', step.id); }
+  }
+  if (!enabled.some(step => step.kind === 'export')) warnings.push('流程未包含交付步骤；模型原始产物仍会保存，可单独打开和另存。');
+  if (project.budgetCents != null && project.costCents + estimatedCents > project.budgetCents) addError('已知费用估算超过项目剩余预算。', 'budgetCents');
+  if (project.budgetCents === 0 && unknownCost) addError('项目设置了零元上限，但有费用无法确定的模型步骤，请补全价格或清除此上限。', 'budgetCents');
+  warnings.push('调用完成后按接口实际用量自动计算费用；开始前的用量估算不能保证远端扣费上限，取消请求仍可能产生费用。');
+  if (unknownCost) warnings.push('部分步骤的实际用量在返回后才能确定；已支持的官方型号会自动计费，接口缺少计费用量时将保留具体原因。');
+  return { ok: errors.length === 0, errors, issues, warnings, steps, estimatedCents: unknownCost ? undefined : estimatedCents, unknownCost };
+}
+module.exports = { preflight, replaceVariables, validateUrl, modelStep };

@@ -1,0 +1,33 @@
+/* Application regions only; document paper, slide artwork and image pixels keep their own paint. */
+:root{
+  --ui-card-border:color-mix(in srgb,var(--ui-border) 76%,var(--ui-fg-muted) 24%);
+  --ui-card-shadow:0 1px 2px #17213908,0 5px 14px #17213908;
+  --ui-card-hover-shadow:0 2px 4px #1721390b,0 8px 20px #1721390d;
+  --ui-section-fill:var(--ui-surface-subtle);
+}
+html[data-app-theme="dark"]{
+  --ui-card-border:#343b42;
+  --ui-card-shadow:0 1px 0 #ffffff05,0 4px 12px #00000070;
+  --ui-card-hover-shadow:0 1px 0 #ffffff08,0 7px 18px #00000080;
+  --ui-section-fill:#101417;
+}
+.studio-app-shell :is(.panel,.project-card,.op-project-card,.delivery-panel,.batch-production-panel,.asset-library-card,.mdl-model-card){border-color:var(--ui-card-border);box-shadow:var(--ui-card-shadow)}
+.studio-app-shell .panel :is(.panel,.delivery-panel){box-shadow:none}
+.studio-app-shell :is(.project-card,.op-project-card,.asset-library-card,.wf-flow-row):hover{box-shadow:var(--ui-card-hover-shadow)}
+.studio-app-shell :is(.wf-run-list,.activity-list-section .wf-run-list){gap:20px}
+.studio-app-shell .wf-run-card>header{padding-block:21px;background:var(--ui-surface)}
+.studio-app-shell .wf-run-card>footer{background:var(--ui-section-fill);border-top-color:var(--ui-card-border);padding-block:15px}
+.studio-app-shell .wf-run-card>.btn{margin:8px 12px;min-height:34px;border:1px solid var(--ui-border);border-radius:7px;padding-inline:12px;background:var(--ui-surface)}
+.studio-app-shell .wf-tabs{display:flex;gap:8px;flex-wrap:wrap}
+.studio-app-shell .wf-tabs>button{display:inline-flex;align-items:center;gap:8px;padding-inline:14px;white-space:nowrap;border-radius:8px 8px 0 0}
+.studio-app-shell .wf-tabs>button:hover{background:var(--ui-surface-hover)}
+.studio-app-shell .wf-tabs>button.active{background:var(--ui-surface-active)}
+.studio-app-shell .wf-flow-row>footer{background:var(--ui-section-fill);border-top-color:var(--ui-card-border)}
+.studio-app-shell .activity-task-detail{border-top:1px solid var(--ui-card-border);background:var(--ui-section-fill)}
+.studio-app-shell .activity-task-detail .wf-run-card{border-radius:0;box-shadow:none;border-inline:0;border-bottom:0}
+.studio-app-shell :is(.ct-content-heading,.ct-content-footer,.fin-quote-heading){border-color:var(--ui-card-border)}
+.studio-app-shell .ct-content-toolbar{background:var(--ui-section-fill)}
+.studio-app-shell .fin-formula{background:var(--ui-section-fill)}
+.studio-app-shell .fin-input-group+.fin-input-group{margin-top:20px}
+.studio-app-shell .asset-library-card{background:var(--ui-surface)}
+@media(prefers-reduced-motion:reduce){.studio-app-shell :is(.project-card,.op-project-card,.asset-library-card,.wf-flow-row){transition:none}}
