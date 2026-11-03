@@ -1,7 +1,7 @@
 {
   "name": "xuzuo-studio",
   "private": true,
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "序作工作台：真实AI工作流与文件交付",
   "type": "module",
   "main": "electron/main.cjs",
@@ -38,7 +38,7 @@
     "appId": "local.xuzuo.studio",
     "productName": "序作工作台",
     "directories": {
-      "output": "outputs/release-v0.17.0"
+      "output": "outputs/release-v0.17.1"
     },
     "asarUnpack": [
       "assets/windows-drive-info.exe"

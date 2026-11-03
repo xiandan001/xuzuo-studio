@@ -37,6 +37,7 @@ namespace Xuzuo.Setup
         public event Action StartUninstallRequested;
         public event Action LaunchRequested;
         public Func<Task<IList<SetupLocation>>> LoadLocationsAsync;
+        public Func<string, Task<SetupDirectoryListing>> ListInitialDirectoryAsync;
         public Func<string, Task<SetupDirectoryListing>> ListDirectoriesAsync;
         public Func<string, string, Task<SetupDirectoryListing>> CreateFolderAsync;
         private readonly SetupOptions options;
@@ -179,7 +180,7 @@ namespace Xuzuo.Setup
             Control<Button>("SecondaryButton").Content = "取消选择"; Control<Button>("PrimaryButton").Content = "使用此文件夹"; Text("FooterNote", "仅选择目录，不读取其中的文件内容。");
             history.Clear(); historyIndex = -1;
             Task locations = LoadLocations();
-            await Navigate(Control<TextBox>("InstallDirectory").Text, true);
+            await Navigate(Control<TextBox>("InstallDirectory").Text, true, true);
             await locations;
         }
         private async Task LoadLocations()
@@ -196,13 +197,14 @@ namespace Xuzuo.Setup
                 }
             } catch (Exception error) { if (pickerOpen) Text("PickerError", "常用位置暂未全部读取。" + PublicMessage(error)); }
         }
-        private async Task Navigate(string target, bool addHistory)
+        private async Task Navigate(string target, bool addHistory, bool initial = false)
         {
             if (!pickerOpen || pickerBusy) return;
-            if (ListDirectoriesAsync == null) { Text("PickerError", "文件夹浏览器尚未就绪，请返回重试。"); return; }
+            var list = initial && ListInitialDirectoryAsync != null ? ListInitialDirectoryAsync : ListDirectoriesAsync;
+            if (list == null) { Text("PickerError", "文件夹浏览器尚未就绪，请返回重试。"); return; }
             int generation = ++directoryGeneration; PickerBusy(true); Text("PickerError", "");
             try {
-                SetupDirectoryListing result = await ListDirectoriesAsync(target);
+                SetupDirectoryListing result = await list(target);
                 if (!pickerOpen || generation != directoryGeneration) return;
                 ApplyListing(result);
                 if (addHistory && (historyIndex < 0 || !String.Equals(history[historyIndex], currentDirectory, StringComparison.OrdinalIgnoreCase))) { if (historyIndex + 1 < history.Count) history.RemoveRange(historyIndex + 1, history.Count - historyIndex - 1); history.Add(currentDirectory); historyIndex = history.Count - 1; }

@@ -85,6 +85,7 @@ namespace Xuzuo.Setup
             application.DispatcherUnhandledException += delegate(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs error) { error.Handled = true; if (busy) window.SetProgress("正在安全完成操作", "界面遇到问题，文件操作仍在收尾，请稍候。", null); else window.SetError("界面操作未完成", PublicError(error.Exception)); };
             engine.Progress = delegate(string stage, string detail, double? percent) { window.SetProgress(stage, detail, percent); };
             window.LoadLocationsAsync = delegate { return Task.Run<IList<SetupLocation>>(() => engine.LoadLocations()); };
+            window.ListInitialDirectoryAsync = delegate(string directory) { return Task.Run(() => engine.ListInitialDirectory(directory)); };
             window.ListDirectoriesAsync = delegate(string directory) { return Task.Run(() => engine.ListDirectories(directory)); };
             window.CreateFolderAsync = delegate(string directory, string name) { return Task.Run(() => engine.CreateFolder(directory, name)); };
             window.SourceInitialized += delegate { SetProp(new System.Windows.Interop.WindowInteropHelper(window).Handle, "Xuzuo.Setup." + metadata.installGuid, new IntPtr(1)); };

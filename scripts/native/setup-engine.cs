@@ -683,8 +683,20 @@ namespace Xuzuo.Setup
             var result = new List<SetupLocation>();
             foreach (var item in new[] { new { Name = "桌面", Path = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) }, new { Name = "文档", Path = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) }, new { Name = "个人程序", Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs") } }) if (!String.IsNullOrEmpty(item.Path)) result.Add(new SetupLocation { Name = item.Name, Path = item.Path, IsDrive = false });
             var bitmap = GetLogicalDrives();
-            for (var index = 0; index < 26; index++) if ((bitmap & (1u << index)) != 0) { var root = ((char)('A' + index)) + ":\\"; if (LocalDrive(root)) result.Add(new SetupLocation { Name = (GetDriveType(root) == 2 ? "可移动磁盘 (" : "本地磁盘 (") + root.Substring(0, 2) + ")", Path = root, IsDrive = true }); }
+            for (var index = 0; index < 26; index++) if ((bitmap & (1u << index)) != 0) { var root = ((char)('A' + index)) + ":\\"; var type = GetDriveType(root); if (type == 2 || type == 3) result.Add(new SetupLocation { Name = (type == 2 ? "可移动磁盘 (" : "本地磁盘 (") + root.Substring(0, 2) + ")", Path = root, IsDrive = true }); }
             return result;
+        }
+        public SetupDirectoryListing ListInitialDirectory(string value)
+        {
+            var directory = Full(value);
+            while (!Directory.Exists(directory))
+            {
+                if (File.Exists(directory)) throw new IOException("此位置是文件，请另选安装文件夹。");
+                var parent = Directory.GetParent(directory);
+                if (parent == null) throw new DirectoryNotFoundException("目录不存在或磁盘不可用，请重新选择。");
+                directory = parent.FullName;
+            }
+            return ListDirectories(directory);
         }
         public SetupDirectoryListing ListDirectories(string value)
         {
