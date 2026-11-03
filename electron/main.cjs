@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain, Menu, safeStorage, shell, net, nativeImage, nativeTheme, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, safeStorage, shell, net, nativeImage, nativeTheme, screen, powerMonitor } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { createCustomDialogs } = require('./custom-dialogs.cjs');
 const { createAppMaintenance } = require('./app-maintenance.cjs');
+const { createAppUpdater } = require('./app-updater.cjs');
 const { writeDialogFile } = require('./dialog-save.cjs');
 const { createCredentialStore, isTrustedCredentialSender } = require('./credential-store.cjs');
 const { createArtifactStore } = require('./artifact-store.cjs');
@@ -31,7 +32,7 @@ const { createApplicationExit } = require('./application-exit.cjs');
 const { readValidationOwner, startValidationLifecycle } = require('./validation-lifecycle.cjs');
 
 let mainWindow;
-let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs;
+let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs, appUpdater;
 let runtimeClosing = false, drainRuntime = async () => undefined;
 const runtimeRequests = new Set();
 let closingWriteFailed = false;
@@ -338,6 +339,8 @@ function createWindow() {
     },
   });
   applicationExit.install(mainWindow);
+  mainWindow.on('query-session-end', () => appUpdater?.sessionEnding());
+  mainWindow.on('session-end', () => appUpdater?.sessionEnding());
   studioDialogs.installOwner(mainWindow);
   mainWindow.on('focus', () => { void automaticBilling?.trigger(); });
   mainWindow.on('restore', () => { void automaticBilling?.trigger(); });
@@ -355,8 +358,17 @@ app.whenReady().then(() => {
   if (!ownsInstance) return;
   const credentials = registerCredentials();
   registerRuntime(credentials);
-  applicationExit = createApplicationExit({ app, dialog: studioDialogs, ipcMain, getWindow: () => mainWindow, trustedSender, getTaskState: async () => ({ running: (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.filter(run => run.status === 'running').length }), drain: () => drainRuntime(), validationOwner, visibleValidation, onStatus: state => { if (state.phase === 'cancelled') { runtimeClosing = false; closingWriteFailed = false; } else runtimeClosing = true; } });
+  applicationExit = createApplicationExit({ app, dialog: studioDialogs, ipcMain, getWindow: () => mainWindow, trustedSender, getTaskState: async () => ({ running: (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.filter(run => run.status === 'running').length }), drain: () => drainRuntime(), beforeExit: async () => { try { await appUpdater?.prepareInstall(); } finally { appUpdater?.stop(); } }, validationOwner, visibleValidation, onStatus: state => { if (state.phase === 'cancelled') { runtimeClosing = false; closingWriteFailed = false; } else runtimeClosing = true; } });
   const maintenance = createAppMaintenance({ app, appId: 'local.xuzuo.studio' });
+  appUpdater = createAppUpdater({ app, maintenance, fetchImpl: (url, options) => net.fetch(url, options), powerMonitor, platform: validationRequested ? 'validation' : process.platform, onStatus: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:status', state); } });
+  const updatesReady = appUpdater.start();
+  ipcMain.handle('updates:status', async event => { if (!trustedSender(event)) throw new Error('此页面无权读取更新状态。'); await updatesReady; return appUpdater.status(); });
+  ipcMain.handle('updates:set-enabled', async (event, enabled) => {
+    if (!trustedSender(event) || runtimeClosing || typeof enabled !== 'boolean') throw new Error('应用正在退出或更新设置无效。');
+    await updatesReady;
+    if (!trustedSender(event) || runtimeClosing) throw new Error('应用正在退出，未修改自动更新设置。');
+    const task = appUpdater.setEnabled(enabled); trackRuntimeTask(task, true); return task;
+  });
   ipcMain.handle('maintenance:status', event => { if (!trustedSender(event)) throw new Error('此页面无权读取应用维护状态。'); return maintenance.status(); });
   ipcMain.handle('maintenance:uninstall', event => { if (!trustedSender(event) || runtimeClosing) throw new Error('应用正在退出或当前页面无权启动维护。'); return maintenance.openUninstall(); });
   ipcMain.on('window:minimize', event => { if (trustedSender(event)) mainWindow.minimize(); });
@@ -364,5 +376,6 @@ app.whenReady().then(() => {
   ipcMain.on('window:close', event => { if (trustedSender(event)) mainWindow.close(); });
   createWindow();
   if (validationOwner) stopValidationLifecycle = startValidationLifecycle({ ...validationOwner, requestExit: async () => { await drainRuntime(); app.exit(0); }, forceExit: () => app.exit(0) });
-  app.on('quit', () => { stopValidationLifecycle?.(); studioDialogs?.dispose(); });
+  powerMonitor.on('shutdown', () => appUpdater.sessionEnding());
+  app.on('quit', () => { appUpdater.stop(); stopValidationLifecycle?.(); studioDialogs?.dispose(); });
 });

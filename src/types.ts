@@ -9,6 +9,7 @@ import type { WorkspaceFilesBridge } from './workspace-types';
 import type { EditorBridge } from './editor-types';
 import type { SpreadsheetBridge } from './spreadsheet-types';
 import type { AssetLibraryBridge, ProjectReference } from './asset-types';
+import type { AppUpdateBridge } from './update-types';
 import type { ReactNode } from 'react';
 
 export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models';
@@ -141,6 +142,7 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  updates?: AppUpdateBridge;
   maintenance?: { status: () => Promise<{ available: boolean; reason?: string }>; openUninstall: () => Promise<{ opened: boolean }> };
   fileDialogs?: FileDialogsBridge;
   dataManagement?: DataManagementBridge;

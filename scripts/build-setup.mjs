@@ -12,7 +12,7 @@ const dependencies = createRequire(path.join(root, 'work/ui-build/package.json')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const work = path.join(root, 'work/setup-runtime');
 const release = path.resolve(root, manifest.build.directories.output);
-const sources = ['setup-contracts.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs'].map(name => path.join(root, 'scripts/native', name));
+const sources = ['setup-contracts.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs'].map(name => path.join(root, 'scripts/native', name));
 const ui = path.join(root, 'assets/setup-window.xaml'), icon = path.join(root, 'assets/app-icon.png');
 const windows = process.env.SystemRoot || 'C:/Windows';
 const framework = path.join(windows, 'Microsoft.NET/Framework64/v4.0.30319');
@@ -89,7 +89,12 @@ async function main() {
     await fsp.copyFile(manifestFile, path.join(release, `Xuzuo-Studio-Setup-${metadata.version}.manifest.json`));
     const blockmap = dependencies('app-builder-lib/out/targets/blockmap/blockmap.js');
     await blockmap.buildBlockMap(installer, 'gzip', `${installer}.blockmap`);
-    console.log(JSON.stringify({ installer, bytes: fs.statSync(installer).size, files: files.files.length, unpackedBytes: files.files.reduce((sum, file) => sum + file.bytes, 0), sha256: digest(fs.readFileSync(installer)) })); return;
+    const sha256 = crypto.createHash('sha256'), sha512 = crypto.createHash('sha512');
+    for await (const chunk of fs.createReadStream(installer)) { sha256.update(chunk); sha512.update(chunk); }
+    const name = path.basename(installer), bytes = fs.statSync(installer).size, checksum = sha512.digest('base64');
+    const update = { version: metadata.version, files: [{ url: name, sha512: checksum, size: bytes }], path: name, sha512: checksum, releaseDate: new Date().toISOString() };
+    await fsp.writeFile(path.join(release, 'latest.yml'), JSON.stringify(update, null, 2) + '\n', 'utf8');
+    console.log(JSON.stringify({ installer, bytes, files: files.files.length, unpackedBytes: files.files.reduce((sum, file) => sum + file.bytes, 0), sha256: sha256.digest('hex') })); return;
   }
   if (phase) throw Error(`Unsupported setup phase: ${phase}`);
 }

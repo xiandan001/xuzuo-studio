@@ -17,6 +17,11 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 
 contextBridge.exposeInMainWorld('desktop', {
   maintenance: { status: () => ipcRenderer.invoke('maintenance:status'), openUninstall: () => ipcRenderer.invoke('maintenance:uninstall') },
+  updates: {
+    status: () => ipcRenderer.invoke('updates:status'),
+    setEnabled: enabled => ipcRenderer.invoke('updates:set-enabled', enabled),
+    onStatus: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('updates:status', handler); return () => ipcRenderer.removeListener('updates:status', handler); },
+  },
   fileDialogs: {
     setAppearance: value => ipcRenderer.invoke('file-dialog:appearance', value),
     saveText: input => ipcRenderer.invoke('file-dialog:save-text', input),

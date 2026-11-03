@@ -3,7 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createCloseCoordinator } = require('./close-coordinator.cjs');
 
-function createApplicationExit({ app, dialog, ipcMain, getWindow, trustedSender, getTaskState, drain, onStatus, validationOwner, visibleValidation = false }) {
+function createApplicationExit({ app, dialog, ipcMain, getWindow, trustedSender, getTaskState, drain, onStatus, beforeExit, validationOwner, visibleValidation = false }) {
   const probes = new Map(); let allowed = false, logQueue = Promise.resolve();
   const logFile = path.join(app.getPath('userData'), 'diagnostics', 'exit-events.jsonl');
   const record = event => {
@@ -59,8 +59,14 @@ function createApplicationExit({ app, dialog, ipcMain, getWindow, trustedSender,
     },
     finalize({ forced }) {
       allowed = true;
-      const timeout = new Promise(resolve => { const timer = setTimeout(resolve, 150); timer.unref?.(); });
-      void Promise.race([logQueue.catch(() => undefined), timeout]).finally(() => app.exit(0));
+      void (async () => {
+        if (!forced) {
+          try { await beforeExit?.(); }
+          catch { void record({ type: 'update-handoff-error' }); }
+        }
+        const timeout = new Promise(resolve => { const timer = setTimeout(resolve, 150); timer.unref?.(); });
+        await Promise.race([logQueue.catch(() => undefined), timeout]);
+      })().finally(() => app.exit(0));
     },
   });
   app.on('before-quit', event => { if (!allowed) { event.preventDefault(); void coordinator.request(); } });

@@ -34,6 +34,7 @@ namespace Xuzuo.Setup
             {
                 var metadata = SetupJson.Resource<SetupMetadata>("Setup.Metadata.json");
                 var engine = new SetupEngine(metadata);
+                if (args.Contains("--update")) return SetupUpdate.Run(engine, args);
                 if (args.Contains("--self-test")) { SetupEngine.SelfTest(); WriteConsole(new { passed = true, appId = metadata.appId, version = metadata.version }); return 0; }
                 if (args.Contains("--probe"))
                 {
@@ -55,7 +56,7 @@ namespace Xuzuo.Setup
             }
             catch (Exception error)
             {
-                if (args.Contains("--probe") || args.Contains("--self-test")) { WriteConsole(new { passed = false, error = PublicError(error) }); return 1; }
+                if (args.Contains("--probe") || args.Contains("--self-test") || args.Contains("--update")) { WriteConsole(new { passed = false, error = PublicError(error) }); return 1; }
                 ShowEmergency(PublicError(error)); return 1;
             }
         }
