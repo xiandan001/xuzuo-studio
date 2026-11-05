@@ -176,7 +176,7 @@ describe('原生项目产物清单', () => {
     const f = await fixture();
     const exported = await f.editor.export({ projectId: 'project-one', expectedRevision: 0, document: word('只允许清单核验元数据，不读取该文档正文') });
     assert.ok(exported.artifacts.some(item => item.name.endsWith('.docx')));
-    assert.ok(exported.artifacts.some(item => item.name.endsWith('-检查报告.json')));
+    assert.ok(exported.artifacts.some(item => /-检查报告_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}(?:-\d+)?\.json$/.test(item.name)));
     f.reads.length = 0;
     const inventory = await f.artifacts.listProject('project-one');
     assert.deepEqual(new Set(inventory.map(item => item.id)), new Set(exported.artifacts.map(item => item.id)));

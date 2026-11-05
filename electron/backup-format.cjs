@@ -1,4 +1,8 @@
 const { createHash, randomUUID } = require('node:crypto');
+const { validateQuoteBackups } = require('./quote-backup.cjs');
+const { validateAutomationBackup } = require('./automation-backup.cjs');
+const { validateModelReceiptBackup } = require('./model-receipt-backup.cjs');
+const { validatePurgedProjectAudits } = require('./backup-project-audits.cjs');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const MAX_FILE = 100 * 1024 * 1024, MAX_TOTAL = 512 * 1024 * 1024, MAX_FILES = 10000;
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
@@ -36,15 +40,21 @@ function assertUnique(items, label, field = 'id') {
   if (!Array.isArray(items) || items.some(item => !validId(item?.[field])) || new Set(items.map(item => item[field])).size !== items.length) throw new Error(`备份${label}包含无效或重复编号。`);
 }
 function validateManifest(value) {
-  if (!value || value.kind !== 'xuzuo-internal-backup' || value.version !== 1 || value.secretsIncluded !== false || !validId(value.backupId) || !value.meta || !Array.isArray(value.files) || value.files.length > MAX_FILES) throw new Error('这不是受支持的序作内部备份。客户交付 ZIP 不能用于恢复工作区。');
+  if (!value || value.kind !== 'xuzuo-internal-backup' || ![1, 2, 3].includes(value.version) || value.secretsIncluded !== false || !validId(value.backupId) || !value.meta || !Array.isArray(value.files) || value.files.length > MAX_FILES) throw new Error('这不是受支持的序作内部备份。客户交付 ZIP 不能用于恢复工作区。');
   for (const [name, field] of [['workspaces', 'workspaceId'], ['projects', 'projectId']]) assertUnique(value.locations?.[name], name, field);
   for (const name of ['workspaces', 'projects', 'ledger', 'customPrompts']) assertUnique(value.meta[name], name);
   assertUnique(value.artifacts, '产物');
   if (!Array.isArray(value.records)) throw new Error('备份运行记录无效。');
   assertUnique(value.records.map(record => record.run), '运行记录');
   const projects = new Set(value.locations.projects.map(item => item.projectId)), workspaces = new Set(value.locations.workspaces.map(item => item.workspaceId));
-  if (!workspaces.size || value.meta.workspaces.length !== workspaces.size || value.meta.workspaces.some(item => !workspaces.has(item.id)) || value.meta.projects.length !== projects.size || value.meta.projects.some(item => !projects.has(item.id) || !workspaces.has(item.workspaceId)) || value.locations.projects.some(item => !workspaces.has(item.workspaceId)) || value.artifacts.some(item => !projects.has(item.projectId)) || value.records.some(item => !projects.has(item.run.projectId)) || value.meta.ledger.some(item => !projects.has(item.projectId))) throw new Error('备份的工作区和项目归属不一致。');
-  if (value.meta.projects.some(item => value.locations.projects.find(project => project.projectId === item.id)?.workspaceId !== item.workspaceId)) throw new Error('备份界面索引与项目目录所属工作区不一致。');
+  const audits = value.meta.projects.filter(item => item.purgedAt !== undefined), activeProjects = value.meta.projects.filter(item => item.purgedAt === undefined), auditIds = new Set(audits.map(item => item.id));
+  validatePurgedProjectAudits(value.meta.projects);
+  if (audits.length && value.version !== 3 || audits.some(item => projects.has(item.id))) throw new Error('永久移除审计不能带有可恢复项目目录。');
+  if (!workspaces.size || value.meta.workspaces.length !== workspaces.size || value.meta.workspaces.some(item => !workspaces.has(item.id)) || activeProjects.length !== projects.size || activeProjects.some(item => !projects.has(item.id)) || value.meta.projects.some(item => !workspaces.has(item.workspaceId)) || value.locations.projects.some(item => !workspaces.has(item.workspaceId)) || value.artifacts.some(item => !projects.has(item.projectId)) || value.records.some(item => !projects.has(item.run.projectId)) || value.meta.ledger.some(item => !projects.has(item.projectId) && !auditIds.has(item.projectId))) throw new Error('备份的工作区和项目归属不一致。');
+  if (activeProjects.some(item => value.locations.projects.find(project => project.projectId === item.id)?.workspaceId !== item.workspaceId)) throw new Error('备份界面索引与项目目录所属工作区不一致。');
+  validateQuoteBackups(value.meta.quoteDrafts, value.meta.projects);
+  validateAutomationBackup(value.automations, { projects: activeProjects, workspaces: value.meta.workspaces });
+  validateModelReceiptBackup(value.modelReceipts, { projectIds: [...projects] });
   for (const name of ['connections', 'models', 'workflows', 'categories', 'studioActions', 'useTemplates']) assertUnique(value.meta.configuration?.[name] || [], `配置${name}`);
   for (const record of value.records) { assertUnique(record.ledger, '运行账本'); if (!Array.isArray(record.run.snapshot?.steps) || !Array.isArray(record.run.attempts)) throw new Error('备份运行记录无效。'); }
   assertUnique(value.records.flatMap(record => record.ledger), '全部运行账本');
@@ -66,14 +76,14 @@ function validateManifest(value) {
 function createIdMap(value) {
   const map = Object.create(null);
   function walk(item, field = '') {
-    if (['checks', 'checkedIds', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot', 'calculation'].includes(field)) return;
+    if (['checks', 'checkedIds', 'preparation', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot', 'calculation'].includes(field)) return;
     if (Array.isArray(item)) for (const child of item) walk(child, field);
-    else if (item && typeof item === 'object') { for (const [name, child] of Object.entries(item)) { if (['id', 'workspaceId', 'projectId', 'runId', 'workflowRunId', 'workflowAttemptId', 'workflowStepId'].includes(name) && validId(child)) map[child] ||= randomUUID(); walk(child, name); } }
+    else if (item && typeof item === 'object') { for (const [name, child] of Object.entries(item)) { if (['id', 'workspaceId', 'projectId', 'runId', 'workflowRunId', 'workflowAttemptId', 'workflowStepId', 'creationKey'].includes(name) && validId(child)) map[child] ||= randomUUID(); walk(child, name); } }
   }
   walk(value); return { ...map };
 }
-const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'replaceWaitingReviewRunId']);
-const ID_ARRAYS = new Set(['sourceArtifactIds', 'attachmentIds', 'artifactIds', 'documentImageStepIds']);
+const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'imageSourceStepId', 'creationKey', 'replaceWaitingReviewRunId', 'repairStepId', 'ruleId', 'eventId', 'jobId', 'decisionId', 'sourceWorkflowId', 'sourceId']);
+const ID_ARRAYS = new Set(['sourceArtifactIds', 'attachmentIds', 'artifactIds', 'documentImageStepIds', 'contentSourceStepIds', 'pendingCostEntryIds', 'legacyCostEntryIds', 'ruleChain']);
 const PATH_FIELDS = new Set(['path', 'directory', 'storageDirectory']);
 function relocatedPath(value, paths, fileNames) {
   let mapped = paths[value];
@@ -85,7 +95,7 @@ function relocatedPath(value, paths, fileNames) {
   return fileNames[basename] ? `${mapped.slice(0, split + 1)}${fileNames[basename]}` : mapped;
 }
 function remap(value, ids, paths = {}, fileNames = {}, field = '') {
-  if (['checks', 'checkedIds', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot'].includes(field)) return structuredClone(value);
+  if (['checks', 'checkedIds', 'preparation', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot'].includes(field)) return structuredClone(value);
   if (typeof value === 'string') {
     if (ID_FIELDS.has(field) || ID_ARRAYS.has(field)) return Object.hasOwn(ids, value) ? ids[value] : value;
     if (PATH_FIELDS.has(field)) return relocatedPath(value, paths, fileNames);

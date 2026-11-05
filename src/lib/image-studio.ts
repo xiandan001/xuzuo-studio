@@ -1,5 +1,7 @@
 import type { WorkflowRun } from '../configuration-types';
+import { isProductionRun } from './workflow-purpose';
 import type { ArtifactMetadata } from '../live-types';
+import { validImageQuantity } from './image-quantity';
 import { BUILTIN_IMAGE_USE_TEMPLATES, IMAGE_PRESETS, IMAGE_SIZES, imageUseTemplateSnapshot, useTemplateDraftError } from './image-use-templates';
 import type { ImageUseTemplateSnapshot } from './image-use-templates';
 export { IMAGE_PRESETS, IMAGE_SIZES, PRESET_PROMPTS } from './image-use-templates';
@@ -42,7 +44,7 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
       prompt: text(value.prompt, description), refinePrompt: text(value.refinePrompt, defaults.refinePrompt),
       mode: value.mode === 'refine' ? 'refine' : 'create',
       size: IMAGE_SIZES.some(item => item.value === value.size) ? value.size! : defaults.size,
-      quantity: [1, 2, 4].includes(value.quantity!) ? value.quantity! : 1,
+      quantity: validImageQuantity(value.quantity) ? value.quantity : 1,
       background: ['auto', 'opaque', 'transparent'].includes(value.background!) ? value.background! : 'auto',
       generationModelId: text(value.generationModelId, '', 240), editingModelId: text(value.editingModelId, '', 240),
       references,
@@ -102,7 +104,7 @@ export function projectImageContent(runs: WorkflowRun[], projectId: string, tras
   const files = new Map<string, ArtifactMetadata>();
   const generated = new Set<string>();
   let optimizedPrompt: ArtifactMetadata | undefined;
-  const recent = runs.filter(run => run.mode === 'live' && run.projectId === projectId).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
+  const recent = runs.filter(run => run.mode === 'live' && isProductionRun(run) && run.projectId === projectId).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
   for (const run of recent) {
     for (const attempt of [...run.attempts].reverse()) {
       for (const artifact of attempt.artifacts || []) {

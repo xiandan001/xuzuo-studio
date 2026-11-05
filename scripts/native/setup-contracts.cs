@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace Xuzuo.Setup
@@ -105,7 +106,38 @@ namespace Xuzuo.Setup
             }
         }
         public static T Resource<T>(string name) { return Read<T>(Assembly.GetExecutingAssembly().GetManifestResourceStream(name)); }
-        public static T File<T>(string path) { return Read<T>(System.IO.File.OpenRead(path)); }
+        public static T File<T>(string path) { return Read<T>(OpenRead(path)); }
+        private static Stream OpenRead(string path)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try { return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete); }
+                catch (IOException error)
+                {
+                    var code = error.HResult & 0xffff;
+                    if (attempt >= 3 || (code != 2 && code != 32 && code != 33)) throw;
+                    Thread.Sleep(25);
+                }
+            }
+        }
+        private static void Commit(string temporary, string path)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(path)) System.IO.File.Replace(temporary, path, null);
+                    else System.IO.File.Move(temporary, path);
+                    return;
+                }
+                catch (IOException error)
+                {
+                    var code = error.HResult & 0xffff;
+                    if (attempt >= 6 || (code != 32 && code != 33 && code != 1175 && code != 1176) || !System.IO.File.Exists(path) || !System.IO.File.Exists(temporary)) throw;
+                    Thread.Sleep(100);
+                }
+            }
+        }
         public static void Write(string path, object value)
         {
             var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -114,8 +146,7 @@ namespace Xuzuo.Setup
                 using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
                 { writer.Write(Serializer().Serialize(value)); writer.Write('\n'); writer.Flush(); stream.Flush(true); }
-                if (System.IO.File.Exists(path)) System.IO.File.Replace(temporary, path, null);
-                else System.IO.File.Move(temporary, path);
+                Commit(temporary, path);
             }
             finally { if (System.IO.File.Exists(temporary)) System.IO.File.Delete(temporary); }
         }

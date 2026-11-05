@@ -9,7 +9,7 @@ export type QuoteStore = Pick<Storage, 'getItem' | 'setItem'>;
 export type QuoteStoreSource = QuoteStore | (() => QuoteStore);
 const fieldNames: (keyof QuoteFields)[] = ['minutes', 'rate', 'remaining', 'other', 'reserve', 'fee', 'profit', 'price', 'variable'];
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const inputsValid = (value: unknown): value is QuoteFields => object(value) && fieldNames.every(name => typeof value[name] === 'string' && value[name].length <= 64);
+export const validQuoteFields = (value: unknown): value is QuoteFields => object(value) && fieldNames.every(name => typeof value[name] === 'string' && value[name].length <= 64);
 const store = (source: QuoteStoreSource) => typeof source === 'function' ? source() : source;
 export const projectQuoteKey = (workspaceId: string, projectId: string) => `xuzuo-project-quote-v1:${encodeURIComponent(workspaceId)}:${encodeURIComponent(projectId)}`;
 export interface QuoteRead { raw: string | null; draft?: ProjectQuote; error?: string; }
@@ -19,7 +19,7 @@ export function readProjectQuote(source: QuoteStoreSource, workspaceId: string, 
     raw = store(source).getItem(projectQuoteKey(workspaceId, projectId));
     if (raw === null) return { raw };
     const value = JSON.parse(raw);
-    if (!object(value) || value.type !== 'xuzuo-project-quote' || value.version !== 1 || value.workspaceId !== workspaceId || value.projectId !== projectId || !inputsValid(value.inputs) || !['single', 'repeat'].includes(String(value.mode)) || !['live', 'simulation'].includes(String(value.scope)) || typeof value.savedAt !== 'string') throw new Error('invalid');
+    if (!object(value) || value.type !== 'xuzuo-project-quote' || value.version !== 1 || value.workspaceId !== workspaceId || value.projectId !== projectId || !validQuoteFields(value.inputs) || !['single', 'repeat'].includes(String(value.mode)) || !['live', 'simulation'].includes(String(value.scope)) || typeof value.savedAt !== 'string') throw new Error('invalid');
     return { raw, draft: value as ProjectQuote };
   } catch { return { raw, error: '当前项目报价草稿无法读取，原始记录已保留；请先导出当前参数，勿覆盖原记录。' }; }
 }
@@ -40,7 +40,7 @@ export function unassignedQuotes(source: QuoteStoreSource, workspaceId: string):
       const raw = storage.getItem(key); if (raw === null) continue;
       try {
         const value = JSON.parse(raw);
-        if (!object(value) || value.type !== 'xuzuo-ui-prototype-quote' || !inputsValid(value.inputs) || value.workspaceId && value.workspaceId !== workspaceId) throw new Error('invalid');
+        if (!object(value) || value.type !== 'xuzuo-ui-prototype-quote' || !validQuoteFields(value.inputs) || value.workspaceId && value.workspaceId !== workspaceId) throw new Error('invalid');
         result.push({ key, raw, inputs: value.inputs, mode: value.mode === 'repeat' ? 'repeat' : 'single', scope: value.scope === 'live' || value.simulated === false ? 'live' : 'simulation', projectName: typeof value.project === 'string' ? value.project : undefined });
       } catch { result.push({ key, raw, error: '这份旧报价无法读取，原始记录已保留。' }); }
     }

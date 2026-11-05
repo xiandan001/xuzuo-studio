@@ -2,6 +2,7 @@ export interface EditorSession {
   id: string;
   projectId: string;
   label: string;
+  kind?: 'preferences';
   getState: () => { dirty: boolean; pending: boolean; persistenceError?: string };
   save: () => Promise<boolean>;
   exportRecovery: () => boolean | Promise<boolean>;

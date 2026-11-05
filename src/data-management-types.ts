@@ -1,8 +1,10 @@
 import type { ConfigurationState } from './lib/configuration';
 import type { WorkspaceState } from './lib/workspace-state';
 import type { ProjectLocation, WorkspaceLocation } from './workspace-types';
+import type { QuoteBackupRecord } from './quote-backup-types';
 
-export type BackupMeta = Omit<WorkspaceState, 'activeWorkspaceId'> & { activeWorkspaceId?: string; configuration: ConfigurationState };
+export type BackupMeta = Omit<WorkspaceState, 'activeWorkspaceId'> & { activeWorkspaceId?: string; configuration: ConfigurationState; quoteDrafts?: QuoteBackupRecord[] };
+export interface BackupSelection { workspaceIds: string[]; projectIds?: string[]; }
 export interface BackupInspection {
   filePath: string;
   backupId: string;

@@ -24,7 +24,7 @@ describe('任务中心无执行记录', () => {
     props.workflowRunner.runs = [{ id: 'finished', projectId: 'empty-task-project', workflowName: '客户手册', status: 'complete', mode: 'live', snapshot: { steps: [{ id: 'text', enabled: true }] }, attempts: [{ stepId: 'text', status: 'complete' }, { stepId: 'text', status: 'failed' }], updatedAt: '2026-11-02T09:00:00Z' }] as WorkflowRun[];
     const html = renderToStaticMarkup(<Activity {...props} />);
     expect(html).toContain('按任务状态筛选'); expect(html).toContain('筛选任务项目'); expect(html).toContain('搜索任务');
-    expect(html).toContain('查看成品'); expect(html).toContain('执行完成'); expect(html).toContain('0 / 1 步已完成');
+    expect(html).toContain('查看结果与步骤'); expect(html).not.toContain('查看成品'); expect(html).toContain('执行完成'); expect(html).toContain('0 / 1 步已完成');
     expect(html).not.toContain('wf-run-card'); expect(html).not.toContain('重试此步'); expect(html).not.toContain('已确认交付');
   });
 });

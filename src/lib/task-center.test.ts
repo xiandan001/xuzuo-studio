@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowRun } from '../configuration-types';
+import type { ArtifactMetadata } from '../live-types';
 import { filterTaskRuns, taskGroup, taskNextAction, taskStatusLabel } from './task-center';
 
 const run = (id: string, status: WorkflowRun['status'], changes: Partial<WorkflowRun> = {}) => ({ id, status, projectId: 'p', workflowName: '宣传图工作流', updatedAt: '2026-11-02T08:00:00.000Z', ...changes }) as WorkflowRun;
@@ -25,9 +26,18 @@ describe('任务中心筛选与下一步', () => {
     expect(filterTaskRuns(runs, projects, { ...filter, query: ' http 429 ' }).map(item => item.id)).toEqual(['a']);
     expect(filterTaskRuns(runs, projects, { ...filter, projectId: 'removed' }).map(item => item.id)).toEqual(['orphan']);
   });
-  it('验收和成品直接去项目，异常和执行中的记录先查看上下文', () => {
-    expect(taskNextAction(run('a', 'complete'))).toBe('project');
-    expect(taskNextAction(run('a', 'waiting-review'))).toBe('project');
+  it('只有已登记可用项目成品才直接去工作台，规划和无成品检查保留上下文', () => {
+    const file = { id: 'image', name: '成品.png', kind: 'image', mimeType: 'image/png', bytes: 100, path: '/owned/成品.png', createdAt: '2026-11-04' } as ArtifactMetadata;
+    const result = { snapshot: { outputKind: 'image', steps: [] } as unknown as WorkflowRun['snapshot'], attempts: [{ status: 'complete', artifacts: [file] }] as WorkflowRun['attempts'] };
+    expect(taskNextAction(run('a', 'complete', result))).toBe('project');
+    expect(taskNextAction(run('a', 'waiting-review', result))).toBe('project');
+    expect(taskNextAction(run('a', 'complete', { ...result, purpose: 'automation-plan' }))).toBe('detail');
+    expect(taskNextAction(run('a', 'waiting-review'))).toBe('detail');
+    expect(taskNextAction(run('a', 'complete', { ...result, attempts: [{ status: 'complete', artifacts: [{ ...file, unavailable: true }] }] as WorkflowRun['attempts'] }))).toBe('detail');
+    expect(taskNextAction(run('a', 'complete', { ...result, attempts: [{ status: 'complete', artifacts: [{ ...file, trashedAt: 'today' }] }] as WorkflowRun['attempts'] }))).toBe('detail');
+    const office = { snapshot: { outputKind: 'word', steps: [] } as unknown as WorkflowRun['snapshot'], attempts: [{ status: 'complete', artifacts: [{ ...file, name: '交付.docx', kind: 'office' }] }] as WorkflowRun['attempts'] };
+    expect(taskNextAction(run('a', 'waiting-review', office))).toBe('project');
+    expect(taskNextAction(run('a', 'complete', { ...office, attempts: [{ status: 'complete', artifacts: [{ ...file, name: 'result.txt', kind: 'text', mimeType: 'text/plain' }] }] as WorkflowRun['attempts'] }))).toBe('detail');
     expect(taskNextAction(run('a', 'interrupted'))).toBe('detail');
     expect(taskNextAction(run('a', 'paused'))).toBe('detail');
     expect(taskGroup(run('a', 'cancelled'))).toBe('finished');

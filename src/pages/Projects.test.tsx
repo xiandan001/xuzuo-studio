@@ -13,4 +13,10 @@ describe('项目页先呈现可操作范围', () => {
     const html = renderToStaticMarkup(<Projects {...fixture([])} />);
     expect(html).toContain('这里还没有项目'); expect(html).toContain('开始第一份作品');
   });
+  it('默认收起状态和业务分类筛选，保留类型、搜索、视图与明确筛选入口', () => {
+    const html = renderToStaticMarkup(<Projects {...fixture([make('one')])} />);
+    expect(html).toContain('aria-label="作品筛选" aria-expanded="false"');
+    expect(html).toContain('aria-label="搜索项目"'); expect(html).toContain('aria-label="网格视图"'); expect(html).toContain('aria-label="列表视图"');
+    expect(html).toContain('>PPT</button>'); expect(html).not.toContain('aria-label="筛选项目状态"'); expect(html).not.toContain('aria-label="筛选项目业务分类"');
+  });
 });

@@ -1,0 +1,11 @@
+.studio-app-shell .focused-navigation{padding-top:2px;display:flex;flex-direction:column;gap:6px;align-items:stretch}
+.studio-app-shell .focused-navigation .nav-item{flex-shrink:0;height:46px;margin:0;border-radius:10px;font-size:15px}
+.studio-app-shell .focused-navigation .nav-item:focus-visible{outline:2px solid var(--ui-focus);outline-offset:2px}
+.navigation-task-status{display:flex;align-items:center;gap:7px;max-width:300px;min-width:36px;min-height:34px;padding:7px 10px;border:1px solid var(--ui-border);border-radius:8px;color:var(--ui-fg-secondary);background:var(--ui-surface);font-size:13px;text-align:left}
+.navigation-task-status:hover{border-color:var(--ui-border-strong);background:var(--ui-surface-hover);color:var(--ui-fg)}
+.navigation-task-status:focus-visible{outline:2px solid var(--ui-focus);outline-offset:2px}
+.navigation-task-status>svg{flex-shrink:0}.navigation-task-status>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.navigation-task-status>b{display:none;min-width:16px;font-size:12px;font-weight:650;text-align:center}
+@media(max-width:1100px){.navigation-task-status{max-width:180px}}
+@media(max-width:800px){.navigation-task-status{gap:5px;padding:7px;max-width:70px}.navigation-task-status>span{display:none}.navigation-task-status>b{display:block}}
+@media(prefers-reduced-motion:reduce){.navigation-task-status .spin{animation:none}}
+.reduce-motion .navigation-task-status .spin{animation:none}

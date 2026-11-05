@@ -1,5 +1,6 @@
 import type { SpreadsheetCell, SpreadsheetDocument, SpreadsheetSheet, SpreadsheetValue } from '../spreadsheet-types';
 import { cellFromInput, columnLabel, SPREADSHEET_LIMITS, validateSpreadsheetDocument } from './spreadsheet-engine';
+import { applyGeneratedSheetFormatting } from './spreadsheet-generated-formatting';
 
 const NOTES_ID = 'generated-missing-inputs';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -49,7 +50,7 @@ function sheetFromRows(raw: unknown, index: number, inferTypes: boolean): Spread
     if (unknown.length) return fail(`${location} 第 ${rowIndex + 1} 行`, `字段 ${unknown.join('、')} 未声明在 columns 中`);
     return columns.map(column => Object.hasOwn(row, column.key) ? row[column.key] : null);
   });
-  if (columns.length) rows.unshift(columns.map(column => column.name));
+  if (columns.length) rows.unshift(columns.map(column => ({ value: column.name, bold: true })));
   if (rows.length > SPREADSHEET_LIMITS.rows) return fail(location, '含表头最多 10000 行，生成内容未被截断');
   let columnCount = Math.max(1, columns.length);
   const cells: Record<string, SpreadsheetCell> = {};
@@ -61,7 +62,7 @@ function sheetFromRows(raw: unknown, index: number, inferTypes: boolean): Spread
       cells[address] = generatedCell(value, `${location}!${address}`, inferTypes && !(columns.length && rowIndex === 0));
     });
   });
-  return { id: `generated-sheet-${index + 1}`, name, rowCount: Math.max(50, rows.length), columnCount: Math.max(12, columnCount), cells };
+  return applyGeneratedSheetFormatting({ id: `generated-sheet-${index + 1}`, name, rowCount: Math.max(50, rows.length), columnCount: Math.max(12, columnCount), cells }, raw.formatting);
 }
 
 function withMissingInputs(document: SpreadsheetDocument, meta: unknown): SpreadsheetDocument {

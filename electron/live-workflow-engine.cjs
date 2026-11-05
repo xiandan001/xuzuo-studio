@@ -8,6 +8,8 @@ const { extractReferenceText } = require('./reference-text.cjs');
 const { finishEditedReview } = require('./edited-delivery.cjs');
 const { illustrationAssets, composeDocumentImages } = require('./document-illustrations.cjs');
 const { createRunHistoryStore, validateRecords, runSummary } = require('./run-history-store.cjs');
+const { evaluateQuality, repairInput } = require('./automation-quality.cjs');
+const { imageExportAssets } = require('./image-export-sources.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const now = () => new Date().toISOString();
@@ -20,7 +22,7 @@ function safeRequest(input) {
   request.models = request.models.map(({ id, name, modelId, connectionId, capabilities, pricing, enabled, demo }) => ({ id, name, modelId, connectionId, capabilities, pricing: { unit: pricing?.unit, currency: pricing?.currency, input: pricing?.input, output: pricing?.output, exchangeRate: pricing?.exchangeRate, referenceOnly: pricing?.referenceOnly, referenceNote: pricing?.referenceNote, officialUrl: pricing?.officialUrl, verifiedAt: pricing?.verifiedAt }, enabled, demo }));
   return request;
 }
-function actionFor(step, retry) { return retry ? '重新生成' : ['vision', 'video-understanding'].includes(step.kind) ? 'AI 复核' : step.kind === 'image-editing' ? 'AI 精修' : '初次生成'; }
+function actionFor(step, retry) { return retry ? '重新生成' : step.role === 'reviewer' || ['vision', 'video-understanding'].includes(step.kind) ? 'AI 复核' : step.kind === 'image-editing' ? 'AI 精修' : '初次生成'; }
 function latestBefore(run, index) {
   const before = run.snapshot.steps.slice(0, index).filter(step => step.enabled && modelStep(step)).reverse();
   for (const step of before) { const attempt = run.attempts.filter(item => item.stepId === step.id && item.status === 'complete').at(-1); if (attempt) return attempt; }
@@ -29,14 +31,14 @@ function latestBefore(run, index) {
 function validResults(run) {
   return run.snapshot.steps.filter(step => step.enabled && modelStep(step)).map(step => run.attempts.filter(attempt => attempt.stepId === step.id && attempt.status === 'complete').at(-1)).filter(Boolean);
 }
-function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, recoverInterrupted = true, legacyBillingBindings = {} }) {
+function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined }) {
   const historyStore = createRunHistoryStore({ directory, fileSystem });
   const records = new Map();
   const controllers = new Map();
   const pumps = new Map();
   const projectMutations = new Map();
-  const dirty = new Map(), detailVersions = new Map(); let mutationVersion = 0;
-  const mark = record => { const generation = ++mutationVersion; dirty.set(record.run.id, generation); detailVersions.set(record.run.id, generation); };
+  const dirty = new Map(), detailVersions = new Map(), changedAt = new Map(); let mutationVersion = 0;
+  const mark = record => { const generation = ++mutationVersion; dirty.set(record.run.id, generation); detailVersions.set(record.run.id, generation); changedAt.set(record.run.id, revision + 1); };
   let writes = Promise.resolve(), shuttingDown = false, revision = 0, shutdownPromise, recalculation;
   const mutateProject = (projectId, operation) => {
     const task = (projectMutations.get(projectId) || Promise.resolve()).catch(() => undefined).then(operation);
@@ -51,7 +53,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       const captured = new Map(dirty), changedIds = [...captured.keys(), ...(transaction?.changedIds || [])];
       await historyStore.save(transaction ? transaction.records(current) : current, revision, { changedIds });
       for (const [id, generation] of captured) if (dirty.get(id) === generation) dirty.delete(id);
-      if (transaction) { transaction.commit(); for (const id of transaction.changedIds || []) detailVersions.set(id, ++mutationVersion); revision++; }
+      if (transaction) { transaction.commit(); for (const id of transaction.changedIds || []) { detailVersions.set(id, ++mutationVersion); changedAt.set(id, revision + 1); } revision++; }
     });
     writes = task.catch(() => undefined);
     return task;
@@ -75,7 +77,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     await recalculateStored();
     await persist();
   })();
-  const validation = async (request, queryOnlyStepId, completedImageStepIds) => { await ready; return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds }); };
+  const validation = async (request, queryOnlyStepId, completedImageStepIds, completedStepIds) => { await ready; await assertProjectAdmission(request?.project?.id); return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds, completedStepIds }); };
   const projectLedgerCost = projectId => [...records.values()].filter(record => record.run.projectId === projectId).flatMap(record => record.ledger).reduce((sum, entry) => sum + entry.costCents, 0);
   const projectCost = record => Math.max(0, ...[...records.values()].filter(item => item.run.projectId === record.run.projectId).map(item => item.legacyBaseCostCents || 0)) + projectLedgerCost(record.run.projectId);
   const update = (record, changes) => { mark(record); return Object.assign(record.run, changes, { updatedAt: now() }); };
@@ -136,7 +138,16 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     const previous = step.inputSource === 'previous' ? latestBefore(record.run, index) : undefined;
     let input = previous?.summary || record.run.input;
     const attachmentIds = [...new Set([...record.request.attachmentIds, ...(step.inputSource === 'previous' && previous ? (previous.artifacts || []).map(item => item.id) : [])])];
-    const attachments = await artifactStore.list(attachmentIds);
+    let attachments = await artifactStore.list(attachmentIds);
+    if (step.imageSourceStepId) {
+      const source = record.run.snapshot.steps.find(item => item.id === step.imageSourceStepId);
+      const sourceIndex = record.run.snapshot.steps.indexOf(source);
+      const attempt = record.run.attempts.findLast(item => item.stepId === source?.id && item.status === 'complete');
+      if (step.kind !== 'image-editing' || !source || sourceIndex < 0 || sourceIndex >= index || !['image-generation', 'image-editing'].includes(source.kind) || !attempt) throw Object.assign(Error('精修原图步骤不可用。'), { publicMessage: '精修缺少前面成功生成的实际图片，未调用模型。', requestStarted: false });
+      const images = await artifactStore.list((attempt.artifacts || []).filter(file => file.kind === 'image').map(file => file.id));
+      if (images.length !== (source.count || 1) || images.some(file => file.kind !== 'image' || file.projectId !== record.run.projectId || file.runId !== record.run.id || file.trashedAt || file.unavailable)) throw Object.assign(Error('精修原图归属无效。'), { publicMessage: '精修原图已不可用、不完整或不属于本次运行，未替换成重新生图。', requestStarted: false });
+      attachments = [...attachments.filter(file => file.kind !== 'image'), ...images];
+    }
     const illustrations = illustrationAssets(record, step, latestBefore(record.run, index), attachments);
     if (step.inputSource === 'project') {
       let referenceLength = 0;
@@ -150,8 +161,10 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         input += `\n\n参考资料《${attachment.name}》：\n${content}`;
       }
     }
-    if (illustrations.length) input += `\n\n图文排版要求：本次另有 ${illustrations.length} 张真实插图，由本地排版器安排。` + '请生成完整正文，保持详细内容、事实和页数。不要把图片当成已核实的真实照片；不需要输出图片ID、图片占位符或图片制作说明。';
+    if (illustrations.length) input += `\n\n图文排版要求：本次已有 ${illustrations.length} 张可读取的真实插图，图片文件已准备完成，软件会将其嵌入最终Word/PPT成品。` + '配图生成、提供、安排和嵌入由软件完成，不属于待补充业务资料；不要在meta.missingInputs、资料附录或正文中声称需要本地排版器生成或提供插图，或声称当前交付不包含图片文件。请生成完整正文，保持详细内容、事实和页数。图片可用不代表版权、品牌一致性或事实已核实，相关授权、品牌参考、客户确认和未核实事实确实缺失时仍须保留资料说明。不要把图片当成已核实的真实照片；不需要输出图片ID、图片占位符或图片制作说明。';
     if (illustrations.length && record.request.project.kind === 'ppt') input += `\n若用户未指定总页数，请至少安排 ${illustrations.length} 页，以每页一张图承载本次插图。用户指定了页数时保留其要求，不擅自追加页面；配图多于页面时本地排版会保留原图并提示调整。`;
+    if (step.role === 'reviewer') input = `【本次目标和验收要求】\n${record.run.input}\n\n【待检查的实际结果】\n${input}`;
+    input = repairInput(record.run, step, input);
     return { input, illustrations, attachments: attachments.filter(item => !['text', 'office'].includes(item.kind)) };
   }
   async function finishFailure(record, attempt, error) {
@@ -186,18 +199,25 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         const run = record.run;
         if (run.pauseRequested) { update(record, { status: 'paused', pauseRequested: false }); controllers.delete(id); await persist(); break; }
         const step = run.snapshot.steps[run.stepIndex];
-        if (!step) { update(record, { status: 'complete', pauseRequested: false }); controllers.delete(id); await persist(); break; }
+        if (!step) { update(record, { status: 'complete', completedAt: now(), pauseRequested: false }); controllers.delete(id); await persist(); break; }
         if (!step.enabled) { run.stepIndex++; continue; }
-        const attempt = { id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: '人工步骤', status: 'running', costCents: 0, costState: 'not-incurred', summary: '正在执行。', input: '', prompt: replaceVariables(step.prompt || '', run.variables).content, action: actionFor(step, run.retryStepOnly), artifacts: [], startedAt: now() };
-        run.attempts.push(attempt); update(record, { error: undefined }); await persist();
+        const lastStepAttempt = run.attempts.findLast(attempt => attempt.stepId === step.id);
+        const previousAttempt = !run.retryStepOnly && modelStep(step) && modelRuntime.recoverReceipt && lastStepAttempt && ['cancelled', 'failed'].includes(lastStepAttempt.status) && ledgerFor(record, lastStepAttempt) ? lastStepAttempt : undefined;
+        let recovered;
+        try { if (previousAttempt) recovered = await modelRuntime.recoverReceipt({ requestId: previousAttempt.id, runId: run.id, projectId: run.projectId }); }
+        catch (error) { update(record, { status: 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
+        const attempt = recovered ? previousAttempt : { id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: '人工步骤', status: 'running', costCents: 0, costState: 'not-incurred', summary: '正在执行。', input: '', prompt: replaceVariables(step.prompt || '', run.variables).content, action: actionFor(step, run.retryStepOnly || run.repairContext?.stepId === step.id), artifacts: [], startedAt: now() };
+        if (!recovered) run.attempts.push(attempt); else { attempt.recoveredFromReceiptAt = now(); attempt.recoveredError = attempt.error; attempt.status = 'running'; }
+        update(record, { error: undefined }); await persist();
         try {
-          const context = await inputFor(record, step, run.stepIndex); attempt.input = context.input;
+          const context = await inputFor(record, step, run.stepIndex); if (!recovered) attempt.input = context.input;
           if (step.kind === 'manual-review') { attempt.status = 'waiting-review'; attempt.summary = '请检查上一步实际结果，确认后继续。'; update(record, { status: 'waiting-review' }); controllers.delete(id); await persist(); break; }
           if (step.kind === 'export') {
             const results = validResults(run).filter(item => run.snapshot.steps.findIndex(candidate => candidate.id === item.stepId) < run.stepIndex);
-            const textResult = step.contentSourceStepId ? results.find(item => item.stepId === step.contentSourceStepId) : [...results].reverse().find(item => item.summary && run.snapshot.steps.some(source => source.id === item.stepId && ['text', 'transcription'].includes(source.kind)));
-            const assets = [...results.flatMap(item => item.artifacts || []), ...context.attachments].filter(item => item.kind === 'image');
-            const body = step.contentSourceStepId ? textResult?.summary || '' : step.inputSource === 'project' ? context.input : textResult?.summary || context.input;
+            const textResult = step.contentSourceStepId ? results.find(item => item.stepId === step.contentSourceStepId) : [...results].reverse().find(item => item.summary && run.snapshot.steps.some(source => source.id === item.stepId && !['planner', 'reviewer'].includes(source.role) && ['text', 'transcription'].includes(source.kind)));
+            const assets = imageExportAssets(run, step, results) || (record.request.project.kind === 'image' && step.contentSourceStepId ? results.filter(item => item.stepId === step.contentSourceStepId).flatMap(item => item.artifacts || []) : [...results.flatMap(item => item.artifacts || []), ...context.attachments]).filter(item => item.kind === 'image');
+            if (record.request.project.kind === 'image' && step.contentSourceStepId && !assets.length) throw Error('所选最终图片步骤没有可交付的实际图片，未改用历史初稿。');
+            const body = record.request.project.kind === 'image' ? `图像交付：${record.request.project.name}。实际图片见本项目已生成产物；交付前核对尺寸、文字和使用范围。` : step.contentSourceStepId ? textResult?.summary || '' : step.inputSource === 'project' ? context.input : textResult?.summary || context.input;
             const media = results.flatMap(item => item.artifacts || []).filter(item => ['audio', 'video'].includes(item.kind));
             if (record.request.project.kind === 'image' && !assets.length) attempt.artifacts = [await artifactStore.write({ name: `${record.request.project.name}-实际结果.md`, mimeType: 'text/markdown', text: body, runId: run.id, projectId: run.projectId }), ...media];
             else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId }), ...media];
@@ -206,17 +226,19 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           } else {
             const model = record.request.models.find(item => item.id === step.modelConfigId);
             const connection = record.request.connections.find(item => item.id === model?.connectionId);
-            const previousTask = step.kind === 'video-generation' && connection.providerId === 'siliconflow' && !run.retryStepOnly ? run.attempts.slice(0, -1).findLast(item => item.stepId === step.id && item.providerRequestId && ['failed', 'cancelled'].includes(item.status)) : undefined;
+            const recoveringQuery = recovered && ledgerFor(record, attempt)?.queryOnly;
+            const previousTask = (!recovered || recoveringQuery) && step.kind === 'video-generation' && connection.providerId === 'siliconflow' && !run.retryStepOnly ? run.attempts.filter(item => item.id !== attempt.id).findLast(item => item.stepId === step.id && item.providerRequestId && ['failed', 'cancelled'].includes(item.status) && !ledgerFor(record, item)?.queryOnly) : undefined;
+            if (recoveringQuery && !previousTask) throw Object.assign(new Error('原视频计费记录缺失'), { publicMessage: '无法核对原视频任务的计费记录，未重新生成；请先检查原任务与费用。', requestStarted: false });
             const fx = await fxRates?.get(attempt.startedAt);
             const estimate = estimateCost(model, step, `${attempt.prompt}\n${context.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt, fx });
-            if (!previousTask && (cnyKnown(estimate) && (step.budgetCents != null && estimate.costCents > step.budgetCents || record.request.project.budgetCents != null && projectCost(record) + estimate.costCents > record.request.project.budgetCents) || !cnyKnown(estimate) && (step.budgetCents === 0 || record.request.project.budgetCents === 0))) throw Object.assign(new Error('预算不足'), { publicMessage: '当前步骤估算超过已设置的上限，或零元上限下费用无法确定，未发送新请求。', requestStarted: false });
-            attempt.modelLabel = `${model.name} · ${model.modelId}`;
-            const entry = { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
-            record.ledger.push(entry); mark(record); await persist();
+            if (!recovered && !previousTask && (cnyKnown(estimate) && (step.budgetCents != null && estimate.costCents > step.budgetCents || record.request.project.budgetCents != null && projectCost(record) + estimate.costCents > record.request.project.budgetCents) || !cnyKnown(estimate) && (step.budgetCents === 0 || record.request.project.budgetCents === 0))) throw Object.assign(new Error('预算不足'), { publicMessage: '当前步骤估算超过已设置的上限，或零元上限下费用无法确定，未发送新请求。', requestStarted: false });
+            if (!recovered) attempt.modelLabel = `${model.name} · ${model.modelId}`;
+            const entry = recovered ? ledgerFor(record, attempt) : { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
             if (previousTask) { entry.queryOnly = true; entry.costState = 'not-incurred'; attempt.costState = 'not-incurred'; }
-            const result = await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { maxOutputTokens: step.maxOutputTokens || 2048, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, onProgress: progress => {
+            if (!recovered) record.ledger.push(entry); mark(record); await persist();
+            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { maxOutputTokens: step.maxOutputTokens || 2048, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, onProgress: progress => {
               if (attempt.status !== 'running') return;
-              attempt.summary = progress.message || '模型正在处理。'; revision++;
+              attempt.summary = progress.message || '模型正在处理。'; revision++; changedAt.set(run.id, revision);
               if (progress.providerRequestId && attempt.providerRequestId !== progress.providerRequestId) {
                 attempt.providerRequestId = progress.providerRequestId; entry.usage = { ...entry.usage, providerRequestId: progress.providerRequestId };
                 mark(record);
@@ -245,8 +267,19 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
               attempt.summary = text; attempt.artifacts.push(source);
             }
           }
-          attempt.status = 'complete'; attempt.completedAt = now();
+          attempt.status = 'complete'; attempt.completedAt = now(); delete attempt.error;
           if (run.status === 'cancelled') { await persist(); break; }
+          if (run.repairContext?.stepId === step.id) delete run.repairContext;
+          let quality;
+          try { quality = evaluateQuality(run, step, attempt); }
+          catch (error) { update(record, { status: 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
+          if (quality) {
+            run.qualityReviews = [...(run.qualityReviews || []), quality.result];
+            if (!quality.result.passed) {
+              if (quality.repair) { run.repairCounts = { ...run.repairCounts, [step.id]: quality.repair.number }; run.repairContext = quality.repair; run.stepIndex = quality.repair.targetIndex; update(record, { error: undefined }); await persist(); continue; }
+              update(record, { status: 'waiting-review', error: `独立检查未通过，已停止自动修订：${quality.result.issues.join('；') || quality.result.summary || '请检查实际结果。'}` }); controllers.delete(id); await persist(); break;
+            }
+          }
           run.stepIndex = run.retryStepOnly ? run.snapshot.steps.length : run.stepIndex + 1;
           const paused = !!run.pauseRequested;
           if (paused) { update(record, { status: 'paused', pauseRequested: false }); controllers.delete(id); }
@@ -280,25 +313,36 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
   }
   return {
     drain, flush: drain,
+    async isProjectBusy(projectId, { allowReview = false } = {}) {
+      await ready;
+      return projectMutations.has(projectId) || [...records.values()].some(record => record.run.projectId === projectId && (controllers.has(record.run.id) || pumps.has(record.run.id) || ['running', 'paused', ...(!allowReview ? ['waiting-review'] : [])].includes(record.run.status)));
+    },
     preflight: validation,
     async start(input) {
       return mutateProject(input?.project?.id, async () => {
         await ready;
         if (shuttingDown) throw new Error('应用正在退出。');
         const request = safeRequest(input);
+        await assertProjectAdmission(request.project.id);
+        if (request.dispatchKey !== undefined) {
+          if (typeof request.dispatchKey !== 'string' || !/^[a-f0-9]{64}$/.test(request.dispatchKey)) throw new Error('自动化派单标识无效。');
+          const existing = [...records.values()].find(record => record.request.dispatchKey === request.dispatchKey);
+          if (existing) { if (existing.run.projectId !== request.project.id || existing.run.workspaceId !== request.project.workspaceId || existing.run.workflowId !== request.workflow.id) throw new Error('派单标识与原项目不一致。'); return structuredClone(existing.run); }
+        }
         const expectedReplacement = records.get(request.replaceWaitingReviewRunId);
         const expectedReviewId = expectedReplacement?.run.status === 'waiting-review' ? expectedReplacement.run.attempts.findLast(attempt => attempt.stepId === expectedReplacement.run.snapshot.steps[expectedReplacement.run.stepIndex]?.id && attempt.status === 'waiting-review')?.id : undefined;
         const check = await validation(request);
-        if (!check.ok) throw new Error(check.errors.join('\n'));
+        if (!check.ok) throw Object.assign(new Error(check.errors.join('\n')), { code: 'WORKFLOW_PREFLIGHT' });
         if (shuttingDown) throw new Error('应用正在退出，未开始新的模型请求。');
+        await assertProjectAdmission(request.project.id);
         if (!request.acknowledgePaidCalls || (check.unknownCost && !request.acknowledgeUnknownCost)) throw new Error('请确认真实调用及待核对费用后再开始。');
         const replacementId = request.replaceWaitingReviewRunId;
         const replacement = replacementId === undefined ? undefined : records.get(replacementId);
         const pending = replacement?.run.attempts.findLast(attempt => attempt.stepId === replacement.run.snapshot.steps[replacement.run.stepIndex]?.id && attempt.status === 'waiting-review');
         if (replacementId !== undefined && (typeof replacementId !== 'string' || !replacement || replacement.run.projectId !== request.project.id || replacement.run.workspaceId !== request.project.workspaceId || replacement.run.snapshot.outputKind !== request.project.kind || replacement.run.status !== 'waiting-review' || replacement.run.hiddenAt || replacement.run.trashedAt || replacement.run.snapshot.steps[replacement.run.stepIndex]?.kind !== 'manual-review' || !expectedReviewId || pending?.id !== expectedReviewId || controllers.has(replacementId) || replacement.run.attempts.some(attempt => attempt.status === 'running'))) throw new Error('待检查任务已变化，请刷新当前结果后再开始新一轮创作。');
-        if ([...records.values()].some(item => item !== replacement && item.run.projectId === request.project.id && (ACTIVE.has(item.run.status) || controllers.has(item.run.id)))) throw new Error('这个项目已有真实运行任务，请先完成或取消。');
+        if ([...records.values()].some(item => item !== replacement && item.run.projectId === request.project.id && (ACTIVE.has(item.run.status) || controllers.has(item.run.id)))) throw Object.assign(new Error('这个项目已有真实运行任务，请先完成或取消。'), { code: 'PROJECT_BUSY' });
         const time = now();
-        const run = { id: randomUUID(), mode: 'live', workspaceId: request.workflow.workspaceId, projectId: request.project.id, workflowId: request.workflow.id, workflowName: request.workflow.name, snapshot: request.workflow, status: 'running', stepIndex: 0, attempts: [], variables: request.variables, input: request.input, attachmentIds: request.attachmentIds, createdAt: time, updatedAt: time };
+        const run = { id: randomUUID(), ...(request.purpose === 'automation-plan' ? { purpose: request.purpose } : {}), ...(request.dispatchKey ? { dispatchKey: request.dispatchKey } : {}), mode: 'live', workspaceId: request.workflow.workspaceId, projectId: request.project.id, workflowId: request.workflow.id, workflowName: request.workflow.name, snapshot: request.workflow, status: 'running', stepIndex: 0, attempts: [], variables: request.variables, input: request.input, attachmentIds: request.attachmentIds, createdAt: time, updatedAt: time };
         const nextRecord = { run, request, ledger: [], legacyBaseCostCents: Math.max(0, request.project.costCents - projectLedgerCost(run.projectId)) };
         const replacementChanges = { status: 'cancelled', pauseRequested: false, error: undefined, updatedAt: time, supersededByRunId: run.id };
         const reviewChanges = { status: 'cancelled', summary: '已由新一轮创作替代，原始结果、产物与费用保留；后续步骤未执行。' };
@@ -321,8 +365,35 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         return structuredClone(run);
       });
     },
-    async snapshot(afterRevision, { summaryOnly = false } = {}) { await ready; if (Number.isSafeInteger(afterRevision) && afterRevision >= revision) return null; return structuredClone({ revision, runs: [...records.values()].map(item => summaryOnly ? { ...runSummary(item.run), detailVersion: detailVersions.get(item.run.id) || 0 } : item.run).reverse(), ledger: [...records.values()].flatMap(item => item.ledger).sort((a, b) => b.time.localeCompare(a.time)) }); },
+    async snapshot(afterRevision, { summaryOnly = false, delta = false, projectIds } = {}) {
+      await ready; if (Number.isSafeInteger(afterRevision) && afterRevision >= revision) return null;
+      const partial = delta && Number.isSafeInteger(afterRevision) && afterRevision >= 0;
+      const scope = Array.isArray(projectIds) ? new Set(projectIds) : undefined;
+      const selected = [...records.values()].filter(item => (!scope || scope.has(item.run.projectId)) && (!partial || (changedAt.get(item.run.id) || 0) > afterRevision));
+      return structuredClone({ revision, ...(partial ? { delta: true } : {}), runs: selected.map(item => summaryOnly ? { ...runSummary(item.run), detailVersion: detailVersions.get(item.run.id) || 0 } : item.run).reverse(), ledger: selected.flatMap(item => item.ledger).sort((a, b) => b.time.localeCompare(a.time)) });
+    },
     async runDetail(id) { await ready; const record = records.get(id); if (!record) throw new Error('运行记录不存在。'); return structuredClone({ ...record.run, detailVersion: detailVersions.get(id) || 0 }); },
+    async recoverPlanningReceipt(id) {
+      await ready; const known = records.get(id); if (!known) throw Error('规划运行记录不存在。');
+      return mutateProject(known.run.projectId, async () => {
+        const record = records.get(id), run = record.run;
+        if (run.purpose !== 'automation-plan' || !['interrupted', 'failed', 'cancelled'].includes(run.status) || controllers.has(id) || run.snapshot.steps.length !== 1 || !modelRuntime.recoverReceipt) return structuredClone(run);
+        const step = run.snapshot.steps[0], attempt = run.attempts.findLast(item => item.stepId === step.id), entry = attempt && ledgerFor(record, attempt);
+        if (step.kind !== 'text' || step.role !== 'planner' || record.request.project.id !== run.projectId || record.request.project.workspaceId !== run.workspaceId || !attempt || !entry || entry.projectId !== run.projectId || entry.workflowRunId !== id || entry.workflowAttemptId !== attempt.id || entry.queryOnly) return { ...structuredClone(run), error: '规划缺少匹配的原请求或费用流水，未恢复结果，也未补造请求或账本。' };
+        const result = await modelRuntime.recoverReceipt({ requestId: attempt.id, runId: id, projectId: run.projectId });
+        if (!result) return structuredClone(run);
+        const previous = { run: structuredClone(run), ledger: structuredClone(record.ledger) };
+        try {
+          const usage = { ...result.usage, providerRequestId: result.providerRequestId };
+          if (result.billingRequestSnapshot) { entry.billingRequestSnapshot = structuredClone(result.billingRequestSnapshot); attempt.billingRequestSnapshot = structuredClone(result.billingRequestSnapshot); }
+          const cost = entry.costState === 'manual' ? { costCents: entry.costCents, costState: entry.costState, calculation: entry.calculation, usage, reason: entry.costReason } : await costFor(record, entry, attempt, usage);
+          Object.assign(attempt, { status: 'complete', summary: result.text || '', artifacts: result.artifacts || [], usage: cost.usage, providerRequestId: result.providerRequestId, costCents: cost.costCents, costState: cost.costState, calculation: cost.calculation, recoveredFromReceiptAt: now(), completedAt: now(), error: undefined });
+          Object.assign(entry, { status: 'complete', usage: cost.usage, costCents: cost.costCents, costState: cost.costState, calculation: cost.calculation, costReason: cost.reason });
+          update(record, { status: 'complete', stepIndex: run.snapshot.steps.length, completedAt: now(), error: undefined, pauseRequested: false });
+          await persist(); return structuredClone(record.run);
+        } catch (error) { record.run = previous.run; record.ledger = previous.ledger; mark(record); throw error; }
+      });
+    },
     async exportRecords(projectIds) { await ready; await writes; return structuredClone([...records.values()].filter(item => projectIds.includes(item.run.projectId))); },
     async importRecords(added) {
       await ready; validateRecords(added);
@@ -332,11 +403,17 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       if (!missing.length) return;
       await persist({ changedIds: missing.map(item => item.run.id), records: current => [...current, ...missing], commit: () => { for (const record of missing) records.set(record.run.id, structuredClone(record)); } });
     },
-    async refreshArtifactLocations() {
+    async refreshArtifactLocations(locations) {
       await ready;
       const trash = new Map((await artifactStore.listTrash()).map(artifact => [artifact.id, artifact]));
+      const owners = Array.isArray(locations) ? new Map(locations.map(location => [location.projectId, location.workspaceId])) : undefined;
       let changed = false;
-      for (const record of records.values()) for (const attempt of record.run.attempts) for (const artifact of attempt.artifacts || []) {
+      const selected = [...records.values()].filter(record => !owners || owners.has(record.run.projectId));
+      for (const record of selected) {
+        const owner = owners?.get(record.run.projectId);
+        if (owner && owner !== record.run.workspaceId) { record.run.originWorkspaceId ||= record.run.workspaceId; record.run.workspaceId = owner; record.run.snapshot.workspaceId = owner; record.request.project.workspaceId = owner; record.request.workflow.workspaceId = owner; mark(record); changed = true; }
+      }
+      for (const record of selected) for (const attempt of record.run.attempts) for (const artifact of attempt.artifacts || []) {
         try {
           const current = trash.get(artifact.id) || (await artifactStore.list([artifact.id]))[0];
           if (current && JSON.stringify(current) !== JSON.stringify(artifact)) { if (current.trashedAt === undefined) delete artifact.trashedAt; Object.assign(artifact, current); changed = true; mark(record); }
@@ -382,6 +459,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       await ready;
       const target = records.get(id); if (!target) throw new Error('运行记录不存在。');
       return mutateProject(target.run.projectId, async () => {
+        if (!['cancel', 'pause'].includes(action)) await assertProjectAdmission(target.run.projectId);
         if (shuttingDown && action !== 'cancel') throw new Error('应用正在退出，未继续执行模型请求。');
         const record = records.get(id); if (!record) throw new Error('运行记录不存在。');
         if (record.run.hiddenAt || record.run.trashedAt) throw new Error('请先恢复这条任务记录，再继续执行。');
@@ -420,8 +498,9 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         const first = remaining.find(step => step.enabled);
         if (first) {
           first.inputSource = 'project';
+          const completedStepIds = new Set(nextRun.snapshot.steps.filter(step => step.enabled && nextRun.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && (attempt.summary || attempt.artifacts?.length))).map(step => step.id));
           const completedImageStepIds = new Set();
-          const neededImageIds = new Set(remaining.filter(step => step.enabled && Array.isArray(step.documentImageStepIds)).flatMap(step => step.documentImageStepIds));
+          const neededImageIds = new Set(remaining.filter(step => step.enabled).flatMap(step => [...(Array.isArray(step.documentImageStepIds) ? step.documentImageStepIds : []), ...(Array.isArray(step.contentSourceStepIds) ? step.contentSourceStepIds : []), ...(step.imageSourceStepId ? [step.imageSourceStepId] : [])]));
           for (const sourceId of neededImageIds) {
             const source = remaining.find(step => step.id === sourceId);
             if (!source || source.enabled) continue;
@@ -435,7 +514,9 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             completedImageStepIds.add(sourceId);
           }
           const continuingVideo = !nextRun.retryStepOnly && first.kind === 'video-generation' && nextRun.attempts.some(attempt => attempt.stepId === first.id && attempt.providerRequestId && ['failed', 'cancelled'].includes(attempt.status));
-          const check = await validation({ ...nextRequest, project: { ...nextRequest.project, costCents: Math.max(projectCost(record), nextBaseline + projectLedgerCost(run.projectId)) }, workflow: { ...nextRun.snapshot, steps: remaining } }, continuingVideo ? first.id : undefined, completedImageStepIds);
+          const priorResult = latestBefore(nextRun, nextRun.stepIndex);
+          const resumeAttachmentIds = [...new Set([...nextRequest.attachmentIds, ...(nextRun.snapshot.steps[nextRun.stepIndex]?.inputSource === 'previous' ? priorResult?.artifacts?.filter(file => file.kind === 'image').map(file => file.id) || [] : [])])];
+          const check = await validation({ ...nextRequest, attachmentIds: resumeAttachmentIds, project: { ...nextRequest.project, costCents: Math.max(projectCost(record), nextBaseline + projectLedgerCost(run.projectId)) }, workflow: { ...nextRun.snapshot, steps: remaining } }, continuingVideo ? first.id : undefined, completedImageStepIds, completedStepIds);
           if (check.errors.length) throw new Error(check.errors.join('\n'));
           if (shuttingDown) throw new Error('应用正在退出，未继续执行模型请求。');
         }

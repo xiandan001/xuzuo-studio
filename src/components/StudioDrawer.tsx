@@ -4,6 +4,7 @@ import { ModalPortal } from './ModalPortal';
 import { hasManagedDialog } from '../lib/dialog-stack';
 import { X } from 'lucide-react';
 import { isSelectInteraction } from './Select';
+import './StudioDrawer.css';
 
 export function StudioDrawer({ title, description, children, onClose }: { title: string; description?: string; children: ReactNode; onClose: () => void }) {
   const panel = useRef<HTMLElement>(null);

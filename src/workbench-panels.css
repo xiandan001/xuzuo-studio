@@ -1,0 +1,19 @@
+.studio-panel-toggle{flex-shrink:0;gap:7px;white-space:nowrap}
+.studio-panel-toggle.is-collapsed{color:var(--ui-accent);background:var(--ui-focus-soft);border-color:var(--ui-border)}
+.studio-panel-toggle:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px}
+.professional-workbench>.professional-workspace.tools-hidden{grid-template-columns:170px minmax(0,1fr)}
+.professional-workbench>.professional-workspace.tools-hidden.files-hidden{grid-template-columns:minmax(0,1fr)}
+.professional-workbench .tools-hidden .professional-image-settings,
+.professional-workbench .tools-hidden .professional-document-properties,
+.professional-workbench .tools-hidden .simple-image-conversation>.delivery-panel,
+.professional-workbench .tools-hidden .simple-document-scroll>.delivery-panel,
+.professional-workbench .tools-hidden .simple-image-conversation>.delivery-checklist,
+.professional-workbench .tools-hidden .simple-document-scroll>.delivery-checklist{display:none}
+.ss-page.ss-tools-hidden .ss-layout{grid-template-columns:minmax(0,1fr)}
+.ss-page.ss-tools-hidden .ss-inspector{display:none}
+@media(max-width:1450px){.professional-workbench>.professional-workspace.tools-hidden{grid-template-columns:155px minmax(0,1fr)}}
+@media(max-width:1280px){
+  .professional-workbench>.professional-workspace.tools-hidden{grid-template-columns:minmax(0,1fr)}
+  .professional-workbench .tools-hidden .professional-image-main,
+  .professional-workbench .tools-hidden .professional-document-main{grid-column:1}
+}

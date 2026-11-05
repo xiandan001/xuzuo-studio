@@ -13,3 +13,6 @@ work/packaged-smoke-*/
 *.log
 .env*
 !.env.example
+**/credentials-v1.json
+**/credentials-v1.*.json
+/user-data/

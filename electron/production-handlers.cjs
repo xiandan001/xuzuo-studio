@@ -3,7 +3,7 @@ const path = require('node:path');
 const { assertSaveAuthority } = require('./dialog-save.cjs');
 const { inside } = require('./workspace-paths.cjs');
 
-function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, writingProjects, withProjectWrite }) {
+function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, writingProjects, withProjectWrite, automationCenter }) {
   const inspectedBackups = new Set();
   async function lockWorkspace(workspaceIds, action) {
     const locations = await workspaceStorage.list();
@@ -11,11 +11,16 @@ function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorag
     const ids = locations.projects.filter(item => workspaceIds.includes(item.workspaceId)).map(item => item.projectId);
     const [snapshot, queues] = await Promise.all([liveEngine.snapshot(undefined, { summaryOnly: true }), batches.list()]);
     if (ids.some(id => relocatingProjects.has(id) || writingProjects.has(id)) || snapshot.runs.some(run => ids.includes(run.projectId) && run.status === 'running') || queues.some(queue => workspaceIds.includes(queue.workspaceId) && queue.status === 'running')) throw new Error('请等待当前写入和调用结束，并暂停本区批量队列后重试。');
-    ids.forEach(id => relocatingProjects.add(id));
-    try { return await action(); } finally { ids.forEach(id => relocatingProjects.delete(id)); }
+    const leases = [], ownedLocks = [];
+    try {
+      if (automationCenter) for (const id of ids) leases.push(await automationCenter.reserveProject(id, { allowReview: true }));
+      if (ids.some(id => relocatingProjects.has(id) || writingProjects.has(id))) throw Error('项目已开始写入或目录操作，请等待后重新备份。');
+      ids.forEach(id => { relocatingProjects.add(id); ownedLocks.push(id); });
+      return await action();
+    } finally { ownedLocks.forEach(id => relocatingProjects.delete(id)); for (const release of leases.reverse()) await release(); }
   }
   handle('backup-export', async input => {
-    const result = await dialog.showSaveDialog(getWindow(), { title: '保存完整内部备份（不含 API Key）', defaultPath: `序作-内部备份-${new Date().toISOString().slice(0, 10)}.zip`, filters: [{ name: '序作完整备份', extensions: ['zip'] }], validateSelection: async paths => { const locations = await workspaceStorage.list(); if (locations.workspaces.some(item => input.workspaceIds?.includes(item.workspaceId) && inside(item.directory, paths[0]))) throw new Error('请把内部备份保存到工作区以外，避免重复备份自身。'); } });
+    const result = await dialog.showSaveDialog(getWindow(), { title: '保存完整内部备份（不含 API Key）', defaultPath: '序作-内部备份.zip', filters: [{ name: '序作完整备份', extensions: ['zip'] }], validateSelection: async paths => { const locations = await workspaceStorage.list(); if (locations.workspaces.some(item => input.workspaceIds?.includes(item.workspaceId) && inside(item.directory, paths[0]))) throw new Error('请把内部备份保存到工作区以外，避免重复备份自身。'); } });
     if (result.canceled || !result.filePath) return { saved: false };
     return lockWorkspace(input?.workspaceIds, async () => { const output = await backupManager.exportBackup({ ...input, filePath: result.filePath, beforeWrite: () => assertSaveAuthority(result, result.filePath) }); return { ...output, saved: true, path: result.filePath }; });
   });
@@ -27,7 +32,7 @@ function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorag
   });
   handle('backup-import', async input => {
     if (!inspectedBackups.has(input?.filePath)) throw new Error('请先通过“选择内部备份”检查要导入的备份。');
-    const result = await dialog.showOpenDialog(getWindow(), { title: '选择恢复位置（将创建独立工作区）', properties: ['openDirectory', 'createDirectory'], buttonLabel: '恢复到此文件夹' });
+    const result = await dialog.showOpenDialog(getWindow(), { title: '选择恢复位置（将创建独立工作区）', defaultPath: path.dirname(input.filePath), properties: ['openDirectory', 'createDirectory'], buttonLabel: '恢复到此文件夹' });
     if (result.canceled || !result.filePaths[0]) return null;
     return backupManager.importBackup({ filePath: input.filePath, directory: result.filePaths[0] });
   });

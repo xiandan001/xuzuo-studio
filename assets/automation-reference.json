@@ -1,0 +1,11 @@
+{
+  "name": "序作事件驱动自动化",
+  "foundationVersion": "2026-11-03-v1",
+  "implementation": "Original local adaptation using the existing Xuzuo workflow and billing engine; not an import of the author's private automation platform.",
+  "references": [
+    { "author": "数字生命卡兹克", "title": "折腾了整整1年，毫无保留地分享一下我这套Agent自动化系统。", "publishedAt": "2026-11-02", "url": "https://www.woshipm.com/ai/6487627.html" },
+    { "repository": "https://github.com/KKKKhazix/khazix-skills", "revision": "322346ded8129436b3f64707789a73e732ae24d9", "license": "MIT" },
+    { "repository": "https://github.com/KKKKhazix/AIHOT", "revision": "e05f58a492cb83dab9968e7396cc95dfcefaa055", "license": "MIT", "notice": "AIHOT name and logo are excluded from its MIT grant; Xuzuo retains its own brand." }
+  ],
+  "adaptedConcepts": ["goal brief", "event routing", "persistent deduplication", "bounded dispatch queue", "independent review", "bounded repair", "decision cards", "confirmed decision memory", "durable request receipts"]
+}

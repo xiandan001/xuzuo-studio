@@ -1,6 +1,7 @@
 import type { SpreadsheetCell, SpreadsheetCellResult, SpreadsheetDocument, SpreadsheetRecord, SpreadsheetSheet } from '../spreadsheet-types';
 import { cellFromInput, columnLabel, parseCellAddress, SPREADSHEET_LIMITS, validateSpreadsheetDocument } from './spreadsheet-engine';
 import { spreadsheetFromText } from './spreadsheet-generated';
+import { parseSpreadsheetClipboard } from './spreadsheet-operations';
 export { spreadsheetFromText } from './spreadsheet-generated';
 
 export interface SpreadsheetRecovery { document: SpreadsheetDocument; sourceArtifactIds: string[]; baseRevision: number; }
@@ -35,7 +36,7 @@ export function resolveSpreadsheetRecovery(saved: SpreadsheetRecord | null, reco
 export function hasSpreadsheetEdits(document: SpreadsheetDocument, originalTitle: string): boolean {
   if (document.title !== originalTitle || document.sheets.length !== 1) return true;
   const sheet = document.sheets[0];
-  return !['工作表1', '项目记录'].includes(sheet.name) || sheet.rowCount !== 50 || sheet.columnCount !== 12 || Object.values(sheet.cells).some(cell => cell.formula !== undefined || cell.value !== null && cell.value !== '' || cell.bold !== undefined || cell.align !== undefined || cell.format !== undefined);
+  return !['工作表1', '项目记录'].includes(sheet.name) || sheet.rowCount !== 50 || sheet.columnCount !== 12 || !!sheet.columnWidths || !!sheet.view || Object.values(sheet.cells).some(cell => cell.formula !== undefined || cell.value !== null && cell.value !== '' || cell.bold !== undefined || cell.align !== undefined || cell.format !== undefined);
 }
 
 export function legacySpreadsheetDocument(raw: string | null, title: string): SpreadsheetDocument | undefined {
@@ -59,14 +60,15 @@ export function legacySpreadsheetDocument(raw: string | null, title: string): Sp
 }
 
 export function displaySpreadsheetCell(cell?: SpreadsheetCell, result?: SpreadsheetCellResult): string {
-  if (result?.status === 'error' || result?.status === 'unsupported') return result.error || (result.status === 'unsupported' ? '#不支持' : '#错误');
-  const calculated = result?.status === 'calculated' || result?.status === 'value';
+  if (cell?.formula !== undefined && (result?.status === 'error' || result?.status === 'unsupported')) return result.error || (result.status === 'unsupported' ? '#不支持' : '#错误');
+  const calculated = cell?.formula !== undefined && (result?.status === 'calculated' || result?.status === 'value');
   const value = calculated ? result.value : cell?.value;
   if (value === null || value === undefined) return !calculated && cell?.formula !== undefined ? '待计算' : '';
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
   if (cell?.format === 'currency') return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(value);
-  if (cell?.format === 'percent') return new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 }).format(value);
+  if (cell?.format === 'percent') return new Intl.NumberFormat('zh-CN', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  if (cell?.format === 'integer') return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value);
   if (cell?.format === 'number') return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   return String(value);
 }
@@ -76,7 +78,7 @@ export function updateSpreadsheetCell(sheet: SpreadsheetSheet, address: string, 
 export function pasteSpreadsheetCells(sheet: SpreadsheetSheet, address: string, raw: string): SpreadsheetSheet {
   const start = parseCellAddress(address);
   if (!start) throw new Error('请选择有效的单元格。');
-  const rows = raw.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map(row => row.split('\t'));
+  const rows = parseSpreadsheetClipboard(raw);
   const rowCount = Math.max(sheet.rowCount, start.row + rows.length - 1);
   const columnCount = Math.max(sheet.columnCount, start.column + Math.max(...rows.map(row => row.length)) - 1);
   if (rowCount > SPREADSHEET_ROW_LIMIT || columnCount > SPREADSHEET_COLUMN_LIMIT) throw new Error(`粘贴超出 ${SPREADSHEET_ROW_LIMIT} 行、${SPREADSHEET_COLUMN_LIMIT} 列限制，当前表格未改变。`);

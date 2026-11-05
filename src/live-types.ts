@@ -12,6 +12,7 @@ export interface ModelUsage {
 }
 export type CostState = 'simulation' | 'calculated' | 'manual' | 'unknown' | 'not-incurred';
 export interface LiveStartRequest {
+  purpose?: 'automation-plan';
   workflow: WorkflowDefinition;
   project: Project;
   connections: ModelConnection[];
@@ -19,6 +20,7 @@ export interface LiveStartRequest {
   input: string;
   variables: Record<string, string>;
   attachmentIds: string[];
+  dispatchKey?: string;
   acknowledgePaidCalls: boolean;
   acknowledgeUnknownCost: boolean;
   replaceWaitingReviewRunId?: string;
@@ -26,10 +28,12 @@ export interface LiveStartRequest {
 export interface LivePreflightStep { id: string; name: string; kind: string; modelName?: string; domain?: string; credentialName?: string; estimatedCents?: number; costNote?: string; }
 export interface LivePreflightIssue { message: string; stepId?: string; field?: 'modelConfigId' | 'credentialId' | 'prompt' | 'maxOutputTokens' | 'count' | 'imageSize' | 'inputSource' | 'budgetCents' | 'connection' | 'input' | 'variables' | 'attachments' | 'project'; }
 export interface LivePreflight { ok: boolean; errors: string[]; issues?: LivePreflightIssue[]; warnings: string[]; steps: LivePreflightStep[]; estimatedCents?: number; unknownCost: boolean; }
-export interface LiveSnapshot { runs: WorkflowRun[]; ledger: LedgerEntry[]; revision?: number; }
-export interface ArtifactPreview { mimeType: string; dataUrl?: string; text?: string; documentSource?: boolean; sourceRevision?: number; }
+export interface LiveSnapshot { delta?: boolean; runs: WorkflowRun[]; ledger: LedgerEntry[]; revision?: number; }
+export interface ArtifactPreview { mimeType: string; dataUrl?: string; text?: string; documentSource?: boolean; sourceRevision?: number; thumbnail?: boolean; width?: number; height?: number; originalWidth?: number; originalHeight?: number; transparency?: 'present' | 'unknown'; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
+  thumbnailArtifact?: (id: string) => Promise<ArtifactPreview>;
+  onProjectFilesChanged?: (listener: (projectId: string) => void) => () => void;
   listProjectArtifacts?: (projectId: string) => Promise<ArtifactMetadata[]>;
   trashArtifact: (id: string) => Promise<ArtifactMetadata>;
   restoreArtifact: (id: string) => Promise<ArtifactMetadata>;

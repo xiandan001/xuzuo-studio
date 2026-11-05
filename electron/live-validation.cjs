@@ -1,5 +1,6 @@
 const { estimateCost } = require('./live-cost.cjs');
 const { extractReferenceText } = require('./reference-text.cjs');
+const { imageExportSourceError } = require('./image-export-sources.cjs');
 
 const modelStep = step => !['manual-review', 'export'].includes(step.kind);
 const text = (value, limit) => typeof value === 'string' && value.trim() && value.length <= limit;
@@ -20,7 +21,7 @@ function validateUrl(value) {
     return '';
   } catch { return '连接地址无效。'; }
 }
-async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds = new Set() }) {
+async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds = new Set(), completedStepIds = new Set() }) {
   const errors = [], issues = [], warnings = [], steps = [];
   const addError = (message, field, stepId) => { errors.push(message); issues.push({ message, ...(stepId ? { stepId } : {}), ...(field ? { field } : {}) }); };
   const failure = (message, field) => ({ ok: false, errors: [message], issues: [{ message, ...(field ? { field } : {}) }], warnings, steps, unknownCost: true });
@@ -30,8 +31,9 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
   if (!Number.isSafeInteger(project.costCents) || project.costCents < 0 || project.budgetCents != null && (!Number.isSafeInteger(project.budgetCents) || project.budgetCents < 0)) addError('项目成本或已填写的金额上限无效。', 'budgetCents');
   if (!text(request.input, 100000)) addError('请填写本次需求，最多 10 万字。', 'input');
   if (!Array.isArray(workflow.steps) || !workflow.steps.length || workflow.steps.length > 40) return failure('工作流需要 1 到 40 个步骤。');
-  if (!Array.isArray(request.models) || !Array.isArray(request.connections) || !Array.isArray(request.attachmentIds) || request.attachmentIds.length > 12) return failure('模型、连接或附件配置无效。', !Array.isArray(request.models) ? 'modelConfigId' : !Array.isArray(request.connections) ? 'connection' : 'attachments');
+  if (!Array.isArray(request.models) || !Array.isArray(request.connections) || !Array.isArray(request.attachmentIds) || request.attachmentIds.length > 16) return failure('模型、连接或附件配置无效；附件最多16份。', !Array.isArray(request.models) ? 'modelConfigId' : !Array.isArray(request.connections) ? 'connection' : 'attachments');
   const enabled = workflow.steps.filter(step => step.enabled);
+  if (request.purpose !== undefined && (request.purpose !== 'automation-plan' || workflow.steps.length !== 1 || enabled.length !== 1 || enabled[0].kind !== 'text' || enabled[0].role !== 'planner' || request.attachmentIds.length)) addError('AI规划只能执行一个无附件的文字规划步骤，不能混入制作、导出或其他操作。');
   const metadata = enabled.some(modelStep) ? await credentials.list() : [];
   const inputKinds = new Set();
   for (const id of request.attachmentIds) {
@@ -52,9 +54,22 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     ids.add(step.id);
     if (!text(step.name, 100)) addError('请为每个步骤填写名称。', undefined, step.id);
     if (step.budgetCents != null && (!Number.isSafeInteger(step.budgetCents) || step.budgetCents < 0)) addError(`“${step.name}”的金额上限无效，请填写非负金额或留空。`, 'budgetCents', step.id);
+    if (step.role !== undefined && !['planner', 'producer', 'reviewer'].includes(step.role)) addError(`“${step.name}”的职责无效。`, undefined, step.id);
+    if (step.qualityGate) {
+      const policy = step.qualityGate;
+      if (step.role !== 'reviewer' || !['text', 'vision'].includes(step.kind) || !Number.isSafeInteger(policy.maxRepairs) || policy.maxRepairs < 0 || policy.maxRepairs > 3 || policy.minScore !== undefined && (!Number.isFinite(policy.minScore) || policy.minScore < 0 || policy.minScore > 100)) addError(`“${step.name}”的独立检查参数无效。`, undefined, step.id);
+      if (policy.maxRepairs > 0) { const source = workflow.steps.findIndex(item => item.id === policy.repairStepId && (item.enabled || completedStepIds.has(item.id)) && !['planner', 'reviewer'].includes(item.role) && ['text', 'image-generation', 'image-editing'].includes(item.kind)); if (source < 0 || source >= workflow.steps.indexOf(step)) addError(`“${step.name}”的自动修订来源必须是前面启用的制作步骤。`, 'inputSource', step.id); }
+    }
     if (step.kind === 'export' && step.contentSourceStepId) {
-      const source = workflow.steps.findIndex(item => item.id === step.contentSourceStepId && item.enabled && modelStep(item));
+      const source = workflow.steps.findIndex(item => item.id === step.contentSourceStepId && (item.enabled || completedStepIds.has(item.id)) && modelStep(item) && !['planner', 'reviewer'].includes(item.role));
       if (source < 0 || source >= workflow.steps.indexOf(step)) addError(`“${step.name}”的正文来源必须是前面启用的模型步骤。`, 'inputSource', step.id);
+      else if (project.kind === 'image' && !['image-generation', 'image-editing'].includes(workflow.steps[source].kind)) addError(`“${step.name}”的最终成品来源必须是前面的图片制作或精修步骤。`, 'inputSource', step.id);
+    }
+    const imageSourceError = imageExportSourceError(step, workflow, project, completedStepIds);
+    if (imageSourceError) addError(`“${step.name}”：${imageSourceError}`, 'inputSource', step.id);
+    if (step.imageSourceStepId !== undefined) {
+      const source = workflow.steps.find(item => item.id === step.imageSourceStepId);
+      if (step.kind !== 'image-editing' || !text(step.imageSourceStepId, 160) || !source || !source.enabled && !completedImageStepIds.has(source.id) || !['image-generation', 'image-editing'].includes(source.kind) || workflow.steps.indexOf(source) >= workflow.steps.indexOf(step)) addError(`“${step.name}”的精修原图必须是前面启用并实际生成图片的步骤。`, 'inputSource', step.id);
     }
     if (step.documentImageSource !== undefined) {
       if (!['references', 'previous'].includes(step.documentImageSource) || step.kind !== 'text' || !['word', 'ppt'].includes(project.kind)) addError(`“${step.name}”的图文排版配置无效。`, 'inputSource', step.id);
@@ -74,7 +89,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
       }
     }
     if (!modelStep(step)) continue;
-    const hasInput = kind => inputKinds.has(kind) || (step.inputSource === 'previous' && previousKind === kind);
+    const hasInput = kind => inputKinds.has(kind) || (step.inputSource === 'previous' && previousKind === kind) || kind === 'image' && step.kind === 'image-editing' && !!step.imageSourceStepId;
     if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image')) addError(`“${step.name}”需要参考图片，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'transcription' && !hasInput('audio') && !hasInput('video')) addError(`“${step.name}”需要添加音频参考文件。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'video-understanding' && !hasInput('video')) addError(`“${step.name}”需要添加视频文件，或前一步生成的视频。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);

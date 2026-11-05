@@ -32,6 +32,7 @@ export function readWorkspaceState(source: StoreSource): WorkspaceRead {
       const value = JSON.parse(raw) as WorkspaceState;
       if (!object(value) || !Array.isArray(value.workspaces) || !value.workspaces.length || !value.workspaces.every(item => object(item) && strings(item, ['id', 'name']) && (item.description === undefined || typeof item.description === 'string')) || !Array.isArray(value.projects) || !value.projects.every(project) || !Array.isArray(value.ledger) || !value.ledger.every(entry) || !object(value.preferencesByWorkspace) || !Object.values(value.preferencesByWorkspace).every(preference) || value.customPrompts != null && (!Array.isArray(value.customPrompts) || !value.customPrompts.every(prompt))) throw new Error('工作室数据结构未通过检查。');
       if (value.workspaces.some(item => item.removedAt !== undefined && (typeof item.removedAt !== 'string' || !Number.isFinite(Date.parse(item.removedAt))))) throw new Error('工作区移除状态未通过检查。');
+      if (value.projects.some(item => item.purgedAt !== undefined && (typeof item.purgedAt !== 'string' || !Number.isFinite(Date.parse(item.purgedAt)) || typeof item.trashedAt !== 'string' || !Number.isFinite(Date.parse(item.trashedAt))))) throw new Error('项目永久移除审计未通过检查。');
       const visible = visibleWorkspaces(value.workspaces);
       if (!visible.length) throw new Error('缺少可用工作区，原索引已保留。');
       const state = { ...value, activeWorkspaceId: visible.some(item => item.id === value.activeWorkspaceId) ? value.activeWorkspaceId : visible[0].id, customPrompts: value.customPrompts || [] };

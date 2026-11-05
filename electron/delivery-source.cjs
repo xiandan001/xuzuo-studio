@@ -12,9 +12,12 @@ function checkedSelection(input) {
   return { ...input, artifactIds: [...new Set(input.artifactIds)] };
 }
 function completedOutputs(runs, projectId, kind) {
-  return runs.filter(run => run.mode === 'live' && run.projectId === projectId).flatMap(run => run.attempts.flatMap(attempt => {
+  return runs.filter(run => run.mode === 'live' && run.projectId === projectId && run.purpose !== 'automation-plan').flatMap(run => run.attempts.flatMap(attempt => {
     const step = run.snapshot.steps.find(item => item.id === attempt.stepId);
-    const accepted = kind === 'image' ? ['image-generation', 'image-editing'].includes(step?.kind) : step?.kind === 'export';
+    const exporter = run.snapshot.steps.findLast(item => item.enabled && item.kind === 'export');
+    const imageSources = Array.isArray(exporter?.contentSourceStepIds) ? exporter.contentSourceStepIds : exporter?.contentSourceStepId ? [exporter.contentSourceStepId] : undefined;
+    const currentImageAttempt = !Array.isArray(exporter?.contentSourceStepIds) || attempt === run.attempts.findLast(item => item.stepId === attempt.stepId && item.status === 'complete');
+    const accepted = kind === 'image' ? ['image-generation', 'image-editing'].includes(step?.kind) && (!imageSources || imageSources.includes(step.id)) && currentImageAttempt : step?.kind === 'export';
     if (!accepted || attempt.status !== 'complete') return [];
     const artifacts = (attempt.artifacts || []).filter(file => kind === 'image' ? file.kind === 'image' : file.mimeType === MIME[kind]);
     return artifacts.length ? [{ run, attempt, step, artifacts }] : [];
@@ -34,11 +37,12 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
     const errors = [];
     if (!selected.length) errors.push(record ? '当前编辑版本尚未生成实际交付文件，请保存并导出。' : '请先选择实际生成的成品，导入的原图或参考文件不能直接当作本次交付。');
     if (selected.some(id => !selectedOutputs.some(item => item.artifacts.some(file => file.id === id)))) errors.push('所选文件不是当前版本的成功交付产物；图片参考原图不能混入成品。');
-    if (selectedOutputs.length > 1) errors.push('一次交付请选择同一保存版本或同一次生成的成品。');
+    const sameImageBatch = input.kind === 'image' && selectedOutputs.length > 0 && selectedOutputs.every(item => item.run.id === selectedOutputs[0].run.id && Array.isArray(item.run.snapshot.steps.findLast(step => step.enabled && step.kind === 'export')?.contentSourceStepIds));
+    if (selectedOutputs.length > 1 && !sameImageBatch) errors.push('一次交付请选择同一保存版本或同一次生成的成品。');
     if (record && typeof input.sourceRevision === 'number' && input.sourceRevision !== record.revision) errors.push('编辑版本已经变化，请重新读取交付检查。');
     if (input.kind === 'excel' && record && !record.calculation?.allFormulasValid) errors.push('当前工作簿仍有未支持或错误公式，不能自动判定为已验收。');
     const origin = selectedOutputs[0];
-    const revision = record ? `editor:${record.revision}` : origin ? `${input.kind === 'image' ? 'image' : 'workflow'}:${origin.run.id}:${origin.attempt.id}` : 'unexported';
+    const revision = record ? `editor:${record.revision}` : origin ? `${input.kind === 'image' ? 'image' : 'workflow'}:${origin.run.id}:${sameImageBatch ? hash(selectedOutputs.map(item => item.attempt.id).sort().join('\n')) : origin.attempt.id}` : 'unexported';
     const files = [], imageChecks = []; let total = 0;
     for (const id of selected) {
       const file = await artifactStore.read(id);

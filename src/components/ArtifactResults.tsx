@@ -8,11 +8,12 @@ import { DocumentArtifactPreview } from './DocumentArtifactPreview';
 import { ModalPortal } from './ModalPortal';
 import { mergeProjectInventory, projectInventoryFiles } from '../lib/project-inventory';
 import { useProjectInventory } from '../hooks/useProjectInventory';
+import { isProductionRun } from '../lib/workflow-purpose';
 import './artifact-results.css';
 
 export interface ArtifactResultsProps { artifacts: ArtifactMetadata[]; runner: WorkflowRunner; onUseReference?: (artifact: ArtifactMetadata) => void | Promise<void>; projectId?: string; visibleProjectIds?: string[]; documentKind?: EditorKind | 'excel'; onEditDocument?: () => void; }
 export function latestProjectArtifacts(runs: WorkflowRun[], projectId: string): ArtifactMetadata[] {
-  const recent = runs.filter(run => run.mode === 'live' && run.projectId === projectId && !run.workflowId.startsWith('local-refine-')).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
+  const recent = runs.filter(run => run.mode === 'live' && isProductionRun(run) && run.projectId === projectId && !run.workflowId.startsWith('local-refine-')).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
   for (const run of recent) {
     const byStep = new Map<string, ArtifactMetadata[]>();
     for (const attempt of run.attempts) if (attempt.artifacts?.length) byStep.set(attempt.stepId, attempt.artifacts);
@@ -22,11 +23,11 @@ export function latestProjectArtifacts(runs: WorkflowRun[], projectId: string): 
   return [];
 }
 export function latestProjectContentArtifact(runs: WorkflowRun[], projectId: string): ArtifactMetadata | undefined {
-  const recent = runs.filter(run => run.mode === 'live' && run.projectId === projectId && !run.workflowId.startsWith('local-refine-')).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
+  const recent = runs.filter(run => run.mode === 'live' && isProductionRun(run) && run.projectId === projectId && !run.workflowId.startsWith('local-refine-')).sort((first, second) => (Date.parse(second.updatedAt) || 0) - (Date.parse(first.updatedAt) || 0));
   for (const run of recent) {
     const exportStep = run.snapshot.steps.filter(step => step.enabled && step.kind === 'export').at(-1);
     const end = exportStep ? run.snapshot.steps.findIndex(step => step.id === exportStep.id) : run.snapshot.steps.length;
-    const sources = run.snapshot.steps.slice(0, end).filter(step => step.enabled && (step.kind === 'text' || step.kind === 'transcription')).reverse();
+    const sources = run.snapshot.steps.slice(0, end).filter(step => step.enabled && !['planner', 'reviewer'].includes(step.role || '') && (step.kind === 'text' || step.kind === 'transcription')).reverse();
     if (exportStep?.contentSourceStepId) sources.sort((first, second) => Number(second.id === exportStep.contentSourceStepId) - Number(first.id === exportStep.contentSourceStepId));
     for (const source of sources) {
       const artifact = run.attempts.filter(attempt => attempt.stepId === source.id && attempt.status === 'complete').at(-1)?.artifacts?.filter(item => item.kind === 'text' && !item.trashedAt).at(-1);

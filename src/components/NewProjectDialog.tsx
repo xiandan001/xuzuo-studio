@@ -19,6 +19,7 @@ interface Props {
   draft: NewProjectDraft | null;
   workspaceName: string;
   unavailable?: boolean;
+  returnToSelection?: boolean;
   busy: boolean;
   picking: boolean;
   error: string;
@@ -34,7 +35,7 @@ const kinds = [
   { kind: 'image', Icon: Image, label: '图像创作', color: 'purple' },
 ] as const;
 
-export function NewProjectDialog({ draft, workspaceName, unavailable, busy, picking, error, onChange, onChooseFolder, onCreate, onClose }: Props) {
+export function NewProjectDialog({ draft, workspaceName, unavailable, returnToSelection, busy, picking, error, onChange, onChooseFolder, onCreate, onClose }: Props) {
   const panel = useRef<HTMLElement>(null), name = useRef<HTMLInputElement>(null);
   const current = useRef({ busy, picking, onClose }); current.current = { busy, picking, onClose };
   const disabled = busy || picking;
@@ -59,7 +60,7 @@ export function NewProjectDialog({ draft, workspaceName, unavailable, busy, pick
     <div className="modal-heading"><span className="modal-heading-icon">{unavailable ? <FolderOpen size={22} /> : <Plus size={22} />}</span><button className="btn-icon" aria-label="关闭新建项目" disabled={disabled} onClick={onClose}><X size={19} /></button></div>
     <div className="new-project-steps" aria-label="创建步骤"><span className={unavailable ? undefined : 'complete'}>{unavailable ? '1 · ' : <Check size={13} />}选择文件夹</span><ArrowRight size={13} /><span>{unavailable ? '填写项目信息' : '2 · 填写项目信息'}</span></div>
     <h2 id="new-project-heading">{unavailable ? '本地项目创建需要桌面版' : '开始一份新作品'}</h2>
-    {unavailable ? <><p className="muted">请启动新版 Windows 桌面应用，先选择或新建本地项目文件夹，再填写项目信息。当前预览没有创建文件夹或项目。</p><div className="modal-actions"><button className="btn btn-secondary" onClick={onClose}>返回工作台</button></div></> : draft && <form noValidate onSubmit={event => { event.preventDefault(); if (!disabled) onCreate(); }}>
+    {unavailable ? <><p className="muted">请启动新版 Windows 桌面应用，先选择或新建本地项目文件夹，再填写项目信息。当前预览没有创建文件夹或项目。</p><div className="modal-actions"><button className="btn btn-secondary" onClick={onClose}>{returnToSelection ? '返回自动化配置' : '返回工作台'}</button></div></> : draft && <form noValidate onSubmit={event => { event.preventDefault(); if (!disabled) onCreate(); }}>
       <p className="new-project-workspace">所属工作区：{workspaceName}</p>
       <div className="new-project-folder"><label htmlFor="new-project-directory"><FolderOpen size={16} />项目文件夹</label><input id="new-project-directory" aria-label="项目文件夹" readOnly value={draft.selection.directory} title={draft.selection.directory} /><button type="button" className="btn btn-ghost" aria-label="更换项目文件夹" disabled={disabled} onClick={onChooseFolder}>{picking ? <><LoaderCircle size={14} className="spin" />正在选择…</> : '更换文件夹'}</button><p>产物和编辑记录默认保存在此文件夹内。</p></div>
       <div className="new-project-form-body"><div className="new-kind-grid">{kinds.map(({ kind, Icon, label, color }) => <button type="button" className={draft.kind === kind ? 'selected' : ''} key={kind} disabled={disabled} onClick={() => onChange({ kind, promptIntent: draft.promptIntent && (draft.promptIntent.template.category === kind || draft.promptIntent.template.category === 'general') ? draft.promptIntent : undefined })}><span className={`icon-${color}`}><Icon size={20} /></span>{label}{draft.kind === kind && <Check size={13} />}</button>)}</div>
@@ -68,7 +69,7 @@ export function NewProjectDialog({ draft, workspaceName, unavailable, busy, pick
       <label className="form-label">金额上限（元，选填）<input className="field" type="number" min="0" step="0.01" disabled={disabled} placeholder="选填，留空不设上限" value={draft.budget} onChange={event => onChange({ budget: event.target.value })} /></label>
       <div className="inline-notice"><ShieldCheck size={15} />创建项目不调用模型；点击生成后会自动检查设置并开始，实际费用会保存到项目。</div>
       {error && <p className="form-error" role="alert">{error}</p>}</div>
-      <div className="modal-actions"><button type="button" className="btn btn-secondary" disabled={disabled} onClick={onClose}>稍后再说</button><button type="submit" className="btn btn-primary" disabled={disabled}>{busy ? <><LoaderCircle size={15} className="spin" />正在创建项目目录</> : <>创建并进入工作台 <ArrowRight size={15} /></>}</button></div>
+      <div className="modal-actions"><button type="button" className="btn btn-secondary" disabled={disabled} onClick={onClose}>{returnToSelection ? '返回自动化配置' : '稍后再说'}</button><button type="submit" className="btn btn-primary" disabled={disabled}>{busy ? <><LoaderCircle size={15} className="spin" />正在创建项目目录</> : <>{returnToSelection ? '创建并继续配置' : '创建并进入工作台'} <ArrowRight size={15} /></>}</button></div>
     </form>}
   </section></div></ModalPortal>;
 }

@@ -7,6 +7,7 @@ import { projectInventoryFiles } from '../lib/project-inventory';
 import { useProjectInventory } from '../hooks/useProjectInventory';
 import { ModalPortal } from './ModalPortal';
 import { PreviewContent } from './ArtifactResults';
+import './ProjectFilesPanel.css';
 
 interface ProjectFilesPanelProps {
   projectId: string; projectName: string; runs: WorkflowRun[]; runner: WorkflowRunner;

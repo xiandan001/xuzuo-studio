@@ -8,4 +8,9 @@
 .data-management-inspection{margin-top:14px;padding:14px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface-subtle)}
 .data-management-inspection>b{font-size:14px}
 .data-management-inspection small{display:block;font-size:13px;color:var(--ui-fg-secondary);line-height:1.7;margin-bottom:12px;overflow-wrap:anywhere}
+.data-management details{padding:11px 13px;margin:10px 0 14px;border:1px solid var(--ui-border);border-radius:9px;background:var(--ui-surface-subtle)}
+.data-management details>summary{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;line-height:1.8;color:var(--ui-fg-secondary)}
+.data-management details[open]>summary{margin-bottom:8px;color:var(--ui-fg)}
+.data-management details .data-management-block{border:0;padding:4px 0}
+.data-management-location{margin-top:2px}
 .data-management-buttons{display:flex;flex-wrap:wrap;gap:10px}

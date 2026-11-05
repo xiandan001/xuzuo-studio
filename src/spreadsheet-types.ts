@@ -1,7 +1,7 @@
 import type { ArtifactMetadata } from './live-types';
 
 export type SpreadsheetValue = string | number | boolean | null;
-export type SpreadsheetFormat = 'general' | 'number' | 'currency' | 'percent';
+export type SpreadsheetFormat = 'general' | 'integer' | 'number' | 'currency' | 'percent';
 export interface SpreadsheetCell {
   value: SpreadsheetValue;
   formula?: string;
@@ -15,6 +15,8 @@ export interface SpreadsheetSheet {
   rowCount: number;
   columnCount: number;
   cells: Record<string, SpreadsheetCell>;
+  columnWidths?: Record<string, number>;
+  view?: { header: boolean; sort?: { column: number; direction: 'asc' | 'desc' }; filter?: { column: number; text: string } };
 }
 export interface SpreadsheetDocument {
   schemaVersion: 1;
@@ -42,6 +44,7 @@ export interface SpreadsheetCalculation {
   calculatedCount: number;
   issues: SpreadsheetIssue[];
   allFormulasValid: boolean;
+  rowOrders?: Record<string, number[]>;
 }
 export interface SpreadsheetRecord {
   version: 1;

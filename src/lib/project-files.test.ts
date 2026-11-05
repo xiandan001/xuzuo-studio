@@ -28,7 +28,7 @@ describe('专业文件树只展示当前项目真实产物', () => {
   });
   it.each(['word', 'ppt', 'excel'] as const)('%s 生成源稿、正式 Office 和本地检查报告按实际步骤分开', kind => {
     const source: ArtifactMetadata = { ...file('source'), name: 'result.txt', mimeType: 'text/plain', kind: 'text', runId: 'generated' };
-    const report: ArtifactMetadata = { ...source, id: 'check', name: '成品-检查报告.json', mimeType: 'application/json' };
+    const report: ArtifactMetadata = { ...source, id: 'check', name: '成品-检查报告_2026-11-03_19-05-07-012.json', mimeType: 'application/json' };
     const generated = run('generated', []);
     generated.snapshot.outputKind = kind;
     generated.snapshot.steps = [
@@ -40,6 +40,8 @@ describe('专业文件树只展示当前项目真实产物', () => {
     expect(items.find(item => item.artifact.id === 'source')).toMatchObject({ group: 'source', description: `${{ word: 'Word', ppt: 'PPT', excel: 'Excel' }[kind]} 生成源稿 · 中间文件` });
     expect(items.find(item => item.artifact.id === 'office')?.group).toBe('office');
     expect(items.find(item => item.artifact.id === 'check')?.group).toBe('report');
+    report.name = '成品-检查报告.json';
+    expect(projectFiles([generated], 'project').find(item => item.artifact.id === 'check')?.group).toBe('report');
     expect(source.name).toBe('result.txt');
   });
   it('只有指定正文步骤是源稿，参考输入和未知来源文字不会冒充源稿', () => {

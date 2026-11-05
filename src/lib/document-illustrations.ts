@@ -10,6 +10,11 @@ export interface DocumentImageOptions { mode: Exclude<DocumentImageMode, 'none'>
 export function documentImageModels(configuration: Pick<StudioConfiguration, 'models' | 'connections'>, capability: 'image-generation' | 'image-editing' = 'image-generation'): ModelConfiguration[] {
   return configuration.models.filter(model => model.enabled && !model.demo && model.capabilities.includes(capability) && configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled && !connection.demo));
 }
+export function documentIllustrationSteps(count: number, brief: string): WorkflowStep[] {
+  if (count === 0) return [];
+  if (!validDocumentImageCount(count)) throw new Error(`配图数量请填写 1–${DOCUMENT_IMAGE_LIMIT} 的整数。`);
+  return Array.from({ length: count }, (_, index) => ({ id: crypto.randomUUID(), name: `制作文档插图 ${index + 1}/${count}`, kind: 'image-generation', inputSource: 'project', enabled: true, count: 1, imageSize: '1024x1024', imageBackground: 'opaque', prompt: creationPrompt('image', `为以下文档需求制作可独立使用的配图素材。本次制作第 ${index + 1} 张，共 ${count} 张；按需求中的不同内容角度组织本张画面，与同组插图保持风格统一。只生成插图，不要把整页文档、PPT、表格或正文渲染成图片，不添加文字、图标水印或虚构品牌。配图用于内容说明，保留自然留白。用户未提供真实商品或人物参考时，不假称图片是真实商品实拍或人物照片。\n\n文档需求：${brief}`, 'image-generation') }));
+}
 export function illustratedDocumentSteps(first: WorkflowStep, tail: WorkflowStep[], options: DocumentImageOptions, configuration: Pick<StudioConfiguration, 'models' | 'connections' | 'credentials'>, brief: string): WorkflowStep[] {
   if (!['references', 'generate'].includes(options.mode)) throw new Error('请选择有效的配图方式。');
   if (options.mode === 'generate' && !validDocumentImageCount(options.count)) throw new Error(`配图数量请填写 1–${DOCUMENT_IMAGE_LIMIT} 的整数。`);
@@ -18,6 +23,6 @@ export function illustratedDocumentSteps(first: WorkflowStep, tail: WorkflowStep
   const model = studioModel(documentImageModels(configuration), options.modelConfigId);
   if (!model) throw new Error('请先选择一个真实图片生成模型。');
   const credentialId = studioCredential(configuration.credentials, model.connectionId, options.credentialId);
-  const pictures: WorkflowStep[] = Array.from({ length: options.count }, (_, index) => ({ id: crypto.randomUUID(), name: `制作文档插图 ${index + 1}/${options.count}`, kind: 'image-generation', inputSource: 'project', enabled: true, modelConfigId: model.id, credentialId, count: 1, imageSize: '1024x1024', imageBackground: 'opaque', prompt: creationPrompt('image', `为以下文档需求制作可独立使用的配图素材。本次制作第 ${index + 1} 张，共 ${options.count} 张；按需求中的不同内容角度组织本张画面，与同组插图保持风格统一。只生成插图，不要把整页文档、PPT、表格或正文渲染成图片，不添加文字、图标水印或虚构品牌。配图用于内容说明，保留自然留白。用户未提供真实商品或人物参考时，不假称图片是真实商品实拍或人物照片。\n\n文档需求：${brief}`, 'image-generation') }));
+  const pictures = documentIllustrationSteps(options.count, brief).map(step => ({ ...step, modelConfigId: model.id, credentialId }));
   return [...pictures, { ...text, documentImageStepIds: pictures.map(picture => picture.id) }, ...tail];
 }

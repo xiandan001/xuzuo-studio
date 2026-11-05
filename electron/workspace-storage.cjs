@@ -4,8 +4,9 @@ const { randomUUID } = require('node:crypto');
 const { key, inside, safeFolder, checkedDirectory, checkedFile, copyProjectTree, verifyProjectTree, atomicJson } = require('./workspace-paths.cjs');
 const { inspectSelectedProjectFolder, prepareSelectedProjectFolder } = require('./project-folder.cjs');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value);
+const validPurge = item => item && validId(item.projectId) && validId(item.workspaceId) && typeof item.name === 'string' && ['ppt', 'word', 'excel', 'image'].includes(item.kind) && Number.isFinite(Date.parse(item.purgedAt)) && Number.isFinite(Date.parse(item.trashedAt)) && Number.isSafeInteger(item.costCents) && item.costCents >= 0 && (item.directory === undefined || typeof item.directory === 'string' && path.isAbsolute(item.directory)) && Array.isArray(item.directories) && item.directories.every(value => typeof value === 'string' && path.isAbsolute(value));
 const clone = value => structuredClone(value);
-const empty = () => ({ version: 1, workspaces: [], projects: [], locations: [] });
+const empty = () => ({ version: 1, workspaces: [], projects: [], locations: [], purgedProjects: [] });
 
 function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
   const fs = fileSystem, root = path.resolve(directory);
@@ -13,9 +14,20 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
   const journalFile = path.join(root, 'workspace-directories-transition-v1.json');
   let state = empty(), transition, migrator, queue = Promise.resolve();
   const staged = [];
+  let purgeGuard = { ready: Promise.resolve(), isPurged: () => false, audits: () => [] };
+  let indexedState, ownPending = []; const ownPurgedIds = new Set();
+  function indexPurges() { if (indexedState === state) return; indexedState = state; ownPurgedIds.clear(); ownPending = []; for (const item of state.purgedProjects || []) { ownPurgedIds.add(item.projectId); if (item.filesPending) ownPending.push(item); } }
+  const isProjectPurged = id => { indexPurges(); return ownPurgedIds.has(id) || purgeGuard.isPurged(id); };
+  const assertNotPurged = async id => { await ready; await purgeGuard.ready; if (isProjectPurged(id)) throw Object.assign(new Error('此项目已永久移除，不能恢复或重新创建同一项目。'), { code: 'PROJECT_PURGED' }); };
+  const assertPurgePathAvailable = directoryName => {
+    indexPurges(); const own = ownPending.filter(item => !purgeGuard.isPurged(item.projectId)).flatMap(item => item.blockedDirectories || item.directories);
+    const pending = purgeGuard.blockedPaths ? purgeGuard.blockedPaths() : purgeGuard.audits().filter(item => item.filesPending).flatMap(item => item.blockedDirectories || item.directories);
+    if ([...own, ...pending].some(blocked => inside(blocked, directoryName) || inside(directoryName, blocked))) throw Error('所选位置涉及尚未完成的永久清理任务，请等待原任务完成。');
+  };
   const serial = action => { const task = queue.then(action); queue = task.catch(() => undefined); return task; };
   function validState(value) {
     if (!value || value.version !== 1 || !['workspaces', 'projects', 'locations'].every(name => Array.isArray(value[name]))) return false;
+    if (value.purgedProjects !== undefined && (!Array.isArray(value.purgedProjects) || value.purgedProjects.some(item => !validPurge(item)) || new Set(value.purgedProjects.map(item => item.projectId)).size !== value.purgedProjects.length)) return false;
     if (value.workspaces.some(item => !validId(item.workspaceId) || typeof item.name !== 'string' || typeof item.directory !== 'string' || !path.isAbsolute(item.directory))) return false;
     if (new Set(value.workspaces.map(item => item.workspaceId)).size !== value.workspaces.length || new Set(value.projects.map(item => item.projectId)).size !== value.projects.length) return false;
     if (value.workspaces.some((item, index) => value.workspaces.slice(index + 1).some(other => inside(item.directory, other.directory) || inside(other.directory, item.directory)))) return false;
@@ -27,7 +39,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
   }
   const ready = (async () => {
     await checkedDirectory(fs, root, true);
-    try { await checkedFile(fs, filename); const value = JSON.parse(await fs.readFile(filename, 'utf8')); if (!validState(value)) throw new Error('invalid'); state = value; }
+    try { await checkedFile(fs, filename); const value = JSON.parse(await fs.readFile(filename, 'utf8')); if (!validState(value)) throw new Error('invalid'); state = { ...value, purgedProjects: value.purgedProjects || [] }; }
     catch (error) { if (error.code !== 'ENOENT') throw new Error('本地工作区目录登记无法读取，原记录已保留。'); }
     try { await checkedFile(fs, journalFile); const value = JSON.parse(await fs.readFile(journalFile, 'utf8')); if (!validTransition(value)) throw new Error('invalid'); transition = value; }
     catch (error) { if (error.code !== 'ENOENT') throw new Error('工作区迁移记录无法读取，现有目录均已保留。'); }
@@ -113,9 +125,11 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
   }
   async function validateDirectory(directoryName, projectId) {
     await ready;
+    if (projectId) await assertNotPurged(projectId);
     const locations = [...state.locations, ...(transition?.next.locations || []), ...staged];
     const location = locations.find(item => key(item.directory) === key(directoryName) && (!projectId || item.projectId === projectId));
     if (!location) throw new Error('此目录尚未登记为项目目录，已拒绝读写。');
+    assertPurgePathAvailable(location.directory);
     const workspace = [...state.workspaces, ...(transition?.next.workspaces || [])].find(item => inside(item.directory, location.directory));
     if (!workspace) throw new Error('项目目录缺少所属工作区登记。');
     await checkedWorkspace(workspace);
@@ -124,6 +138,14 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
   }
   async function finishTransition() {
     if (!transition) return;
+    const removed = new Set(transition.migrations.filter(item => isProjectPurged(item.projectId)).map(item => item.projectId));
+    if (removed.size) {
+      transition.next.projects = transition.next.projects.filter(item => !removed.has(item.projectId));
+      transition.next.locations = transition.next.locations.filter(item => !removed.has(item.projectId));
+      transition.migrations = transition.migrations.filter(item => !removed.has(item.projectId));
+      transition.next.purgedProjects = state.purgedProjects || [];
+      await atomicJson(fs, journalFile, transition);
+    }
     if (typeof migrator !== 'function') throw new Error('工作区文件迁移尚未就绪，请稍后重试。');
     for (const item of transition.migrations) await migrator(item.projectId, item.to, { rebase: Boolean(item.rebase) });
     await atomicJson(fs, filename, transition.next);
@@ -131,11 +153,13 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     try { await fs.unlink(journalFile); transition = undefined; }
     catch { throw new Error('目录已保存，但迁移恢复记录尚未清理；请重新读取工作区。'); }
   }
-  async function settle() { await ready; await finishTransition(); }
+  async function settle() { await ready; await purgeGuard.ready; await finishTransition(); }
   async function createProjectLocation(input, workspace, old) {
+    await assertNotPurged(input.projectId);
     if (!validId(input.projectId) || !validId(input.workspaceId) || typeof input.name !== 'string' || !input.name.trim()) throw new Error('项目名称或编号无效。');
     await checkedWorkspace(workspace);
     let directoryName = old && old.workspaceId === input.workspaceId ? old.directory : path.join(workspace.directory, safeFolder(input.name, input.projectId));
+    assertPurgePathAvailable(directoryName);
     if (!old) {
       try { await fs.lstat(directoryName); directoryName += `-${randomUUID().slice(0, 8)}`; }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -165,12 +189,13 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     next.projects = [...next.projects.filter(item => item.projectId !== location.projectId), location];
     if (!next.locations.some(item => item.projectId === location.projectId && key(item.directory) === key(location.directory))) next.locations.push({ projectId: location.projectId, directory: location.directory });
   }
-  const publicList = () => clone({ workspaces: state.workspaces, projects: state.projects });
+  const publicList = () => clone({ workspaces: state.workspaces, projects: state.projects.filter(item => !isProjectPurged(item.projectId)) });
   async function inspectProjectFolder(input) {
     if (!input || !validId(input.workspaceId) || input.projectId !== undefined && !validId(input.projectId)) throw new Error('项目文件夹所属工作区或编号无效。');
     if (typeof input.directory !== 'string' || !path.isAbsolute(input.directory)) throw new Error('请选择有效的本地项目文件夹。');
     const workspace = state.workspaces.find(item => item.workspaceId === input.workspaceId);
     if (!workspace) throw new Error('请先为这个工作区选择本地文件夹。');
+    assertPurgePathAvailable(input.directory);
     await checkedWorkspace(workspace);
     const previous = input.projectId && state.projects.find(item => item.projectId === input.projectId);
     if (previous) {
@@ -181,6 +206,36 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     return inspectSelectedProjectFolder({ fs, workspace, projects: state.projects, locations: state.locations, directory: input.directory, projectId: input.projectId });
   }
   return {
+    ready,
+    setProjectPurgeGuard(value) { purgeGuard = value; },
+    isProjectPurged,
+    assertNotPurged,
+    async purgeMetadata() { return serial(async () => { await ready; return clone({ workspaces: [...state.workspaces, ...(transition?.next.workspaces || []).filter(item => !state.workspaces.some(old => old.workspaceId === item.workspaceId && key(old.directory) === key(item.directory)))], projects: state.projects, locations: [...state.locations, ...(transition?.next.locations || []).filter(item => !state.locations.some(old => old.projectId === item.projectId && key(old.directory) === key(item.directory)))], transitionalProjectIds: transition?.migrations.map(item => item.projectId) || [] }); }); },
+    async listPurges() { return serial(async () => { await ready; await purgeGuard.ready; return clone([...new Map([...(state.purgedProjects || []), ...purgeGuard.audits()].map(item => [item.projectId, item])).values()]); }); },
+    async importPurges(audits) { return serial(async () => {
+      await ready;
+      if (!Array.isArray(audits) || audits.some(item => !validPurge(item) || item.directories.length || item.directory || item.cleanupDirectory || item.blockedDirectories?.length || !state.workspaces.some(workspace => workspace.workspaceId === item.workspaceId))) throw Error('永久移除审计归属或路径无效。');
+      const next = clone(state); next.purgedProjects ||= [];
+      for (const item of audits) {
+        const old = next.purgedProjects.find(entry => entry.projectId === item.projectId);
+        if (old && old.workspaceId !== item.workspaceId || next.projects.some(entry => entry.projectId === item.projectId)) throw Error('永久移除审计与已有项目冲突。');
+        if (!old) next.purgedProjects.push({ ...Object.fromEntries(['projectId','workspaceId','name','kind','purgedAt','trashedAt','costCents','updatedAt'].map(key => [key, item[key]])), directories: [], recordPurged: true, filesDeleted: false, folderMissing: false, filesPending: false, retryable: false, requestId: validId(item.requestId) ? item.requestId : `import-${item.projectId}` });
+      }
+      await atomicJson(fs, filename, next); state = next; return clone(next.purgedProjects);
+    }); },
+    async forgetProject({ projectId, workspaceId, audit }) { return serial(async () => {
+      await ready;
+      const existing = state.projects.find(item => item.projectId === projectId), old = (state.purgedProjects || []).find(item => item.projectId === projectId);
+      if (!validId(projectId) || !validId(workspaceId) || existing && existing.workspaceId !== workspaceId || old && old.workspaceId !== workspaceId || audit?.projectId !== projectId || audit.workspaceId !== workspaceId || !Number.isFinite(Date.parse(audit.purgedAt))) throw Error('永久移除项目归属无效。');
+      const next = clone(state), directories = [...new Set([...(old?.directories || []), ...[...state.locations, ...(transition?.next.locations || []), ...(transition?.next.projects || [])].filter(item => item.projectId === projectId).map(item => item.directory), ...(existing ? [existing.directory] : []), ...(audit.directories || [])])];
+      next.projects = next.projects.filter(item => item.projectId !== projectId); next.locations = next.locations.filter(item => item.projectId !== projectId);
+      next.purgedProjects = [...(next.purgedProjects || []).filter(item => item.projectId !== projectId), { ...old, ...clone(audit), directories }];
+      if (transition) {
+        transition.next.projects = transition.next.projects.filter(item => item.projectId !== projectId); transition.next.locations = transition.next.locations.filter(item => item.projectId !== projectId); transition.next.purgedProjects = next.purgedProjects;
+        transition.migrations = transition.migrations.filter(item => item.projectId !== projectId); await atomicJson(fs, journalFile, transition);
+      }
+      await atomicJson(fs, filename, next); state = next; return clone(next.purgedProjects.find(item => item.projectId === projectId));
+    }); },
     setArtifactMigrator(value) { if (typeof value !== 'function') throw new TypeError('缺少产物迁移处理器。'); migrator = value; },
     validateDirectory,
     async validateWorkspace(workspaceId) { return serial(async () => { await settle(); return workspaceDirectory(workspaceId); }); },
@@ -190,6 +245,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     async inspectProjectFolder(input) { return serial(async () => { await settle(); return inspectProjectFolder(input); }); },
     async claimProjectFolder(input) {
       return serial(async () => {
+        await assertNotPurged(input?.projectId);
         await settle();
         if (!input || !validId(input.projectId) || typeof input.name !== 'string' || !input.name.trim()) throw new Error('项目名称或编号无效。');
         const selected = await inspectProjectFolder(input), previous = state.projects.find(item => item.projectId === input.projectId);
@@ -204,6 +260,8 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     },
     async importLocations({ workspaces, projects }) {
       return serial(async () => {
+        for (const project of projects) await assertNotPurged(project.projectId);
+        for (const project of projects) assertPurgePathAvailable(project.directory);
         await settle();
         const next = clone(state);
         if (workspaces.some(item => state.workspaces.some(existing => existing.workspaceId === item.workspaceId && JSON.stringify(existing) !== JSON.stringify(item))) || projects.some(item => state.projects.some(existing => existing.projectId === item.projectId && JSON.stringify(existing) !== JSON.stringify(item)))) throw new Error('导入目录编号与现有登记不一致。');
@@ -287,6 +345,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     },
     async ensureProject(input) {
       return serial(async () => {
+        await assertNotPurged(input?.projectId);
         await settle();
         const workspace = state.workspaces.find(item => item.workspaceId === input.workspaceId);
         if (!workspace) throw new Error('请先为这个工作区选择本地文件夹。');
@@ -299,10 +358,11 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
       });
     },
     async projectDirectory(projectId) {
-      return serial(async () => { await settle(); const item = state.projects.find(project => project.projectId === projectId); if (!item) throw new Error('项目尚未绑定本地目录，请先创建或绑定工作区。'); return validateDirectory(item.directory, projectId); });
+      return serial(async () => { await assertNotPurged(projectId); await settle(); const item = state.projects.find(project => project.projectId === projectId); if (!item) throw new Error('项目尚未绑定本地目录，请先创建或绑定工作区。'); return validateDirectory(item.directory, projectId); });
     },
     async assertProject(projectId, workspaceId) {
       return serial(async () => {
+        await assertNotPurged(projectId);
         await settle(); const item = state.projects.find(project => project.projectId === projectId);
         if (!item || workspaceId && item.workspaceId !== workspaceId) throw new Error('项目的本地目录不属于当前工作区，请重新检查目录绑定。');
         await validateDirectory(item.directory, projectId);
@@ -318,6 +378,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
     },
     async moveProject(input) {
       return serial(async () => {
+        await assertNotPurged(input?.projectId);
         await settle();
         const previous = state.projects.find(item => item.projectId === input.projectId);
         const workspace = state.workspaces.find(item => item.workspaceId === input.workspaceId);

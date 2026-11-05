@@ -3,16 +3,20 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson, inside, key } = require('./workspace-paths.cjs');
 const { hash, MAX_TOTAL, MAX_FILES, safePath, inspectZip, withoutSecrets, validateManifest, createIdMap, remap, mappedName, validId } = require('./backup-format.cjs');
+const { validateQuoteBackups } = require('./quote-backup.cjs');
 const { validateRecords } = require('./run-history-store.cjs');
 const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset-categories.cjs');
+const { purgedProjectAudit } = require('./backup-project-audits.cjs');
 const APP_VERSION = require('../package.json').version;
 const controlledPath = relative => { const parts = relative.split('/'); return relative.endsWith('.json') && (parts.includes('.xuzuo') || parts.at(-1) === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(parts.at(-1))); };
 
-function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, fileSystem = fsDefault, loadModule = require }) {
+function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, automationProvider, receiptProvider, fileSystem = fsDefault, loadModule = require }) {
   const fs = fileSystem, receipts = path.join(path.resolve(directory), 'backup-imports-v1');
   let pending = Promise.resolve();
   const serial = action => { const task = pending.then(action); pending = task.catch(() => undefined); return task; };
   const batchManager = () => typeof batchProduction === 'function' ? batchProduction() : batchProduction;
+  const automationManager = () => typeof automationProvider === 'function' ? automationProvider() : automationProvider;
+  const receiptManager = () => typeof receiptProvider === 'function' ? receiptProvider() : receiptProvider;
   async function readJson(filename) { await checkedFile(fs, filename); return JSON.parse(await fs.readFile(filename, 'utf8')); }
   async function readBackup(filename) {
     await checkedDirectory(fs, path.dirname(filename)); const stat = await fs.lstat(filename);
@@ -43,6 +47,12 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     for (const [relative, bytes] of files) {
       if (!relative.endsWith('.json')) continue;
       const parts = relative.split('/'), basename = parts.at(-1);
+      if (parts.includes('.xuzuo') && basename === 'project-v1.json') {
+        const marker = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        const project = manifest.locations.projects.find(item => item.projectId === marker.projectId), workspace = project && manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
+        const expected = workspace && `workspaces/${workspace.workspaceId}/${path.relative(workspace.directory, project.directory).split(path.sep).join('/')}/.xuzuo/project-v1.json`;
+        if (marker.version !== 1 || !project || relative !== expected) throw new Error('备份包含未登记或已永久移除的项目目录内容。');
+      }
       if (parts.includes('.xuzuo-assets') && basename === 'categories-v1.json') validateAssetCategoryState(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
       if (parts.includes('.xuzuo-assets') && basename === 'library-v1.json') {
         const library = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
@@ -61,25 +71,39 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     return { manifest, files };
   }
   async function exportBackup({ meta, workspaceIds, projectIds, filePath, beforeWrite }) {
-    const locations = await workspaceStorage.list(), requested = new Set(workspaceIds);
+    const locations = await workspaceStorage.list(), nativePurges = await workspaceStorage.listPurges?.() || [], requested = new Set(workspaceIds);
     if (!requested.size || requested.size !== workspaceIds.length || workspaceIds.some(id => !locations.workspaces.some(item => item.workspaceId === id))) throw new Error('请选择已连接本地文件夹的工作区。');
     const workspaces = locations.workspaces.filter(item => requested.has(item.workspaceId));
     if (workspaces.some(item => inside(item.directory, path.resolve(directory)))) throw new Error('工作区包含应用资料目录，请把项目放入独立本地工作区后再备份。');
-    const projects = locations.projects.filter(item => requested.has(item.workspaceId) && (!projectIds || projectIds.includes(item.projectId))), selected = new Set(projects.map(item => item.projectId));
-    if (projectIds && (new Set(projectIds).size !== projectIds.length || projectIds.some(id => !selected.has(id)))) throw new Error('所选项目不属于备份范围或尚未绑定目录。');
-    if (meta.projects.some(item => requested.has(item.workspaceId) && (!projectIds || projectIds.includes(item.id)) && !selected.has(item.id))) throw new Error('备份范围含尚未绑定本地目录的项目，请先连接目录。');
-    const filteredMeta = withoutSecrets({ ...meta, workspaces: meta.workspaces.filter(item => requested.has(item.id)), projects: meta.projects.filter(item => selected.has(item.id)), ledger: meta.ledger.filter(item => selected.has(item.projectId)), customPrompts: meta.customPrompts.filter(item => !item.workspaceId || requested.has(item.workspaceId)), preferencesByWorkspace: Object.fromEntries(Object.entries(meta.preferencesByWorkspace).filter(([id]) => requested.has(id))), configuration: Object.fromEntries(Object.entries(meta.configuration || {}).filter(([name]) => ['connections', 'models', 'workflows', 'categories', 'studioActions', 'useTemplates'].includes(name)).map(([name, items]) => [name, Array.isArray(items) ? items.filter(item => !item.workspaceId || requested.has(item.workspaceId)) : items])) });
+    const auditById = new Map(meta.projects.filter(item => item.purgedAt).map(item => [item.id, purgedProjectAudit(item)]));
+    for (const item of nativePurges) {
+      const prior = meta.projects.find(project => project.id === item.projectId);
+      if (prior && prior.workspaceId !== item.workspaceId) throw new Error('永久移除审计和界面工作区归属不一致，未导出混合备份。');
+      auditById.set(item.projectId, purgedProjectAudit({ ...prior, ...item, id: item.projectId }));
+    }
+    const audits = [...auditById.values()].filter(item => requested.has(item.workspaceId) && (!projectIds || projectIds.includes(item.id))), auditIds = new Set(audits.map(item => item.id));
+    const projects = locations.projects.filter(item => !auditById.has(item.projectId) && requested.has(item.workspaceId) && (!projectIds || projectIds.includes(item.projectId))), selected = new Set(projects.map(item => item.projectId));
+    const auditedSelection = new Set([...selected, ...auditIds]);
+    if (projectIds && (new Set(projectIds).size !== projectIds.length || projectIds.some(id => !auditedSelection.has(id)))) throw new Error('所选项目不属于备份范围或尚未绑定目录。');
+    if (meta.projects.some(item => requested.has(item.workspaceId) && (!projectIds || projectIds.includes(item.id)) && !auditedSelection.has(item.id))) throw new Error('备份范围含尚未绑定本地目录的项目，请先连接目录。');
+    const excludedDirectories = [...nativePurges.flatMap(item => item.directories || (item.directory ? [item.directory] : [])), ...locations.projects.filter(item => auditById.has(item.projectId)).map(item => item.directory)];
+    const filteredMeta = withoutSecrets({ ...meta, workspaces: meta.workspaces.filter(item => requested.has(item.id)), projects: [...meta.projects.filter(item => selected.has(item.id)), ...audits], ledger: meta.ledger.filter(item => auditedSelection.has(item.projectId)), customPrompts: meta.customPrompts.filter(item => !item.workspaceId || requested.has(item.workspaceId)), preferencesByWorkspace: Object.fromEntries(Object.entries(meta.preferencesByWorkspace).filter(([id]) => requested.has(id))), configuration: Object.fromEntries(Object.entries(meta.configuration || {}).filter(([name]) => ['connections', 'models', 'workflows', 'categories', 'studioActions', 'useTemplates'].includes(name)).map(([name, items]) => [name, Array.isArray(items) ? items.filter(item => !item.workspaceId || requested.has(item.workspaceId)) : items])) });
+    if (meta.quoteDrafts !== undefined) { if (!Array.isArray(meta.quoteDrafts)) throw Error('备份报价清单无效。'); filteredMeta.quoteDrafts = withoutSecrets(meta.quoteDrafts.filter(item => selected.has(item.projectId))); validateQuoteBackups(filteredMeta.quoteDrafts, filteredMeta.projects); }
     const artifacts = await artifactStore.backupEntries([...selected]), records = await liveEngine.exportRecords([...selected]), batches = await batchManager()?.exportRecords([...selected]) || [];
+    const automations = await automationManager()?.backupEntries({ workspaceIds: [...requested], projectIds: [...selected] });
+    const modelReceipts = await receiptManager()?.backupEntries({ projectIds: [...selected] });
     if (records.some(item => item.run.status === 'running')) throw new Error('请等待模型请求结束后创建备份。');
-    const durableLedger = withoutSecrets(records.flatMap(record => record.ledger)), durableById = new Map(durableLedger.map(entry => [entry.id, entry]));
+    const auditLedger = auditIds.size ? (await liveEngine.snapshot(undefined, { projectIds: [...auditIds], summaryOnly: true })).ledger.filter(entry => auditIds.has(entry.projectId)) : [];
+    const durableLedger = withoutSecrets([...records.flatMap(record => record.ledger), ...auditLedger]), durableById = new Map(durableLedger.map(entry => [entry.id, entry]));
     const rendererById = new Map(filteredMeta.ledger.map(entry => [entry.id, entry]));
     filteredMeta.projects = filteredMeta.projects.map(project => {
+      if (project.purgedAt) return { ...project, costCents: Math.max(project.costCents, durableLedger.filter(entry => entry.projectId === project.id).reduce((sum, entry) => sum + entry.costCents, 0)) };
       const delta = durableLedger.filter(entry => entry.projectId === project.id).reduce((sum, entry) => sum + entry.costCents - (rendererById.get(entry.id)?.costCents || 0), 0);
       return { ...project, costCents: Math.max(0, project.costCents + delta) };
     });
     filteredMeta.ledger = filteredMeta.ledger.map(entry => durableById.get(entry.id) || entry);
     for (const entry of durableLedger) if (!filteredMeta.ledger.some(existing => existing.id === entry.id)) filteredMeta.ledger.push(entry);
-    const manifest = { kind: 'xuzuo-internal-backup', version: 1, appVersion: APP_VERSION, backupId: randomUUID(), createdAt: new Date().toISOString(), scope: projectIds ? 'projects' : 'workspaces', meta: filteredMeta, locations: { workspaces, projects }, artifacts, records: withoutSecrets(records), batches: withoutSecrets(batches), files: [], secretsIncluded: false };
+    const manifest = { kind: 'xuzuo-internal-backup', version: audits.length ? 3 : automations || modelReceipts || filteredMeta.quoteDrafts?.length ? 2 : 1, appVersion: APP_VERSION, backupId: randomUUID(), createdAt: new Date().toISOString(), scope: projectIds ? 'projects' : 'workspaces', meta: filteredMeta, locations: { workspaces, projects }, artifacts, records: withoutSecrets(records), batches: withoutSecrets(batches), ...(automations ? { automations } : {}), ...(modelReceipts ? { modelReceipts } : {}), files: [], secretsIncluded: false };
     const Zip = loadModule('jszip'), zip = new Zip(); let total = 0;
     async function add(source, relative) {
       safePath(relative); const stat = await checkedFile(fs, source), buffer = await fs.readFile(source), after = await checkedFile(fs, source);
@@ -102,7 +126,11 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       await workspaceStorage.validateWorkspace(workspace.workspaceId);
       for (const project of projects.filter(item => item.workspaceId === workspace.workspaceId)) await workspaceStorage.projectDirectory(project.projectId);
       const allProjects = locations.projects.filter(item => item.workspaceId === workspace.workspaceId);
-      await walk(workspace.directory, `workspaces/${workspace.workspaceId}`, filename => !projectIds || !allProjects.some(project => !selected.has(project.projectId) && inside(project.directory, filename)));
+      await walk(workspace.directory, `workspaces/${workspace.workspaceId}`, filename => {
+        const purgedTree = excludedDirectories.some(directory => inside(directory, filename));
+        const newRegisteredTree = projects.some(project => inside(project.directory, filename) || inside(filename, project.directory));
+        return (!purgedTree || newRegisteredTree) && (!projectIds || !allProjects.some(project => !selected.has(project.projectId) && inside(project.directory, filename)));
+      });
     }
     for (const artifact of artifacts) {
       if (artifact.storageDirectory && workspaces.some(item => inside(item.directory, artifact.storageDirectory))) continue;
@@ -126,12 +154,25 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
   async function completeReceipt(receipt) {
     await artifactStore.importEntries(receipt.artifacts);
     await workspaceStorage.importLocations(receipt.locations);
+    const audits = receipt.meta.projects.filter(project => project.purgedAt);
+    if (audits.length) {
+      if (!workspaceStorage.importPurges) throw new Error('本地永久移除审计恢复模块尚未就绪，恢复凭据仍保留。');
+      await workspaceStorage.importPurges(audits.map(project => ({ projectId: project.id, workspaceId: project.workspaceId, name: project.name, kind: project.kind, purgedAt: project.purgedAt, trashedAt: project.trashedAt, costCents: project.costCents, updatedAt: project.updatedAt, directories: [], requestId: receipt.backupId })));
+    }
     await liveEngine.importRecords(receipt.records);
     if (receipt.batches?.length) {
       if (!batchManager()) throw new Error('批量记录恢复模块尚未就绪，恢复凭据已保留。');
       await batchManager().importRecords(receipt.batches, { backupId: receipt.backupId });
     }
     await liveEngine.refreshArtifactLocations();
+    if (receipt.modelReceipts) {
+      if (!receiptManager()?.importEntries) throw new Error('模型回执恢复模块尚未就绪，恢复凭据和文件已保留。');
+      await receiptManager().importEntries({ records: receipt.modelReceipts, idMap: receipt.idMap, backupId: receipt.backupId, availableRuns: (await liveEngine.snapshot(undefined, { summaryOnly: false })).runs });
+    }
+    if (receipt.automations) {
+      if (!automationManager()?.importEntries) throw new Error('自动化恢复模块尚未就绪，恢复凭据和文件已保留。');
+      await automationManager().importEntries({ records: receipt.automations, idMap: receipt.idMap, backupId: receipt.backupId });
+    }
     receipt.phase = 'native-ready'; await atomicJson(fs, path.join(receipts, `${receipt.backupId}.json`), receipt);
     return { meta: receipt.meta, locations: receipt.locations, idMap: receipt.idMap, backupId: receipt.backupId, receiptPath: path.join(receipts, `${receipt.backupId}.json`) };
   }
@@ -202,7 +243,10 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     const meta = remap(manifest.meta, idMap, pathMap, renamedNames), artifacts = remap(manifest.artifacts, idMap, pathMap, renamedNames).map(item => ({ ...item, storageDirectory: locations.projects.find(project => project.projectId === item.projectId).directory }));
     const records = remap(manifest.records, idMap, pathMap, renamedNames);
     for (const workspace of meta.workspaces) workspace.directory = pathMap[manifest.meta.workspaces.find(item => idMap[item.id] === workspace.id)?.directory] || locations.workspaces.find(item => item.workspaceId === workspace.id).directory;
-    for (const project of meta.projects) project.directory = locations.projects.find(item => item.projectId === project.id).directory;
+    for (const project of meta.projects) {
+      if (project.purgedAt) { delete project.directory; continue; }
+      project.directory = locations.projects.find(item => item.projectId === project.id).directory;
+    }
     for (const record of records) {
       const original = manifest.records.find(item => idMap[item.run.id] === record.run.id), project = locations.projects.find(item => item.projectId === record.run.projectId);
       record.importOrigin = { backupId: manifest.backupId, sourceRunId: original.run.id, sourceWorkspaceId: original.run.workspaceId };
@@ -212,12 +256,12 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       for (const attempt of record.run.attempts) if (['running', 'waiting-review'].includes(attempt.status)) attempt.status = 'cancelled';
       for (const entry of record.ledger) if (entry.status === 'processing') { entry.status = 'cancelled'; entry.costState = 'unknown'; }
     }
-    const receipt = { version: 1, backupId: manifest.backupId, sourcePath: filePath, createdAt: new Date().toISOString(), phase: 'prepared', importRoot, idMap, meta, locations, artifacts, records, batches: remap(manifest.batches || [], idMap, pathMap, renamedNames) };
+    const receipt = { version: 1, backupId: manifest.backupId, sourcePath: filePath, createdAt: new Date().toISOString(), phase: 'prepared', importRoot, idMap, meta, locations, artifacts, records, batches: remap(manifest.batches || [], idMap, pathMap, renamedNames), ...(manifest.automations ? { automations: manifest.automations } : {}), ...(manifest.modelReceipts ? { modelReceipts: manifest.modelReceipts } : {}) };
     await atomicJson(fs, receiptFile, receipt); return completeReceipt(receipt);
   }
   return {
     exportBackup: input => serial(() => exportBackup(input)),
-    inspectBackup: filename => serial(async () => { const { manifest } = await readBackup(filename); return { backupId: manifest.backupId, createdAt: manifest.createdAt, scope: manifest.scope, workspaces: manifest.meta.workspaces.map(({ id, name }) => ({ id, name })), projects: manifest.meta.projects.map(({ id, name }) => ({ id, name })), files: manifest.files.length, bytes: manifest.files.reduce((sum, item) => sum + item.bytes, 0), secretsIncluded: false }; }),
+    inspectBackup: filename => serial(async () => { const { manifest } = await readBackup(filename); return { backupId: manifest.backupId, createdAt: manifest.createdAt, scope: manifest.scope, workspaces: manifest.meta.workspaces.map(({ id, name }) => ({ id, name })), projects: manifest.meta.projects.filter(project => !project.purgedAt).map(({ id, name }) => ({ id, name })), files: manifest.files.length, bytes: manifest.files.reduce((sum, item) => sum + item.bytes, 0), secretsIncluded: false }; }),
     importBackup: input => serial(() => importBackup(input)),
     pendingImports: () => serial(async () => { await checkedDirectory(fs, receipts, true); const result = []; for (const name of await fs.readdir(receipts)) { if (!/^[A-Za-z0-9-]+\.json$/.test(name)) continue; const receipt = await readJson(path.join(receipts, name)); if (receipt.phase !== 'acknowledged') result.push(await completeReceipt(receipt)); } return result; }),
     acknowledgeImport: backupId => serial(async () => { if (!validId(backupId)) throw new Error('导入凭据编号无效。'); const filename = path.join(receipts, `${backupId}.json`), receipt = await readJson(filename); if (receipt.phase !== 'native-ready') throw new Error('本地文件恢复尚未完成。'); receipt.phase = 'acknowledged'; await atomicJson(fs, filename, receipt); }),

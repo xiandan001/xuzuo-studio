@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.spreadsheetMissingInputs = spreadsheetMissingInputs;
 exports.spreadsheetFromText = spreadsheetFromText;
 const spreadsheet_engine_1 = require("./spreadsheet-engine.cjs");
+const spreadsheet_generated_formatting_1 = require("./spreadsheet-generated-formatting.cjs");
 const NOTES_ID = 'generated-missing-inputs';
 const object = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 const scalar = (value) => value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value);
@@ -66,7 +67,7 @@ function sheetFromRows(raw, index, inferTypes) {
         return columns.map(column => Object.hasOwn(row, column.key) ? row[column.key] : null);
     });
     if (columns.length)
-        rows.unshift(columns.map(column => column.name));
+        rows.unshift(columns.map(column => ({ value: column.name, bold: true })));
     if (rows.length > spreadsheet_engine_1.SPREADSHEET_LIMITS.rows)
         return fail(location, '含表头最多 10000 行，生成内容未被截断');
     let columnCount = Math.max(1, columns.length);
@@ -80,7 +81,7 @@ function sheetFromRows(raw, index, inferTypes) {
             cells[address] = generatedCell(value, `${location}!${address}`, inferTypes && !(columns.length && rowIndex === 0));
         });
     });
-    return { id: `generated-sheet-${index + 1}`, name, rowCount: Math.max(50, rows.length), columnCount: Math.max(12, columnCount), cells };
+    return (0, spreadsheet_generated_formatting_1.applyGeneratedSheetFormatting)({ id: `generated-sheet-${index + 1}`, name, rowCount: Math.max(50, rows.length), columnCount: Math.max(12, columnCount), cells }, raw.formatting);
 }
 function withMissingInputs(document, meta) {
     if (!object(meta) || meta.missingInputs === undefined)

@@ -50,6 +50,8 @@
 .activity-detail-toggle .is-open { transform:rotate(180deg); }
 .activity-task-detail { padding:0 18px 18px; border-top:1px solid var(--ui-border); background:var(--ui-surface-subtle); }
 .activity-task-detail>.wf-run-card { margin-top:16px; box-shadow:none; }
+.activity-planning-context { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; padding:14px 16px; border:1px solid var(--ui-border); border-radius:12px; background:var(--ui-surface); color:var(--ui-fg-secondary); font-size:14px; line-height:1.7; }
+.activity-planning-context>span { flex:1; min-width:200px; }
 .activity-filter-empty { display:flex; flex-direction:column; align-items:center; gap:14px; padding:36px 20px; color:var(--ui-fg-secondary); text-align:center; }
 .activity-filter-empty h3 { font-size:18px; color:var(--ui-fg); }
 .activity-filter-empty p,.activity-footnote { font-size:14px; line-height:1.9; color:var(--ui-fg-secondary); }

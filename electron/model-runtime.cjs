@@ -2,6 +2,7 @@ const { ModelRuntimeError, failure, checkedUrl, createContext, ensureActive, pro
 const { executeText } = require('./provider-text.cjs');
 const { executeImages, executeAudio } = require('./provider-media.cjs');
 const { executeVideo, VIDEO_TIMEOUT_MS } = require('./provider-video.cjs');
+const { createModelReceipts } = require('./model-receipts.cjs');
 
 const TEXT_PROTOCOLS = new Set(['openai-chat', 'openai-responses', 'anthropic', 'gemini']);
 const IMAGE_PROTOCOLS = new Set(['image', 'openai-chat', 'openai-responses']);
@@ -55,7 +56,7 @@ async function loadAttachments(request, artifactStore, context) {
   return files;
 }
 
-function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch }) {
+function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch, directory, getAvailableRuns }) {
   if (typeof credentialStore?.withSecret !== 'function' || typeof artifactStore?.read !== 'function' || typeof artifactStore?.write !== 'function' || typeof fetchImpl !== 'function') throw new TypeError('模型执行器缺少凭证库、文件库或网络接口。');
 
   async function execute(input, { signal, onProgress } = {}) {
@@ -102,7 +103,14 @@ function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch 
     } finally { context.cleanup(); }
   }
 
-  return { execute, supports };
+  const receipts = directory ? createModelReceipts({ directory, artifactStore }) : undefined;
+  return {
+    execute: receipts ? (input, options) => { const request = validateRequest(input); return receipts.execute(request, () => execute(input, options)); } : execute,
+    recoverReceipt: receipts?.recoverReceipt,
+    backupEntries: receipts ? async scope => receipts.backupEntries({ ...scope, availableRuns: scope?.availableRuns || await getAvailableRuns?.(scope.projectIds) }) : undefined,
+    importEntries: receipts ? input => receipts.importEntries(input) : undefined,
+    supports,
+  };
 }
 
 module.exports = { createModelRuntime };

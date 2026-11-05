@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PageProps, Project } from '../types';
 import type { WorkflowRun } from '../configuration-types';
@@ -15,17 +15,28 @@ function run(id: string, file: ArtifactMetadata, date: string): WorkflowRun {
 function props(runs: WorkflowRun[] = []): PageProps {
   return {
     activeProject: project, projects: [project], workspaceId: 'workspace', workspace: { id: 'workspace', name: '测试工作区' }, preferences: {}, ledger: [], prompts: [],
-    configuration: { categories: [], workflows: [], studioActions: [], connections: [{ id: 'connection', name: '测试服务', enabled: true }], models: [{ id: 'generation-model', name: '测试生成模型', modelId: 'fixture-generation', connectionId: 'connection', capabilities: ['image-generation'], enabled: true }, { id: 'editing-model', name: '测试编辑模型', modelId: 'fixture-editing', connectionId: 'connection', capabilities: ['image-editing'], enabled: true }] },
+    configuration: { categories: [], workflows: [], studioActions: [], credentials: [{ id: 'test-key', name: '测试账户', connectionId: 'connection', enabled: true }], connections: [{ id: 'connection', name: '测试服务', enabled: true }], models: [{ id: 'generation-model', name: '测试生成模型', modelId: 'fixture-generation', connectionId: 'connection', capabilities: ['image-generation'], enabled: true }, { id: 'editing-model', name: '测试编辑模型', modelId: 'fixture-editing', connectionId: 'connection', capabilities: ['image-editing'], enabled: true }] },
     workflowRunner: { runs, runtimeStatus: { available: true }, trashedArtifacts: [], previewArtifact: preview },
     onPromptApplied: vi.fn(), notify: vi.fn(),
   } as unknown as PageProps;
 }
+beforeEach(() => { vi.stubGlobal('window', { desktop: undefined }); });
 afterEach(() => { vi.unstubAllGlobals(); preview.mockClear(); });
 
 describe('图片工作台可见交互', () => {
+  it.each([3, 7, 20])('自定义数量 %s 张显示为可输入字段，并同步生成按钮', quantity => {
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key.startsWith('xuzuo-image-draft-v1-') ? JSON.stringify({ quantity, prompt: '自定义张数测试', generationModelId: 'generation-model' }) : null });
+    const html = renderToStaticMarkup(<ImageStudio {...props()} />);
+    expect(html.match(/<input[^>]*aria-label="图像生成数量"/g)).toHaveLength(1);
+    expect(html.match(new RegExp(`placeholder="输入张数" value="${quantity}"`, 'g'))).toHaveLength(1);
+    expect(html).toContain('1–20 张，可直接输入');
+    expect(html).toContain(`生成图片 · ${quantity} 张`);
+    expect(html).toContain(`逐张生成 ${quantity} 张`);
+    expect(html).not.toMatch(/role="combobox"[^>]*aria-label="图像生成数量"/);
+  });
   it('新项目显示空态和真实描述，所有参数下拉为自定义控件，没有示例配色工具', () => {
     const html = renderToStaticMarkup(<ImageStudio {...props()} />);
-    expect(html).toContain('把想法写在下方，开始第一张图片');
+    expect(html).toContain('从一个想法，开始第一张图片');
     expect(html).toContain('我的真实画面描述');
     expect(html).toContain('role="combobox"');
     expect(html).not.toContain('<select');
@@ -40,9 +51,12 @@ describe('图片工作台可见交互', () => {
     const html = renderToStaticMarkup(<ImageStudio {...props(history)} />);
     expect(html).toContain('1 张真实图片');
     expect(html).toContain('选择图片 1：real-image.png');
-    expect(html).toContain('文件、报告与回收站');
-    expect(html).toContain('review-report.txt');
-    expect(html).not.toContain('把想法写在下方，开始第一张图片');
+    expect(html).toContain('查看项目文件');
+    expect(html).toContain('导出图片');
+    expect(html).not.toContain('review-report.txt');
+    expect(html).not.toContain('确认交付当前版本');
+    expect(html).not.toContain('编辑图片');
+    expect(html).not.toContain('从一个想法，开始第一张图片');
     expect(preview).not.toHaveBeenCalled();
   });
 
@@ -52,38 +66,41 @@ describe('图片工作台可见交互', () => {
     expect(html).toContain('配置图片模型');
     expect(html).toContain('已填写内容会保留');
     expect(html).toContain('aria-label="图片实际使用模型"');
-    expect(html).toContain('aria-label="更多图片设置"');
+    expect(html).toContain('aria-label="打开格式与属性"');
     expect(html).not.toContain('role="dialog"');
-    const button = html.match(/<button class="btn btn-primary[^"]*"[^>]*>[\s\S]*?配置图片模型<\/button>/)?.[0];
+    const button = html.match(/<button[^>]*aria-label="配置图片模型"[^>]*>/)?.[0];
     expect(button).toBeDefined();
     expect(button).not.toContain('disabled');
     expect(preview).not.toHaveBeenCalled();
   });
 
-  it('保存的精修草稿显示编辑模型，待检查时可开始新精修且说明保留原结果', () => {
-    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ mode: 'refine', refinePrompt: '只清理边缘', editingModelId: 'editing-model' }) });
+  it('已有结果用同一工作台，收起面板仍保留唯一精修草稿和固定导出入口', () => {
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key.startsWith('xuzuo-studio-credential-v1:') ? null : JSON.stringify({ mode: 'refine', refinePrompt: '只清理边缘', editingModelId: 'editing-model' }) });
     const current = run('active-run', artifact('source-image', 'image'), '2026-10-30T01:00:00Z'); current.status = 'waiting-review';
     const html = renderToStaticMarkup(<ImageStudio {...props([current])} />);
-    expect(html).toContain('修改要求');
-    expect(html).toContain('测试编辑模型');
-    expect(html).toContain('只清理边缘');
-    const button = html.match(/<button class="btn btn-primary simple-image-generate"[^>]*>[\s\S]*?开始精修 · 1 张<\/button>/)?.[0]; expect(button).toBeDefined(); expect(button).not.toContain('disabled'); expect(html).toContain('新一轮生成或精修会保留原结果');
+    expect(html).toContain('修改');
+    expect(html).toContain('导出图片');
+    expect(html).not.toContain('simple-image-composer');
+    expect(html).toContain('开始精修 · 1 张');
+    expect(html.match(/id="image-prompt-image-project"/g)).toHaveLength(1);
+    expect(html).toContain('class="sw-panel" hidden=""');
+    expect(html).toContain('aria-label="工作台常用工具"');
     expect(preview).not.toHaveBeenCalled();
   });
   it('自定义用途在工作台可选，参考图不足时拦住生成并提供直接管理入口', () => {
     const state = props();
     const template = { id: 'custom-use', workspaceId: 'workspace', name: '三视图参考', prompt: '保留三个参考角度。', size: '1024x1024', background: 'auto' as const, minReferences: 3, enabled: true };
     state.configuration.useTemplates = [template];
-    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ preset: template.id, presetSnapshot: template, prompt: '保留我编辑过的原文', generationModelId: 'generation-model' }) });
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key.startsWith('xuzuo-studio-credential-v1:') ? null : JSON.stringify({ preset: template.id, presetSnapshot: template, prompt: '保留我编辑过的原文', generationModelId: 'generation-model' }) });
     const html = renderToStaticMarkup(<ImageStudio {...state} />);
-    expect(html).toContain('三视图参考'); expect(html).toContain('更多图片设置'); expect(html).not.toContain('role="dialog"');
+    expect(html).toContain('三视图参考'); expect(html).toContain('打开格式与属性'); expect(html).not.toContain('role="dialog"');
     expect(html).toContain('此用途还需要 3 张参考图。');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?生成图片 · 1 张<\/button>/s);
     expect(html).toContain('保留我编辑过的原文'); expect(preview).not.toHaveBeenCalled();
   });
   it('已删除用途仍显示项目快照及原描述，不把用途ID当名称或丢掉项目内容', () => {
     const snapshot = { id: 'removed-use', name: '已存商品用途', prompt: '原用途示例', size: '1536x1024', background: 'transparent', minReferences: 0 };
-    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ preset: snapshot.id, presetSnapshot: snapshot, prompt: '项目已修改的内容', generationModelId: 'generation-model' }) });
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key.startsWith('xuzuo-studio-credential-v1:') ? null : JSON.stringify({ preset: snapshot.id, presetSnapshot: snapshot, prompt: '项目已修改的内容', generationModelId: 'generation-model' }) });
     const html = renderToStaticMarkup(<ImageStudio {...props()} />);
     expect(html).toContain('已存商品用途（已删除或停用）'); expect(html).toContain('项目已修改的内容');
     expect(html).toContain('当前项目的描述、设置和参考图仍保留');

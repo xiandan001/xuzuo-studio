@@ -15,12 +15,13 @@ describe('素材库内置内容与旧桌面兼容', () => {
     expect(html.match(/loading="lazy"/g)).toHaveLength(12); expect(html).toContain('再显示 12 件'); expect(html).not.toContain('<select');
     expect(html).not.toContain('请在桌面版使用素材库');
   });
-  it('素材卡片只负责浏览，不重复当前项目名称和加入项目按钮', () => {
+  it('素材卡片可直接使用，不重复当前项目名称或要求每张选择目标', () => {
     const list = vi.fn(); vi.stubGlobal('window', { desktop: { assets: { list, attachBuiltin: vi.fn() } } });
     const project: Project = { id: 'project-one', workspaceId: 'w', name: '不应反复显示的项目名称', kind: 'word', referenceFiles: [], status: 'draft', description: '', updatedAt: '2026-11-02T00:00:00Z', costCents: 0, version: 1, accent: 'purple' };
     const html = renderToStaticMarkup(<Assets {...props} workspace={{ ...props.workspace, directory: 'C:/fixture' }} projects={[project]} activeProject={project} />);
     expect(html.match(/class="panel builtin-asset-card"/g)).toHaveLength(12);
     expect(html).toContain('查看素材'); expect(html).not.toContain(project.name);
+    expect(html.match(/class="builtin-asset-use"/g)).toHaveLength(12); expect(html).toContain('在作品中使用'); expect(html).toContain('用途模板');
     expect(html).not.toContain('builtin-asset-quick'); expect(html).not.toContain('asset-own-quick'); expect(html).not.toContain('用于当前项目');
     expect(list).not.toHaveBeenCalled();
   });

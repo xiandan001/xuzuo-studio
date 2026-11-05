@@ -1,4 +1,4 @@
-export type StudioActionTarget = 'request' | 'model' | 'models' | 'task' | 'reload' | 'references';
+export type StudioActionTarget = 'request' | 'model' | 'models' | 'task' | 'reload' | 'references' | 'quantity';
 export interface StudioActionIssue { message: string; action?: string; target?: StudioActionTarget; }
 export function studioActionIssue({ ready, busy, taskStatus, input, inputLabel, modelId, modelCount }: { ready: boolean; busy: string; taskStatus?: string; input: string; inputLabel: string; modelId?: string; modelCount: number }): StudioActionIssue | undefined {
   if (busy) {

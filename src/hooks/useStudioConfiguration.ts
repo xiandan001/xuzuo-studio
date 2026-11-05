@@ -43,7 +43,7 @@ export function useStudioConfiguration(workspaceId: string, notify: Notify): Stu
     },
     async exportOriginalStorage() {
       if (typeof originalRaw.current !== 'string') return fail('没有可读取的原始配置内容，请先恢复本机存储访问。');
-      try { return await downloadFile(`序作-原始配置-${Date.now()}.txt`, originalRaw.current, 'text/plain;charset=utf-8'); }
+      try { return await downloadFile('序作-原始配置.txt', originalRaw.current, 'text/plain;charset=utf-8'); }
       catch { return fail('原始配置未能导出，原数据仍保留，请检查本机文件下载。'); }
     },
     resetStorage() {

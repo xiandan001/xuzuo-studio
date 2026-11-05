@@ -4,6 +4,32 @@ const { validateEditorDocument } = require('./editor-document.cjs');
 const SUPPORTED = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const DOCUMENT_IMAGE_LIMIT = 20;
 const DOCUMENT_REFERENCE_IMAGE_LIMIT = 12;
+const APPENDIX = '待补充资料说明（非正文）';
+const NOTE_MARKER = '【待补充资料说明（非正文）】';
+const resolvedImageGap = text => /^待补充[：:]\s*原创产品插图需由本地排版器(?:生成或提供|提供或生成|生成|提供|安排)[；;]\s*当前交付不包含图片文件[。.]?$/.test(text.trim());
+
+function reconciledWordAppendices(blocks) {
+  const result = [];
+  for (let index = 0; index < blocks.length;) {
+    const heading = blocks[index];
+    if (heading.type !== 'heading' || heading.text !== APPENDIX) { result.push(heading); index++; continue; }
+    let end = index + 1; while (end < blocks.length && blocks[end].type !== 'heading') end++;
+    const original = blocks.slice(index + 1, end), retained = original.filter(block => block.type !== 'paragraph' || !resolvedImageGap(block.text));
+    if (retained.length || retained.length === original.length) result.push(heading, ...retained);
+    index = end;
+  }
+  return result;
+}
+function reconciledPptNotes(notes) {
+  return notes.replace(/(\n\n)?【待补充资料说明（非正文）】([\s\S]*?)(?=(?:\n\n)?【待补充资料说明（非正文）】|(?![\s\S]))/g, (original, separator = '', content) => {
+    const lines = content.split('\n'), retained = lines.filter(line => !resolvedImageGap(line));
+    if (retained.length === lines.length) return original;
+    return retained.some(line => line.trim()) ? separator + NOTE_MARKER + retained.join('\n') : '';
+  });
+}
+function reconcileIllustrationNotes(document) {
+  return document.kind === 'word' ? { ...document, blocks: reconciledWordAppendices(document.blocks) } : { ...document, slides: document.slides.map(slide => ({ ...slide, notes: reconciledPptNotes(slide.notes) })) };
+}
 function precedingIllustrations(record, step, previous) {
   if (step.documentImageStepIds === undefined) return previous?.artifacts || [];
   const ids = step.documentImageStepIds, steps = record.run.snapshot.steps, position = steps.findIndex(item => item.id === step.id);
@@ -39,12 +65,12 @@ function composeDocumentImages(kind, title, raw, images) {
     const available = document.slides.map((slide, index) => ({ slide, index })).filter(({ slide }) => !slide.imageId);
     if (available.length < remaining.length) throw new Error(`本次有 ${images.length} 张配图，但文稿只有 ${document.slides.length} 页；请减少配图或增加页面后重试排版。原正文和图片保留。`);
     const positions = new Map(remaining.map((image, index) => [available[Math.floor(index * available.length / remaining.length)].index, image.id]));
-    return validateEditorDocument({ ...document, slides: document.slides.map((slide, index) => {
+    return validateEditorDocument(reconcileIllustrationNotes({ ...document, slides: document.slides.map((slide, index) => {
       const imageId = positions.get(index) || slide.imageId;
       return imageId ? { ...slide, imageId, layout: ['image-right', 'image-full'].includes(slide.layout) ? slide.layout : 'image-right' } : slide;
-    }) });
+    }) }));
   }
-  const appendix = document.blocks.findIndex(item => item.type === 'heading' && item.text === '待补充资料说明（非正文）');
+  const appendix = document.blocks.findIndex(item => item.type === 'heading' && item.text === APPENDIX);
   const end = appendix < 0 ? document.blocks.length : appendix;
   const anchors = document.blocks.slice(0, end).map((item, index) => ({ item, index })).filter(({ item }) => item.type !== 'heading' && item.type !== 'image');
   if (!anchors.length) throw new Error('正文没有可放置配图的完整内容段落，请先补全正文。原图片保留。');
@@ -54,7 +80,7 @@ function composeDocumentImages(kind, title, raw, images) {
     const block = { id: crypto.randomUUID(), type: 'image', text: '', imageId: image.id, fontSize: 11, align: 'center', bold: false, italic: false };
     positions.set(position, [...positions.get(position) || [], block]);
   });
-  return validateEditorDocument({ ...document, blocks: document.blocks.flatMap((block, index) => [block, ...positions.get(index) || []]) });
+  return validateEditorDocument(reconcileIllustrationNotes({ ...document, blocks: document.blocks.flatMap((block, index) => [block, ...positions.get(index) || []]) }));
 }
 
 module.exports = { illustrationAssets, composeDocumentImages };

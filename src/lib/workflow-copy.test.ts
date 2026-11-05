@@ -12,6 +12,25 @@ const source: WorkflowDefinition = { id: 'flow', workspaceId: 'w', name: '图文
 ] };
 const copied = () => { let index = 0; return copyWorkflow(source, () => `new-${++index}`); };
 describe('复制工作流保留内部步骤引用', () => {
+  it('逐张图片交付来源数组重绑并深拷贝，未知引用继续保留供预检拒绝', () => {
+    const exported = { ...source.steps[3], contentSourceStepId: undefined, contentSourceStepIds: ['image-a', 'image-b', 'external'] };
+    const original = { ...source, outputKind: 'image' as const, steps: [...source.steps.slice(0, 2), exported] };
+    let index = 0; const result = copyWorkflow(original, () => `copy-${++index}`);
+    expect(result.steps[2].contentSourceStepIds).toEqual(['copy-1', 'copy-2', 'external']);
+    result.steps[2].contentSourceStepIds!.push('copy-only'); expect(exported.contentSourceStepIds).toEqual(['image-a', 'image-b', 'external']);
+  });
+  it('精修步骤的实际原图引用重绑，普通提示词和未知外部引用保持原值', () => {
+    const edit = { ...source.steps[0], id: 'image-edit', kind: 'image-editing' as const, name: '精修实际图片', imageSourceStepId: 'image-a', prompt: '保留image-a产品' };
+    let next = 0; const result = copyWorkflow({ ...source, steps: [source.steps[0], edit] }, () => `image-copy-${++next}`);
+    expect(result.steps[1].imageSourceStepId).toBe(result.steps[0].id); expect(result.steps[1].prompt).toBe(edit.prompt); expect(edit.imageSourceStepId).toBe('image-a');
+    expect(copyWorkflow({ ...source, steps: [{ ...edit, imageSourceStepId: 'external' }] }).steps[0].imageSourceStepId).toBe('external');
+  });
+  it('自动化独立检查的修订目标重绑到副本制作步骤，门限与原流程保持', () => {
+    const review = { id: 'reviewer', name: '独立检查', role: 'reviewer' as const, kind: 'text' as const, prompt: '返回检查JSON', inputSource: 'previous' as const, enabled: true, qualityGate: { repairStepId: 'body', maxRepairs: 1, minScore: 80 } };
+    let index = 0; const original = { ...source, steps: [...source.steps.slice(0, 3), review, source.steps[3]] }, result = copyWorkflow(original, () => `gate-copy-${++index}`);
+    expect(result.steps[3].qualityGate).toEqual({ repairStepId: result.steps[2].id, maxRepairs: 1, minScore: 80 });
+    expect(original.steps[3].qualityGate?.repairStepId).toBe('body');
+  });
   it('重绑导出正文与全部图源，原提示词、凭证、顺序和源流程都保留', () => {
     const before = JSON.stringify(source), result = copied();
     expect(result.id).toBe('new-5'); expect(result.workspaceId).toBe('w'); expect(result.name).toBe('图文提案（副本）');

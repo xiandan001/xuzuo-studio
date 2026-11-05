@@ -50,6 +50,7 @@ describe('真实本地素材库', () => {
   });
   it('加入项目复制真实bytes和独立ID，归档／外部删除素材不破坏项目副本', async () => {
     const f = await fixture(), item = await imported(f), copy = await attach(f, item.id);
+    expect(copy.name).toBe(item.name);
     expect(copy.id).not.toBe(item.id); expect(path.dirname(copy.path)).toBe(path.join(f.project.directory, 'files'));
     expect((await f.store.read(copy.id)).buffer).toEqual(await fs.readFile(f.source));
     await f.library.update({ workspaceId: 'workspace-one', id: item.id, archived: true }); await expect(attach(f, item.id)).rejects.toThrow('回收站');

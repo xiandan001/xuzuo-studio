@@ -5,6 +5,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { createTrashStore, safeBasename } = require('./trash-store.cjs');
 const { copyVerifiedFile } = require('./workspace-paths.cjs');
 const { assetProvenance } = require('./asset-provenance.cjs');
+const { timestampedFilename, stripSavedTimestamp } = require('./saved-filename.cjs');
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const TEXT_PREVIEW_BYTES = 1024 * 1024;
@@ -218,7 +219,8 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       const provenance = assetProvenance(input.provenance);
       const entries = await loadManifest();
       const id = randomUUID();
-      const name = safeName(input.name, input.mimeType);
+      const originalName = safeName(input.preserveOriginalName === true ? input.name : stripSavedTimestamp(input.name), input.mimeType);
+      const name = input.preserveOriginalName === true ? originalName : timestampedFilename(originalName);
       const entry = { id, name, mimeType: input.mimeType, bytes: buffer.length, sha256: createHash('sha256').update(buffer).digest('hex'), kind: kindFor(input.mimeType), createdAt: new Date().toISOString(), fileName: `${id}-${name}`, ...(input.runId ? { runId: String(input.runId) } : {}), ...(input.projectId ? { projectId: String(input.projectId) } : {}), ...(storageDirectory ? { storageDirectory } : {}), ...(provenance ? { provenance } : {}) };
       const location = await managedFor(entry);
       await location.ensureArea('files', true);
@@ -239,6 +241,17 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       const buffer = await fs.readFile(filename);
       if (entry.sha256 && createHash('sha256').update(buffer).digest('hex') !== entry.sha256) throw new Error('产物内容已在应用外改变，请作为新文件重新导入；原登记和费用保持不变。');
       return { ...metadata(entry, root), buffer };
+    });
+  }
+
+  function thumbnailSource(id) {
+    return serial(async () => {
+      if (!validId(id)) throw new Error('请使用有效的图片编号。');
+      const entry = (await loadManifest()).find(item => item.id === id);
+      if (!entry || entry.kind !== 'image') throw new Error('找不到这张受管图片。');
+      const filename = await managedPath(entry), stat = await fs.lstat(filename);
+      if (stat.size !== entry.bytes) throw new Error('图片大小与登记不一致，请重新导入。');
+      return { artifact: metadata(entry, root), key: JSON.stringify([id, filename, entry.sha256, entry.bytes, stat.mtimeMs, stat.ctimeMs]), read: () => read(id) };
     });
   }
 
@@ -289,7 +302,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       selected.push({ filename, mimeType });
     }
     const result = [];
-    for (const item of selected) result.push(await write({ name: path.basename(item.filename), mimeType: item.mimeType, buffer: await fs.readFile(item.filename), runId: scope.runId, projectId: scope.projectId }));
+    for (const item of selected) result.push(await write({ name: path.basename(item.filename), mimeType: item.mimeType, buffer: await fs.readFile(item.filename), runId: scope.runId, projectId: scope.projectId, preserveOriginalName: true }));
     return result;
   }
 
@@ -353,7 +366,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
   }); }
 
   const operations = createOperationTracker();
-  const api = { write, read, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
+  const api = { write, read, thumbnailSource, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
   return { ...Object.fromEntries(Object.entries(api).map(([name, action]) => [name, (...args) => operations.track(() => action(...args))])), drain: operations.drain, flush: operations.flush };
 }
 

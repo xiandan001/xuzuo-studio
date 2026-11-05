@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { GenerationIntent, WorkflowDefinition } from '../configuration-types';
 import type { PageProps } from '../types';
-import { RunWorkflowDialog, WorkflowEditor } from '../pages/Workflows';
-import type { RunContext } from '../pages/Workflows';
+import { RunWorkflowDialog } from './RunWorkflowDialog';
+import { WorkflowEditor } from './WorkflowEditor';
+import type { RunContext } from './RunWorkflowDialog';
 import './studio-run.css';
 
 export function StudioRunDialog({ props, intent, onClose }: { props: PageProps; intent: GenerationIntent; onClose: () => void }) {

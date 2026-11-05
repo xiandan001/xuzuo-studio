@@ -1,4 +1,16 @@
-# 序作工作台 0.13.0
+# 序作工作台 2.0.4
+
+## 当前版本
+
+- 以创作、项目、资源库和自动化组织主要入口；先在对话中选择模型与 Key，确认方案后制作。
+- 图片工作台的“更多设置”和“格式”支持直接输入 1–20 张并保留设置；也可按独立描述与张数分组生成。多张逐张执行，精修每张使用同一份原始参考图。
+- Word、PPT 和 Excel 支持应用内编辑、素材插入及 Office 文件导出；提供历史版本、撤销与重做。工作区与项目分别管理本地文件夹。
+- 失败后继续不重复已成功的图片，取消保留已有结果。每次调用费用独立累计，撤销、删除或取消不会抹去已发生费用。
+- 完善资源分类、回收站、任务整理、工作台折叠记忆及操作流程。
+
+最终 2.0.4 回归：1454 项通过、0 项失败，1 项既有 Windows 符号链接用例跳过；桌面 EXE 6 项和自定义安装／更新／卸载 UIA 8 项通过。发布验收使用隔离配置和本地测试服务，不读取用户真实 Key，也不代表所有外网供应商均已联网验收。
+
+正式安装包与 OTA 资源见 [GitHub Releases](https://github.com/xiandan001/xuzuo-studio/releases)。以下按版本记录之前的功能与验证边界。
 
 ## 自定义安装与界面一致性（0.13.0）
 
@@ -285,11 +297,11 @@ npm.cmd run desktop
 npm.cmd run package
 ```
 
-开发预览为 `http://127.0.0.1:5173/`，用于配置与模拟交互。1.0.0 的打包目标目录为 `outputs/release-v1.0.0/`：
+开发预览为 `http://127.0.0.1:5173/`，用于配置与模拟交互。2.0.4 的打包目标目录为 `outputs/release-v2.0.4/`：
 
-- `Xuzuo-Studio-Setup-1.0.0.exe`：Windows 自定义安装包。
-- `Xuzuo-Studio-Setup-1.0.0.exe.blockmap`：对应安装包的分块信息。
-- `Xuzuo-Studio-Setup-1.0.0.manifest.json`：安装受管文件清单。
+- `Xuzuo-Studio-Setup-2.0.4.exe`：Windows 自定义安装包。
+- `Xuzuo-Studio-Setup-2.0.4.exe.blockmap`：对应安装包的分块信息。
+- `Xuzuo-Studio-Setup-2.0.4.manifest.json`：安装受管文件清单。
 - `latest.yml`：版本、安装包大小与 SHA-512 更新元数据，采用 JSON 格式（合法 YAML 子集），由打包脚本生成。
 - `win-unpacked/序作工作台.exe`：可直接启动的桌面程序，需保留旁边的资源目录。
 

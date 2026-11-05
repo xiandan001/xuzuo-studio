@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { createFileDialogSession } = require('./file-dialog-session.cjs');
 const { createDialogLocations } = require('./dialog-locations.cjs');
 const { authorizeSave, writeDialogFile } = require('./dialog-save.cjs');
+const { timestampedDefaultPath } = require('./saved-filename.cjs');
 
 const FALLBACK_HTML = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; connect-src \'none\'; base-uri \'none\'; form-action \'none\'"><title>序作工作台</title><style>html{height:100%;border-radius:8px;overflow:hidden;font:16px "Segoe UI","Microsoft YaHei",sans-serif;color-scheme:light dark}body{box-sizing:border-box;margin:0;padding:28px;width:100%;height:100%;border-radius:8px;overflow:auto;line-height:1.7}h1{font-size:22px;margin:0 0 12px}p{white-space:pre-wrap;margin:12px 0}footer{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:24px}button{font:inherit;padding:9px 16px;border:1px solid #9a9da6;border-radius:9px;cursor:pointer}button:focus-visible{outline:3px solid #8d7bff;outline-offset:2px}</style></head><body></body></html>';
 const safeText = (value, fallback = '', limit = 5000) => typeof value === 'string' ? value.slice(0, limit) : fallback;
@@ -95,6 +96,7 @@ function createCustomDialogs({ app, BrowserWindow, ipcMain, getWindow, trustedSe
       if (kind !== 'message') record.preparation = (async () => {
         const category = options.properties.includes('openDirectory') ? 'directory' : kind;
         let defaultPath = safeText(original.defaultPath, '', 32768);
+        if (kind === 'save') defaultPath = timestampedDefaultPath(defaultPath || original.defaultFilename || '未命名文件.txt');
         if (!path.isAbsolute(defaultPath)) defaultPath = kind === 'save' ? path.join(recent.save || app.getPath('documents'), path.basename(defaultPath || '未命名文件.txt')) : recent[category] || app.getPath('documents');
         const discovery = locations.peek ? locations.peek(defaultPath) : await locations(defaultPath);
         if (record.finished) return;

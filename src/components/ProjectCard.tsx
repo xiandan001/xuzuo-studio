@@ -24,7 +24,8 @@ export function ProjectThumbnail({ project, runner }: { project: Project; runner
   const [preview, setPreview] = useState<{ projectId: string; imageId: string; url: string }>();
   useEffect(() => {
     let cancelled = false; setPreview(undefined);
-    if (imageId && visible) void currentRunner.current?.previewArtifact(imageId).then(result => {
+    const runner = currentRunner.current;
+    if (imageId && visible && runner) void (runner.thumbnailArtifact || runner.previewArtifact)(imageId).then(result => {
       if (!cancelled && result.dataUrl && /^data:image\/(png|jpeg|webp|gif);base64,/i.test(result.dataUrl)) setPreview({ projectId: project.id, imageId, url: result.dataUrl });
     }).catch(() => undefined);
     return () => { cancelled = true; };

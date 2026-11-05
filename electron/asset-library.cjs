@@ -62,6 +62,13 @@ function createAssetLibrary({ workspaceStorage, artifactStore, fileSystem = fsDe
     return { ...publicItem(record, workspaceId), buffer };
   }
   return {
+    search({ workspaceId, query, limit = 6 }) { return serial(async () => {
+      if (typeof query !== 'string' || query.length > 120 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('搜索内容最多 120 个字符，结果数量需为 1–50。');
+      const place = await location(workspaceId), assets = await readIndex(place), terms = query.normalize('NFKC').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+      const found = assets.filter(item => !item.archivedAt && terms.every(term => `${item.id} ${item.name} ${item.mimeType} ${kind(item.mimeType)}`.normalize('NFKC').toLocaleLowerCase().includes(term)));
+      found.sort((left, right) => { const a = left.name.normalize('NFKC').toLocaleLowerCase(), b = right.name.normalize('NFKC').toLocaleLowerCase(), text = terms.join(' '); return Number(right.id === text) - Number(left.id === text) || Number(b === text) - Number(a === text) || Number(b.startsWith(text)) - Number(a.startsWith(text)) || (Date.parse(right.createdAt) || 0) - (Date.parse(left.createdAt) || 0); });
+      return { total: found.length, items: found.slice(0, limit).map(item => { const metadata = publicItem(item, workspaceId); if (query.trim() !== item.id) delete metadata.provenance; return metadata; }) };
+    }); },
     list({ workspaceId }) { return serial(async () => {
       const place = await location(workspaceId), assets = await readIndex(place);
       return Promise.all(assets.map(async item => { let unavailable = false; try { await checkedFile(fs, path.join(place.directory, 'files', item.fileName)); } catch { unavailable = true; } return { ...publicItem(item, workspaceId), unavailable }; }));
@@ -110,10 +117,17 @@ function createAssetLibrary({ workspaceStorage, artifactStore, fileSystem = fsDe
       await atomicJson(fs, place.index, { version: 1, assets }); return publicItem(item, workspaceId);
     }); },
     read(input) { return serial(() => readAsset(input.workspaceId, input.id)); },
+    thumbnailSource({ workspaceId, id }) { return serial(async () => {
+      const place = await location(workspaceId), record = (await readIndex(place)).find(item => item.id === id);
+      if (!record || record.archivedAt || kind(record.mimeType) !== 'image') throw new Error('素材图片不存在或已回收。');
+      const filename = path.join(place.directory, 'files', record.fileName), stat = await checkedFile(fs, filename);
+      if (stat.size !== record.bytes) throw new Error('素材文件大小已改变，请重新导入。');
+      return { artifact: publicItem(record, workspaceId), key: JSON.stringify([workspaceId, id, filename, record.sha256, stat.size, stat.mtimeMs, stat.ctimeMs]), read: () => serial(() => readAsset(workspaceId, id)) };
+    }); },
     attach({ workspaceId, id, projectId }) { return serial(async () => {
       await workspaceStorage.assertProject(projectId, workspaceId);
       const asset = await readAsset(workspaceId, id);
-      return artifactStore.write({ name: asset.name, mimeType: asset.mimeType, buffer: asset.buffer, projectId, ...(asset.provenance ? { provenance: asset.provenance } : {}) });
+      return artifactStore.write({ name: asset.name, mimeType: asset.mimeType, buffer: asset.buffer, projectId, preserveOriginalName: true, ...(asset.provenance ? { provenance: asset.provenance } : {}) });
     }); },
     flush: () => queue,
   };

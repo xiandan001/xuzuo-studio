@@ -4,6 +4,33 @@ import { migratePreferences } from './preferences';
 import type { WorkflowRun } from '../configuration-types';
 
 export const blocksProjectTrash = (run: Pick<WorkflowRun, 'status'>) => run.status === 'running' || run.status === 'paused';
+export const isPurgedProject = (project: Pick<Project, 'purgedAt'>) => Boolean(project.purgedAt);
+export const isActiveProject = (project: Pick<Project, 'purgedAt' | 'trashedAt'>) => !project.purgedAt && !project.trashedAt;
+export const isRecoverableProject = (project: Pick<Project, 'purgedAt' | 'trashedAt'>) => !project.purgedAt && Boolean(project.trashedAt);
+
+/** Keep only the ownership and cost audit needed after irreversible removal. */
+export function purgedProjectAudit(project: Project, purgedAt = project.purgedAt): Project {
+  if (!purgedAt || !Number.isFinite(Date.parse(purgedAt))) throw new Error('永久移除时间无效，原项目记录未改变。');
+  return { id: project.id, workspaceId: project.workspaceId, name: project.name, kind: project.kind, status: 'draft', description: '', updatedAt: project.updatedAt,
+    costCents: project.costCents, version: project.version, accent: project.accent, trashedAt: project.trashedAt || purgedAt, purgedAt,
+    ...(project.liveLedgerBaselineCents !== undefined ? { liveLedgerBaselineCents: project.liveLedgerBaselineCents } : {}) };
+}
+
+/** Native or imported terminal audits win over stale active/recoverable UI records. */
+export function mergePurgedProjectAudits(current: Project[], incoming: readonly Project[]): Project[] {
+  const incomingById = new Map(incoming.filter(isPurgedProject).map(project => [project.id, project]));
+  let changed = false;
+  const next = current.map(project => {
+    const audit = incomingById.get(project.id);
+    if (audit && audit.workspaceId !== project.workspaceId) throw new Error('永久移除审计的工作区归属不一致，原记录未覆盖。');
+    if (project.purgedAt) return project;
+    if (!audit) return project;
+    changed = true; return purgedProjectAudit({ ...project, ...audit });
+  });
+  const existing = new Set(current.map(project => project.id));
+  for (const audit of incomingById.values()) if (!existing.has(audit.id)) { next.push(purgedProjectAudit(audit)); changed = true; }
+  return changed ? next : current;
+}
 
 export interface WorkspaceState {
   workspaces: Workspace[];
@@ -59,11 +86,12 @@ export function migrateLegacyWorkspace(legacy?: LegacyState | null): WorkspaceSt
 export function scopeWorkspace(projects: Project[], ledger: LedgerEntry[], workspaceId: string) {
   const scopedProjects = projects.filter(project => project.workspaceId === workspaceId);
   const projectIds = new Set(scopedProjects.map(project => project.id));
-  return { projects: scopedProjects.filter(project => !project.trashedAt), trashedProjects: scopedProjects.filter(project => Boolean(project.trashedAt)), ledger: ledger.filter(entry => projectIds.has(entry.projectId)) };
+  return { projects: scopedProjects.filter(isActiveProject), trashedProjects: scopedProjects.filter(isRecoverableProject), ledger: ledger.filter(entry => projectIds.has(entry.projectId)) };
 }
 
 export function projectTrashError(project: Project | undefined, workspaceId: string, busyIds: ReadonlySet<string>): string {
   if (!project || project.workspaceId !== workspaceId) return '项目不属于当前工作区。';
+  if (project.purgedAt) return '项目已永久移除，不能恢复或继续操作；历史费用保留。';
   if (project.trashedAt) return '项目已经在回收站中。';
   if (busyIds.has(project.id) || ['processing', 'paused'].includes(project.status)) return '请先完成或取消项目的运行、暂停任务，再移入回收站。';
   return '';
@@ -76,20 +104,34 @@ export function trashProjectState(projects: Project[], projectId: string, worksp
 
 export function restoreProjectState(projects: Project[], projectId: string, workspaceId: string): Project[] {
   return projects.map(project => {
-    if (project.id !== projectId || project.workspaceId !== workspaceId || !project.trashedAt) return project;
+    if (project.id !== projectId || project.workspaceId !== workspaceId || !isRecoverableProject(project)) return project;
     const restored = { ...project }; delete restored.trashedAt; return restored;
   });
 }
 
 export function moveProjectWorkspace(projects: Project[], projectId: string, workspaceId: string): Project[] {
-  return projects.map(project => project.id === projectId ? { ...project, workspaceId, businessCategoryId: undefined } : project);
+  return projects.map(project => project.id === projectId && !project.purgedAt ? { ...project, workspaceId, businessCategoryId: undefined } : project);
+}
+
+export function projectPurgeError(project: Project | undefined, workspaceId: string, busyIds: ReadonlySet<string>): string {
+  if (!project || project.workspaceId !== workspaceId) return '项目不属于当前工作区。';
+  if (project.purgedAt) return '';
+  if (!project.trashedAt) return '请先将项目移入回收站，再永久移除。';
+  if (busyIds.has(project.id) || ['processing', 'paused'].includes(project.status)) return '请先完成或取消项目任务，再永久移除。';
+  return '';
+}
+
+export function purgeProjectState(projects: Project[], projectId: string, workspaceId: string, busyIds: ReadonlySet<string>, timestamp: string): Project[] {
+  const project = projects.find(item => item.id === projectId);
+  if (projectPurgeError(project, workspaceId, busyIds) || !project || project.purgedAt) return projects;
+  return projects.map(item => item.id === projectId ? purgedProjectAudit(item, timestamp) : item);
 }
 
 export function recoverInterruptedTasks(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
     preferencesByWorkspace: Object.fromEntries(Object.entries(state.preferencesByWorkspace).map(([id, preferences]) => [id, migratePreferences(preferences)])),
-    projects: state.projects.map(project => ['processing', 'paused'].includes(project.status) ? { ...project, status: 'draft' } : project),
+    projects: state.projects.map(project => project.purgedAt ? purgedProjectAudit(project) : ['processing', 'paused'].includes(project.status) ? { ...project, status: 'draft' } : project),
     ledger: state.ledger.map(entry => entry.status === 'processing' ? { ...entry, status: 'cancelled' } : entry),
   };
 }

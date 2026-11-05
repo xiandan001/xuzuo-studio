@@ -22,6 +22,12 @@ describe('备份只映射实体编号和明确引用', () => {
 
 
 describe('文档多图工作流来源重绑', () => {
+  it('逐张图片交付来源数组随备份编号映射，普通提示词和变量保持原值', () => {
+    const ids = { first: 'restored-first', second: 'restored-second' };
+    const original = { contentSourceStepIds: ['first', 'second'], prompt: 'first', variables: { contentSourceStepIds: ['first'] } };
+    expect(remap(original, ids)).toEqual({ contentSourceStepIds: ['restored-first', 'restored-second'], prompt: 'first', variables: { contentSourceStepIds: ['first'] } });
+    expect(original.contentSourceStepIds).toEqual(['first', 'second']);
+  });
   it('只重绑显式图片step编号，普通正文和变量同名字符串保持不变', () => {
     const ids = { 'image-step': 'restored-image-step' };
     const source = { documentImageStepIds: ['image-step'], prompt: 'image-step', variables: { documentImageStepIds: ['image-step'] } };

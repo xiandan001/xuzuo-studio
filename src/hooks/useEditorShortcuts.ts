@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { isTextEditingTarget } from '../lib/edit-history';
 
-export function useEditorShortcuts(root: RefObject<HTMLElement | null>, enabled: boolean, actions: { save: () => Promise<boolean>; undo: () => void; redo: () => void }) {
-  const current = useRef({ enabled, actions }); current.current = { enabled, actions };
+export function useEditorShortcuts(root: RefObject<HTMLElement | null>, enabled: boolean, actions: { save: () => Promise<boolean>; undo: () => void; redo: () => void }, ownsTextInput?: (target: EventTarget | null) => boolean) {
+  const current = useRef({ enabled, actions, ownsTextInput }); current.current = { enabled, actions, ownsTextInput };
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (!current.current.enabled || event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing) return;
@@ -16,7 +16,7 @@ export function useEditorShortcuts(root: RefObject<HTMLElement | null>, enabled:
         event.preventDefault(); event.stopPropagation();
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         void current.current.actions.save();
-      } else if (['z', 'y'].includes(key) && !isTextEditingTarget(target)) {
+      } else if (['z', 'y'].includes(key) && (!isTextEditingTarget(target) || current.current.ownsTextInput?.(target))) {
         event.preventDefault(); event.stopPropagation();
         current.current.actions[event.shiftKey || key === 'y' ? 'redo' : 'undo']();
       }

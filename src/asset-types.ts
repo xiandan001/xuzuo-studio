@@ -8,6 +8,8 @@ export type ProjectReference = Pick<ArtifactMetadata, 'id' | 'name' | 'mimeType'
 export interface AssetCategory { id: string; name: string; }
 export interface AssetCategoryState { categories: AssetCategory[]; assignments: Record<string, string>; builtinAssignments: Record<string, string>; }
 export interface AssetLibraryBridge {
+  search?: (input: { workspaceId: string; query: string; limit?: number }) => Promise<{ items: StudioAsset[]; total: number }>;
+  thumbnail?: (input: { workspaceId: string; id: string }) => Promise<ArtifactPreview>;
   categories?: (input: { workspaceId: string }) => Promise<AssetCategoryState>;
   saveCategory?: (input: { workspaceId: string; id?: string; name: string }) => Promise<AssetCategoryState>;
   removeCategory?: (input: { workspaceId: string; id: string }) => Promise<AssetCategoryState>;

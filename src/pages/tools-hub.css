@@ -1,0 +1,14 @@
+.tools-hub{width:100%;max-width:1120px;margin:0 auto;padding:8px 4px 28px}
+.tools-hub .page-heading{margin-bottom:28px}.tools-hub .page-title{font-size:27px}.tools-hub .page-description{margin-top:8px}
+.tools-hub-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:24px}
+.tools-hub-group{min-width:0}.tools-hub-group>h2{margin:0 0 12px 3px;font-size:14px;line-height:1.6;font-weight:650;color:var(--ui-fg-muted)}
+.tools-hub-list{overflow:hidden;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface);box-shadow:var(--ui-shadow-sm)}
+.tools-hub-link{width:100%;min-height:102px;display:flex;align-items:center;gap:12px;padding:18px 15px;text-align:left;color:var(--ui-fg);background:transparent}
+.tools-hub-link+.tools-hub-link{border-top:1px solid var(--ui-border)}.tools-hub-link:hover{background:var(--ui-surface-hover)}.tools-hub-link:focus-visible{outline:2px solid var(--ui-focus);outline-offset:-3px;border-radius:10px}
+.tools-hub-icon{flex-shrink:0;width:37px;height:37px;display:grid;place-items:center;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface-subtle);color:var(--ui-fg-secondary)}
+.tools-hub-copy{flex:1;min-width:0;display:block}.tools-hub-copy>strong{display:block;font-size:15px;line-height:1.6;font-weight:650}.tools-hub-copy>small{display:block;margin-top:4px;font-size:13px;line-height:1.65;color:var(--ui-fg-secondary);overflow-wrap:anywhere}
+.tools-hub-arrow{flex-shrink:0;color:var(--ui-fg-muted)}
+.tools-hub-task-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;padding:0 5px;margin-left:8px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-subtle);color:var(--ui-fg-secondary);font-size:12px;line-height:1.5;font-weight:600;vertical-align:middle}
+@media(max-width:1200px){.tools-hub-groups{gap:16px}.tools-hub-link{padding:16px 12px;gap:9px}.tools-hub-icon{width:32px;height:32px}.tools-hub-arrow{display:none}}
+@media(max-width:950px){.tools-hub-groups{grid-template-columns:repeat(2,minmax(0,1fr));gap:24px 18px}}
+@media(max-width:650px){.tools-hub{padding-top:0}.tools-hub-groups{grid-template-columns:minmax(0,1fr);gap:24px}.tools-hub-link{min-height:86px;padding:16px}.tools-hub-arrow{display:block}.tools-hub .page-heading{margin-bottom:22px}}

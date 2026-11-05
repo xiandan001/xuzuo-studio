@@ -12,7 +12,7 @@ import type { AssetLibraryBridge, ProjectReference } from './asset-types';
 import type { AppUpdateBridge } from './update-types';
 import type { ReactNode } from 'react';
 
-export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models';
+export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools';
 export type ProjectKind = 'ppt' | 'word' | 'excel' | 'image';
 export type PromptCategory = ProjectKind | 'general';
 export interface Workspace {
@@ -34,6 +34,10 @@ export interface PromptDraft {
   imagePreset?: string;
 }
 export interface PromptTemplate extends PromptDraft {
+  archivedAt?: string;
+  trashedAt?: string;
+  favorite?: boolean;
+  lastUsedAt?: string;
   id: string;
   builtin: boolean;
   workspaceId?: string;
@@ -50,6 +54,7 @@ export interface PromptApplication {
 }
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'complete' | 'paused';
 export interface Project {
+  purgedAt?: string;
   confirmedDelivery?: { id: string; fingerprint: string; runStateSignature: string };
   liveLedgerBaselineCents?: number;
   referenceFiles?: ProjectReference[];
@@ -104,6 +109,12 @@ export interface Preferences {
   reduceMotion: boolean;
 }
 export interface PageProps {
+  activeView?: ViewId;
+  automationIntent?: import('./automation-types').AutomationIntent;
+  onAutomationIntentConsumed?: (token: string) => void;
+  onAutomateWorkflow?: (workflowId: string) => void;
+  searchTarget?: import('./lib/global-search').SearchTarget;
+  onSearchTargetConsumed?: (token: string) => void;
   onBatchProjectsCreated?: (projects: Project[]) => void;
   dataManagement?: ReactNode;
   onBindWorkspace?: () => Promise<boolean>;
@@ -122,26 +133,40 @@ export interface PageProps {
   onAssetApplied?: (token: string) => void;
   onPromptApplied: (token: string) => void;
   onSavePrompt: (draft: PromptDraft, id?: string) => void;
+  onManagePrompt?: (id: string, action: 'archive' | 'restore' | 'trash' | 'favorite' | 'unfavorite') => void;
   onUsePrompt: (template: PromptTemplate, resolvedContent: string) => void;
   onMoveProject: (projectId: string, workspaceId: string, changes?: import('./lib/project-move').ProjectMoveChanges) => Promise<boolean>;
   taskProgress?: Record<string, number>;
   projects: Project[];
   trashedProjects: Project[];
+  purgedProjects?: Project[];
+  projectPurgeLoading?: boolean;
+  projectPurgeError?: string;
+  pendingProjectPurges?: import('./project-purge-types').ProjectPurgeItem[];
+  onPurgeProjects?: (request: import('./project-purge-types').ProjectPurgeRequest) => Promise<import('./project-purge-types').ProjectPurgeResult>;
+  onRetryProjectPurge?: (requestId: string) => Promise<import('./project-purge-types').ProjectPurgeResult>;
+  onRefreshProjectPurges?: () => Promise<void>;
   onTrashProject: (projectId: string) => void;
   onRestoreProject: (projectId: string) => void;
+  onBulkProjectAction?: (ids: string[], action: 'trash' | 'restore') => Promise<{ done: number; skipped: number; failedIds?: string[] }>;
   ledger: LedgerEntry[];
   preferences: Preferences;
   activeProject: Project;
   navigate: (view: ViewId, projectId?: string) => void;
   notify: (message: string, type?: 'success' | 'info' | 'error') => void;
-  onCreateProject: (kind?: ProjectKind) => void;
+  onCreateProject: (kind?: ProjectKind, options?: { onCreated?: (project: Project) => void; onCancelled?: (error?: string) => void; initial?: { name?: string; description?: string }; quick?: boolean }) => void;
   onUpdateProject: (id: string, changes: Partial<Project>) => void;
   onProjectDelivered?: (projectId: string, receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>;
-  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: { prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => void;
+  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: { prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => void;
   onExport: (projectId?: string, draft?: { title: string; text: string }) => void;
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  projectPurge?: import('./project-purge-types').ProjectPurgeBridge;
+  automationPlanning?: import('./natural-automation-types').AutomationPlanningBridge;
+  officePreview?: import('./office-preview-types').OfficePreviewBridge;
+  automation?: import('./automation-types').AutomationBridge;
+  customerQuotes?: { export: (input: { workspaceId: string; projectId: string; format: 'pdf' | 'png'; title: string; html: string }) => Promise<{ saved: boolean; path?: string; artifact?: ArtifactMetadata }> };
   updates?: AppUpdateBridge;
   maintenance?: { status: () => Promise<{ available: boolean; reason?: string }>; openUninstall: () => Promise<{ opened: boolean }> };
   fileDialogs?: FileDialogsBridge;

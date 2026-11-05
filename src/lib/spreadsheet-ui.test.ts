@@ -59,7 +59,7 @@ describe('可编辑工作簿的输入、迁移与恢复', () => {
   it('格式化只改变显示；缺少公式计算证据不能验收通过', () => {
     const workbook = emptySpreadsheet('交付');
     workbook.sheets[0].cells.A1 = { value: null, formula: '1/0', format: 'currency' };
-    expect(displaySpreadsheetCell({ value: .25, format: 'percent' })).toBe('25%');
+    expect(displaySpreadsheetCell({ value: .25, format: 'percent' })).toBe('25.00%');
     expect(displaySpreadsheetCell({ value: null, formula: 'IF(TRUE,,)' }, { status: 'calculated', value: null })).toBe('');
     expect(displaySpreadsheetCell(workbook.sheets[0].cells.A1, { status: 'error', error: '#DIV/0!' })).toBe('#DIV/0!');
     expect(spreadsheetDeliveryChecks(workbook, undefined, { saved: true, exported: true }).find(check => check.id === 'formulas')?.status).toBe('unknown');

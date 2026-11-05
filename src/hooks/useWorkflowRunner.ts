@@ -9,7 +9,7 @@ import { updateRunVisibility } from '../lib/task-visibility';
 import { loadSimulationRuns, resetSimulationRuns, SIMULATION_RUNS_KEY, writeSimulationRuns } from '../lib/simulation-storage';
 import { downloadFile } from '../lib/files';
 type Notify = (message: string, type?: 'success' | 'info' | 'error') => void;
-export interface WorkflowRunnerOptions { activeProjectId?: string; workspaceId: string; projects: Project[]; ledger: LedgerEntry[]; configuration: StudioConfiguration; setProjects: Dispatch<SetStateAction<Project[]>>; setLedger: Dispatch<SetStateAction<LedgerEntry[]>>; isOtherTaskRunning: (projectId: string) => boolean; notify: Notify; }
+export interface WorkflowRunnerOptions { activeProjectId?: string; runDetailProjectId?: string; workspaceId: string; projects: Project[]; ledger: LedgerEntry[]; configuration: StudioConfiguration; setProjects: Dispatch<SetStateAction<Project[]>>; setLedger: Dispatch<SetStateAction<LedgerEntry[]>>; isOtherTaskRunning: (projectId: string) => boolean; notify: Notify; }
 
 function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<WorkflowRunner, 'runs' | 'start' | 'pause' | 'resume' | 'cancel' | 'retry' | 'manageRun' | 'simulationStorage'> {
   const [loaded] = useState(() => loadSimulationRuns(() => localStorage));
@@ -29,7 +29,7 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
   };
   const update = (id: string, changes: Partial<WorkflowRun>) => commit(runsRef.current.map(run => run.id === id ? { ...run, ...changes, updatedAt: new Date().toISOString() } : run));
   const projectStatus = (projectId: string, status: Project['status']) => optionsRef.current.setProjects(items => items.map(item => item.id === projectId ? { ...item, status, updatedAt: new Date().toISOString() } : item));
-  const ownedRun = (id: string) => runsRef.current.find(run => run.id === id && optionsRef.current.projects.some(project => project.id === run.projectId && project.workspaceId === optionsRef.current.workspaceId && !project.trashedAt));
+  const ownedRun = (id: string) => runsRef.current.find(run => run.id === id && optionsRef.current.projects.some(project => project.id === run.projectId && project.workspaceId === optionsRef.current.workspaceId && !project.trashedAt && !project.purgedAt));
   const cancelRun = (run: WorkflowRun, status: 'cancelled' | 'interrupted' = 'cancelled') => {
     const attempts = run.attempts.map(attempt => ['running', 'waiting-review'].includes(attempt.status) ? { ...attempt, status: 'cancelled' as const, summary: '本次尝试已取消，已发生的演示费用保留。' } : attempt);
     if (!update(run.id, { status, attempts })) return false;
@@ -90,11 +90,11 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
   };
   const tickRef = useRef(tick); tickRef.current = tick;
   useEffect(() => { const timer = window.setInterval(() => tickRef.current(), 1000); return () => window.clearInterval(timer); }, []);
-  const projectIds = new Set(options.projects.filter(item => item.workspaceId === options.workspaceId && !item.trashedAt).map(item => item.id));
+  const projectIds = new Set(options.projects.filter(item => item.workspaceId === options.workspaceId && !item.trashedAt && !item.purgedAt).map(item => item.id));
   return {
     simulationStorage: {
       issue: storageIssue,
-      async exportOriginal() { if (typeof originalRaw.current !== 'string') { optionsRef.current.notify('没有可读取的原始模拟历史，请先恢复存储访问。', 'error'); return false; } try { return await downloadFile(`序作-原始模拟历史-${Date.now()}.txt`, originalRaw.current, 'text/plain;charset=utf-8'); } catch { optionsRef.current.notify('模拟历史导出未完成，原始记录仍保留。', 'error'); return false; } },
+      async exportOriginal() { if (typeof originalRaw.current !== 'string') { optionsRef.current.notify('没有可读取的原始模拟历史，请先恢复存储访问。', 'error'); return false; } try { return await downloadFile('序作-原始模拟历史.txt', originalRaw.current, 'text/plain;charset=utf-8'); } catch { optionsRef.current.notify('模拟历史导出未完成，原始记录仍保留。', 'error'); return false; } },
       reload() { const result = loadSimulationRuns(() => localStorage); if (result.raw !== undefined) originalRaw.current = result.raw; if (result.issue) { updateIssue({ ...result.issue, canExportOriginal: typeof originalRaw.current === 'string' }); return false; } restoreRuns(result.runs); updateIssue(); optionsRef.current.notify('模拟历史已重新读取，没有自动续跑或新增演示费用。'); return true; },
       reset() { if (originalRaw.current === undefined) { optionsRef.current.notify('尚不能读取原始模拟历史，未重置，请先重新读取。', 'error'); return false; } const result = resetSimulationRuns(() => localStorage, `${SIMULATION_RUNS_KEY}.recovery.${Date.now()}-${crypto.randomUUID()}`, originalRaw.current); if (result.raw !== undefined) originalRaw.current = result.raw; if (result.issue) { updateIssue({ ...result.issue, canExportOriginal: typeof originalRaw.current === 'string' }); return false; } restoreRuns(result.runs); updateIssue(); optionsRef.current.notify('模拟历史已备份并重置，原有演示费用仍保留，真实任务没有被改变。'); return true; },
     },
@@ -102,7 +102,7 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
     start(workflow: WorkflowDefinition, projectId, input, variables) {
       if (!canWrite()) return false;
       const local = options.configuration.workflows.find(item => item.id === workflow.id && item.workspaceId === options.workspaceId);
-      const project = options.projects.find(item => item.id === projectId && item.workspaceId === options.workspaceId && !item.trashedAt);
+      const project = options.projects.find(item => item.id === projectId && item.workspaceId === options.workspaceId && !item.trashedAt && !item.purgedAt);
       if (!local) { options.notify('请先将工作流保存到当前工作区。', 'error'); return false; }
       const error = workflowValidation(local, project, options.configuration, input, variables);
       if (error) { options.notify(error, 'error'); return false; }
@@ -134,7 +134,7 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
       if (index < 0) return;
       const step = run.snapshot.steps[index];
       const model = options.configuration.models.find(item => item.id === step.modelConfigId && item.enabled);
-      const project = options.projects.find(item => item.id === run.projectId && !item.trashedAt);
+      const project = options.projects.find(item => item.id === run.projectId && !item.trashedAt && !item.purgedAt);
       if (!model || !project || [project.budgetCents, step.budgetCents].some(value => value != null && (!Number.isSafeInteger(value) || value < 0)) || project.budgetCents != null && project.costCents + workflowStepCost(step) > project.budgetCents || step.budgetCents != null && workflowStepCost(step) > step.budgetCents) { options.notify('模型不可用或已设置的金额上限不足，不能重试。', 'error'); return; }
       if (!update(id, { status: 'running', stepIndex: index, retryStepOnly: true })) return;
       projectStatus(run.projectId, 'processing');

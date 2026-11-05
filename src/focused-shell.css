@@ -1,0 +1,11 @@
+.focused-header-actions{gap:12px;min-width:0}
+.focused-header-actions .global-search{min-width:0;width:210px}
+.focused-header-more{width:86px;flex-shrink:0}
+.focused-header-more .select-trigger{min-height:38px;padding:7px 10px;font-size:13px;box-shadow:none;background:var(--ui-surface)}
+.focused-header-actions .appearance-control{flex-shrink:0}
+.studio-app-shell .sidebar .profile-button.focused-settings-button{padding:11px 10px;gap:10px;justify-content:flex-start;font-size:14px;color:var(--ui-fg-secondary)}
+.studio-app-shell .sidebar .profile-button.focused-settings-button>span{font-weight:500}
+.studio-app-shell .content-overview{padding-top:22px}
+.studio-app-shell .content-overview>.workspace-folder-bar{display:none}
+.studio-app-shell .content-documents .studio-run-status .btn-primary,.studio-app-shell .content-images .studio-run-status .btn-primary{background:var(--ui-surface);color:var(--ui-fg-secondary);border:1px solid var(--ui-border);box-shadow:none}
+@media(max-width:1100px){.focused-header-actions{gap:8px}.focused-header-actions .global-search{width:40px;min-width:40px;padding:10px}.focused-header-actions .global-search>span,.focused-header-actions .global-search>kbd{display:none}.focused-header-more{width:76px}.focused-header-actions .navigation-task-status>span{display:none}}

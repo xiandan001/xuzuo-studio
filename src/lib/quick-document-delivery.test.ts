@@ -21,6 +21,7 @@ interface Engine {
   shutdown(): Promise<void>;
 }
 const require = createRequire(import.meta.url);
+const { stripSavedTimestamp } = require('../../electron/saved-filename.cjs') as { stripSavedTimestamp: (name: string) => string };
 const { createArtifactStore } = require('../../electron/artifact-store.cjs') as { createArtifactStore(options: { directory: string; loadModule: NodeRequire }): Store };
 const { createLiveWorkflowEngine } = require('../../electron/live-workflow-engine.cjs') as { createLiveWorkflowEngine(options: Record<string, unknown>): Engine };
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -90,7 +91,7 @@ describe('快捷文档待检查前已生成真正Office文件', () => {
       expect(await zip.file(entry)!.async('string')).toContain(sentinel);
       if (kind === 'ppt') expect(await zip.file('ppt/notesSlides/notesSlide2.xml')!.async('string')).toContain('最后讲解-END-NOTES');
       if (kind === 'excel') expect(await zip.file('xl/worksheets/sheet1.xml')!.async('string')).toContain('<f>SUM(B2:B3)</f><v>50</v>');
-      const check = exported.artifacts?.find(artifact => artifact.name.endsWith('-检查报告.json'));
+      const check = exported.artifacts?.find(artifact => stripSavedTimestamp(artifact.name).endsWith('-检查报告.json'));
       expect(JSON.parse((await store.read(check!.id)).buffer.toString()).status).toBe('requires-human-review');
       const raw = run.attempts[0].artifacts![0];
       expect((await store.read(raw.id)).buffer.toString()).toBe(JSON.stringify(content[kind]));

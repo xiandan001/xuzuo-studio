@@ -73,10 +73,21 @@ export function validateSpreadsheetDocument(input: unknown): SpreadsheetDocument
       }
       if (raw.bold !== undefined) { if (typeof raw.bold !== 'boolean') throw new Error('加粗设置无效。'); cell.bold = raw.bold; }
       if (raw.align !== undefined) { if (!['left', 'center', 'right'].includes(raw.align)) throw new Error('单元格对齐设置无效。'); cell.align = raw.align; }
-      if (raw.format !== undefined) { if (!['general', 'number', 'currency', 'percent'].includes(raw.format)) throw new Error('单元格数字格式无效。'); cell.format = raw.format; }
+      if (raw.format !== undefined) { if (!['general', 'integer', 'number', 'currency', 'percent'].includes(raw.format)) throw new Error('单元格数字格式无效。'); cell.format = raw.format; }
       cells[address.address] = cell; cellCount++; if (cellCount > SPREADSHEET_LIMITS.cells) throw new Error('工作簿最多保存 100000 个非空单元格，请拆分。');
     }
-    return { id: source.id, name, rowCount: source.rowCount, columnCount: source.columnCount, cells };
+    const columnWidths: Record<string, number> = {};
+    if (source.columnWidths !== undefined) {
+      if (!source.columnWidths || typeof source.columnWidths !== 'object' || Array.isArray(source.columnWidths)) throw new Error('列宽设置无效。');
+      for (const [label, width] of Object.entries(source.columnWidths)) {
+        const column = parseCellAddress(`${label}1`);
+        if (column.column > source.columnCount || column.address !== `${label}1` || typeof width !== 'number' || !Number.isFinite(width) || width < 64 || width > 640) throw new Error('列宽需为 64–640 像素，且属于当前工作表。');
+        columnWidths[label] = Math.round(width);
+      }
+    }
+    const view = source.view;
+    if (view !== undefined && (!view || typeof view.header !== 'boolean' || view.sort && (!Number.isInteger(view.sort.column) || view.sort.column < 1 || view.sort.column > source.columnCount || !['asc', 'desc'].includes(view.sort.direction)) || view.filter && (!Number.isInteger(view.filter.column) || view.filter.column < 1 || view.filter.column > source.columnCount || typeof view.filter.text !== 'string' || view.filter.text.length > 200))) throw new Error('查看排序或筛选条件无效。');
+    return { id: source.id, name, rowCount: source.rowCount, columnCount: source.columnCount, cells, ...(Object.keys(columnWidths).length ? { columnWidths } : {}), ...(view ? { view: { header: view.header, ...(view.sort ? { sort: { column: view.sort.column, direction: view.sort.direction } } : {}), ...(view.filter ? { filter: { column: view.filter.column, text: view.filter.text } } : {}) } } : {}) };
   });
   return { schemaVersion: 1, kind: 'excel', title: value.title.trim(), sheets };
 }
@@ -188,9 +199,9 @@ export function calculateSpreadsheet(input: SpreadsheetDocument): SpreadsheetCal
   return calculateValidatedSpreadsheet(validateSpreadsheetDocument(input));
 }
 // The workbench cache passes only its normalized immutable validation result.
-export function calculateValidatedSpreadsheet(document: SpreadsheetDocument): SpreadsheetCalculation {
+export function calculateValidatedSpreadsheet(document: SpreadsheetDocument, reusable?: SpreadsheetCalculation['cells']): SpreadsheetCalculation {
   const sheets = new Map(document.sheets.map(sheet => [sheet.name.toLocaleLowerCase(), sheet]));
-  const cells: SpreadsheetCalculation['cells'] = Object.fromEntries(document.sheets.map(sheet => [sheet.id, {}]));
+  const cells: SpreadsheetCalculation['cells'] = Object.fromEntries(document.sheets.map(sheet => [sheet.id, { ...reusable?.[sheet.id] }]));
   const visiting = new Set<string>(), parsed = new Map<string, Node>(); let steps = 0;
   const tick = () => { if (++steps > SPREADSHEET_LIMITS.calculationSteps) fault('#LIMIT!', '计算量超过本地上限，请缩小公式范围或拆分工作簿。'); };
   const errorResult = (error: unknown): SpreadsheetCellResult => { const value = error instanceof FormulaFault ? error : new FormulaFault('#ERROR!', '本地公式计算未完成。'); return { status: value.unsupported ? 'unsupported' : 'error', error: value.code, message: value.message }; };
@@ -262,4 +273,32 @@ export function calculateValidatedSpreadsheet(document: SpreadsheetDocument): Sp
     if (result.status === 'error' || result.status === 'unsupported') issues.push({ sheetId: sheet.id, address, status: result.status, code: result.error || '#ERROR!', message: result.message || '未完成计算。' });
   }
   return { engineVersion: SPREADSHEET_ENGINE_VERSION, cells, formulaCount, calculatedCount, issues, allFormulasValid: issues.length === 0 };
+}
+
+// A bounded conservative dependency graph includes both IF branches. If a
+// workbook is too expensive or cannot be parsed, callers use the full engine.
+export function spreadsheetDependencies(document: SpreadsheetDocument): Map<string, Set<string>> | undefined {
+  const sheets = new Map(document.sheets.map(sheet => [sheet.name.toLocaleLowerCase(), sheet]));
+  const parents = new Map<string, Set<string>>(); let edges = 0, nodes = 0;
+  function reference(owner: string, sheet: SpreadsheetSheet, address: string) {
+    if (++edges > 200000) throw new Error('dependency-budget');
+    const key = `${sheet.id}!${parseCellAddress(address).address}`, values = parents.get(key) || new Set<string>(); values.add(owner); parents.set(key, values);
+  }
+  function visit(node: Node, sheet: SpreadsheetSheet, owner: string) {
+    if (++nodes > 300000) throw new Error('dependency-budget');
+    if (node.kind === 'reference' || node.kind === 'range') {
+      const source = node.sheet === undefined ? sheet : sheets.get(node.sheet.toLocaleLowerCase()); if (!source) throw new Error('missing-sheet');
+      if (node.kind === 'reference') reference(owner, source, node.address);
+      else {
+        const first = parseCellAddress(node.start), last = parseCellAddress(node.end), bottom = Math.max(first.row, last.row), right = Math.max(first.column, last.column);
+        if (bottom > source.rowCount || right > source.columnCount) throw new Error('range-bounds');
+        for (let row = Math.min(first.row, last.row); row <= bottom; row++) for (let column = Math.min(first.column, last.column); column <= right; column++) reference(owner, source, `${columnLabel(column)}${row}`);
+      }
+    } else if (node.kind === 'unary') visit(node.value, sheet, owner);
+    else if (node.kind === 'binary') { visit(node.left, sheet, owner); visit(node.right, sheet, owner); }
+    else if (node.kind === 'call') for (const argument of node.args) visit(argument, sheet, owner);
+  }
+  try { for (const sheet of document.sheets) for (const [address, cell] of Object.entries(sheet.cells)) if (cell.formula !== undefined) visit(parseFormula(cell.formula), sheet, `${sheet.id}!${address}`); }
+  catch { return undefined; }
+  return parents;
 }

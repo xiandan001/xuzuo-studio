@@ -80,7 +80,7 @@ html[data-app-theme="dark"] {
   --ui-checker-light: #16181c;
   --ui-checker-dark: #25292d;
 }
-:root {
+:root, html[data-app-theme] {
   --primary: var(--ui-accent);
   --primary-hover: var(--ui-accent-hover);
   --primary-soft: var(--ui-surface-active);

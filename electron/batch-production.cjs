@@ -5,6 +5,7 @@ const { atomicJson, checkedDirectory, checkedFile } = require('./workspace-paths
 const { safeRequest } = require('./live-workflow-engine.cjs');
 const { replaceVariables } = require('./live-validation.cjs');
 const { parseBatchImport, MAX_ROWS } = require('./batch-import.cjs');
+const { validateImageGroupCounts, validateImageGroupTemplate, validateImageGroupRecord, imageGroupRequest, imageGroupOutputError } = require('./image-group-batch.cjs');
 const active = status => ['running', 'paused', 'waiting-review'].includes(status);
 const terminal = status => ['complete', 'failed', 'cancelled', 'interrupted'].includes(status);
 const now = () => new Date().toISOString();
@@ -19,7 +20,7 @@ function quickReviewTail(run) {
   if (index === 2) return document && unchanged(steps[1], 'export') && unchanged(steps[2], 'manual-review');
   return index === 1 && (document || image) && unchanged(steps[1], 'manual-review') && unchanged(steps[2], 'export');
 }
-function createBatchProduction({ directory, workspaceStorage, liveEngine, artifactStore, loadModule = require, fileSystem = fs, assertAdmission = async () => undefined }) {
+function createBatchProduction({ directory, workspaceStorage, liveEngine, artifactStore, loadModule = require, fileSystem = fs, assertAdmission = async () => undefined, withProjectWrite = async (_id, action) => action() }) {
   const root = path.join(path.resolve(directory), 'batches-v1'), records = new Map();
   const snapshot = () => liveEngine.snapshot(undefined, { summaryOnly: true });
   let queue = Promise.resolve(), closing = false, pumping;
@@ -33,6 +34,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
       const target = path.join(root, file); await checkedFile(fileSystem, target);
       let record; try { record = JSON.parse(await fileSystem.readFile(target, 'utf8')); } catch { throw new Error('批量记录无法读取，原文件已保留，未自动提交任务。'); }
       if (record.version !== 1 || !validId(record.id) || file !== `${record.id}.json` || !Array.isArray(record.items) || !record.request || record.items.some(item => !validId(item.id) || !item.project || !Array.isArray(item.attempts))) throw new Error('批量记录结构异常，原文件已保留。');
+      validateImageGroupRecord(record);
       if (['running', 'waiting-review'].includes(record.status) || record.items.some(item => ['submitting', 'running'].includes(item.status))) {
         record.status = 'interrupted'; record.error = '应用已重启，未自动重发已提交请求。请查看各项目任务，再明确继续队列或重试单项。';
         for (const item of record.items) if (['submitting', 'running'].includes(item.status)) { item.status = 'interrupted'; item.error = '上次请求可能已提交，请检查项目记录；不会自动再次收费。'; }
@@ -48,7 +50,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
       const entries = snapshot.ledger.filter(entry => entry.projectId === item.project.id); item.ledger = entries; item.costCents = entries.reduce((sum, entry) => sum + entry.costCents, 0); item.unknownCost = entries.some(entry => entry.costState === 'unknown' || entry.calculation && entry.calculation.nativeCurrency === 'USD' && entry.calculation.cnyAmount === undefined);
       item.project.costCents = item.costCents;
       const run = snapshot.runs.find(run => run.id === item.runId);
-      if (run) { item.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); if (item.status !== 'queued' && item.status !== 'submitting') item.status = run.status === 'paused' ? 'interrupted' : run.status; }
+      if (run) { item.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); if (item.status !== 'queued' && item.status !== 'submitting') item.status = run.status === 'paused' ? 'interrupted' : run.status; const outputError = imageGroupOutputError(record, item, run); if (outputError) { item.status = 'failed'; item.error = outputError; } else if (record.kind === 'image-groups' && run.status === 'complete') { const exporter = run.snapshot.steps.filter(step => step.enabled && step.kind === 'export').at(-1); item.artifacts = run.attempts.filter(attempt => attempt.stepId === exporter?.id && attempt.status === 'complete').at(-1)?.artifacts || item.artifacts; } }
     }
     return result;
   }
@@ -58,11 +60,16 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
     return current.runs.find(run => run.id === item.runId) || current.runs.find(run => run.projectId === item.project.id && run.createdAt >= (item.attempts.at(-1)?.submittedAt || '9999'));
   }
   async function submit(id, itemId) {
+    const projectId = records.get(id).items.find(item => item.id === itemId).project.id;
+    return withProjectWrite(projectId, () => submitLocked(id, itemId));
+  }
+  async function submitLocked(id, itemId) {
     let record = records.get(id), item = record.items.find(item => item.id === itemId);
+    await admission(item.project);
     const location = await workspaceStorage.ensureProject({ projectId: item.project.id, workspaceId: item.project.workspaceId, name: item.project.name });
     await admission(item.project);
     const variables = { ...record.request.variables, ...item.variables }, resolution = replaceVariables(record.request.input, variables);
-    const request = { ...record.request, project: { ...item.project, directory: location.directory }, input: resolution.content, variables };
+    const request = imageGroupRequest(record, item, { ...record.request, project: { ...item.project, directory: location.directory }, input: resolution.content, variables });
     const previousRun = item.retryExisting ? await linkedRun(item) : undefined;
     if (previousRun && active(previousRun.status)) throw new Error('这项已有运行、暂停或待检查请求，请先处理该任务。');
     const continuing = previousRun && ['failed', 'interrupted'].includes(previousRun.status);
@@ -92,16 +99,29 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
           await mutate(id, next => { next.items.find(row => row.id === item.id).status = 'waiting-review'; next.status = 'waiting-review'; }); break;
         }
         if (terminal(run.status) || run.status === 'paused') {
-          await mutate(id, next => { const row = next.items.find(row => row.id === item.id); row.runId = run.id; row.status = run.status === 'paused' ? 'interrupted' : run.status; row.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); row.error = run.error; if (run.status !== 'complete') next.status = 'paused'; });
+          const outputError = imageGroupOutputError(record, item, run);
+          await mutate(id, next => { const row = next.items.find(row => row.id === item.id); row.runId = run.id; row.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); if ((next.status === 'cancelled' || row.status === 'cancelled') && run.status !== 'complete') { row.status = 'cancelled'; return; } row.status = outputError ? 'failed' : run.status === 'paused' ? 'interrupted' : run.status; row.error = outputError || run.error; if (next.status !== 'cancelled' && (run.status !== 'complete' || outputError)) next.status = 'paused'; });
           if (records.get(id).status !== 'running') break; continue;
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
-        await mutate(id, next => { const row = next.items.find(row => row.id === item.id); row.status = row.status === 'submitting' ? 'interrupted' : 'failed'; row.error = `${error.message || '本项未完成'}${row.status === 'interrupted' ? '；请求状态不确定，不会自动重发。' : ''}`; next.status = 'paused'; }).catch(() => undefined); break;
+        const cancelled = records.get(id); if (cancelled?.status === 'cancelled') break; if (cancelled?.items.find(row => row.id === item.id)?.status === 'cancelled') continue;
+        await mutate(id, next => { const row = next.items.find(row => row.id === item.id); if (next.status === 'cancelled' || row.status === 'cancelled') return; row.status = row.status === 'submitting' ? 'interrupted' : 'failed'; row.error = `${error.message || '本项未完成'}${row.status === 'interrupted' ? '；请求状态不确定，不会自动重发。' : ''}`; next.status = 'paused'; }).catch(() => undefined); break;
       }
     }
   }
   function launch(id) { if (pumping) return; const task = pump(id); pumping = { id, task }; void task.finally(() => { if (pumping?.task === task) pumping = undefined; }).catch(() => undefined); }
+  async function reconcileTrackedRuns(id) {
+    const current = await snapshot(), known = new Map(current.runs.map(run => [run.id, run]));
+    await mutate(id, next => {
+      for (const row of next.items.filter(item => !['queued', 'cancelled', 'complete'].includes(item.status))) {
+        const run = known.get(row.runId); if (!run) continue;
+        const outputError = imageGroupOutputError(next, row, run);
+        if (run.status === 'complete') { row.status = outputError ? 'failed' : 'complete'; row.error = outputError; row.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); }
+        else if (active(run.status)) row.status = run.status === 'waiting-review' ? 'waiting-review' : 'running';
+      }
+    });
+  }
   async function noOtherBatch(id) { if (pumping && pumping.id !== id) throw new Error('另一个批次仍在处理，请先暂停并等待当前项结束。'); const current = await snapshot(); if ([...records.values()].some(record => record.id !== id && record.items.some(item => current.runs.some(run => run.id === item.runId && active(run.status))))) throw new Error('其它批次仍有活动任务，请先处理后再开始。'); }
   return {
     parse(input) { return parseBatchImport(input, loadModule); },
@@ -113,10 +133,13 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
       if (!(await workspaceStorage.list()).workspaces.some(item => item.workspaceId === project.workspaceId)) throw new Error('请先为批量目标工作区绑定本地文件夹。');
       if (attachmentIds?.length) { const locations = await workspaceStorage.list(); for (const file of await artifactStore.list(attachmentIds)) if (!locations.projects.some(item => item.projectId === file.projectId && item.workspaceId === project.workspaceId)) throw new Error('共享参考文件必须属于本工作区。'); }
       const request = safeRequest({ workflow, project, connections, models, input: input.request.input, variables: variables || {}, attachmentIds: attachmentIds || [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+      const grouped = input.imageGroupCounts !== undefined;
+      if (grouped) { validateImageGroupTemplate(request); validateImageGroupCounts(input.imageGroupCounts, input.rows.length); }
       const time = now(), id = randomUUID(), template = typeof input.projectNameTemplate === 'string' ? input.projectNameTemplate.slice(0, 200) : `${input.name} · {{序号}}`;
       const items = input.rows.map((values, index) => { const row = { ...values, 序号: String(index + 1) }, name = replaceVariables(template, { ...request.variables, ...row }).content.trim().slice(0, 100) || `${input.name} ${index + 1}`; return { id: randomUUID(), row: index + 1, variables: row, project: { id: randomUUID(), workspaceId: project.workspaceId, name, kind: project.kind, description: request.input, status: 'draft', costCents: 0, ...(project.budgetCents == null ? {} : { budgetCents: project.budgetCents }), version: 0, updatedAt: time, accent: project.accent || 'blue' }, status: 'queued', attempts: [], artifacts: [] }; });
+      if (grouped) items.forEach((item, index) => { const resolved = replaceVariables(request.input, { ...request.variables, ...item.variables }); if (resolved.missing.length || !resolved.content.trim()) throw new Error('有分组需求为空或缺少变量，未创建项目或发送请求。'); item.imageCount = input.imageGroupCounts[index]; item.project.description = resolved.content; });
       for (const item of items) { await assertAdmission(item.project); const place = await workspaceStorage.ensureProject({ projectId: item.project.id, workspaceId: item.project.workspaceId, name: item.project.name }); item.project.directory = place.directory; }
-      const record = { version: 1, id, name: input.name.trim(), workspaceId: project.workspaceId, status: 'queued', createdAt: time, updatedAt: time, items, request, projectNameTemplate: template };
+      const record = { version: 1, id, name: input.name.trim(), workspaceId: project.workspaceId, status: 'queued', createdAt: time, updatedAt: time, items, request, projectNameTemplate: template, ...(grouped ? { kind: 'image-groups' } : {}) };
       await serial(() => write(record)); return publicRecord(record, await snapshot());
     },
     async list() { await ready; const current = await snapshot(); return Promise.all([...records.values()].reverse().map(record => publicRecord(record, current))); },
@@ -130,6 +153,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
         for (const raw of incoming) {
           const record = remap(structuredClone(raw));
           if (record.version !== 1 || !validId(record.id) || !record.request || !Array.isArray(record.items) || !record.items.length || record.items.some(item => !validId(item.id) || !validId(item.project?.id) || !Array.isArray(item.attempts))) throw new Error('备份中的批次结构无效。');
+          validateImageGroupRecord(record);
           const existing = records.get(record.id); if (existing) { if (backupId && existing.importedBackupId === backupId) { imported.push(record.id); continue; } throw new Error('恢复的批次编号与现有记录冲突，未覆盖。'); }
           record.importedBackupId = backupId; record.updatedAt = now(); record.status = record.items.every(item => item.status === 'complete') ? 'complete' : 'interrupted'; record.error = record.status === 'complete' ? undefined : '从备份恢复的批次未自动执行，请检查已提交任务后明确继续。';
           delete record.request.project.directory;
@@ -143,7 +167,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
       await ready; if (closing) throw new Error('应用正在退出。'); const record = records.get(id); if (!record) throw new Error('批次不存在。');
       const item = itemId ? record.items.find(item => item.id === itemId) : undefined;
       if (['retry-item', 'cancel-item', 'resume-review'].includes(action) && !item) throw new Error('请选择该批次中的一项。');
-      if (action === 'start') { await noOtherBatch(id); if (record.status === 'complete' || record.status === 'cancelled') throw new Error('批次已结束，请明确重试需要处理的单项。'); await mutate(id, next => { next.status = 'running'; next.error = undefined; }); launch(id); }
+      if (action === 'start') { await noOtherBatch(id); if (record.status === 'complete' || record.status === 'cancelled') throw new Error('批次已结束，请明确重试需要处理的单项。'); await reconcileTrackedRuns(id); await mutate(id, next => { next.status = 'running'; next.error = undefined; }); launch(id); }
       else if (action === 'pause') await mutate(id, next => { next.status = 'paused'; });
       else if (action === 'cancel' || action === 'cancel-item') {
         const targets = action === 'cancel' ? record.items : [item]; for (const row of targets) { const run = await linkedRun(row); if (run && active(run.status)) await liveEngine.control({ id: run.id, action: 'cancel' }); }
@@ -152,7 +176,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
         await noOtherBatch(id); const run = await linkedRun(item); if (run && active(run.status) || !['failed', 'interrupted', 'cancelled'].includes(item.status)) throw new Error('请先处理当前活动任务；只有失败、中断或取消项可明确重试。');
         await mutate(id, next => { const row = next.items.find(row => row.id === itemId); row.status = 'queued'; row.retryExisting = true; row.error = undefined; next.status = 'running'; }); launch(id);
       } else if (action === 'resume-review') {
-        await noOtherBatch(id); const run = await linkedRun(item); if (!run || run.status !== 'waiting-review') throw new Error('该项不在等待人工检查阶段。'); await admission(item.project); await liveEngine.control({ id: run.id, action: 'resume' }); await mutate(id, next => { next.items.find(row => row.id === itemId).status = 'running'; next.status = 'running'; }); launch(id);
+        await noOtherBatch(id); const run = await linkedRun(item); if (!run || run.status !== 'waiting-review') throw new Error('该项不在等待人工检查阶段。'); await withProjectWrite(item.project.id, async () => { await admission(item.project); await liveEngine.control({ id: run.id, action: 'resume' }); }); await mutate(id, next => { next.items.find(row => row.id === itemId).status = 'running'; next.status = 'running'; }); launch(id);
       } else throw new Error('批量操作无效。');
       return publicRecord(records.get(id), await snapshot());
     },

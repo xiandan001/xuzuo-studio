@@ -1,0 +1,18 @@
+.studio-result-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.studio-result-actions > .btn { min-height: 40px; white-space: nowrap; }
+.studio-more-actions { display: grid; gap: 10px; padding: 20px; }
+.studio-more-actions > button { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; width: 100%; padding: 15px 17px; text-align: left; color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 12px; box-shadow: 0 2px 6px rgb(15 23 42 / 4%); }
+.studio-more-actions > button:hover:not(:disabled) { background: var(--ui-surface-subtle); border-color: var(--ui-accent); }
+.studio-more-actions strong { font-size: 15px; font-weight: 600; }
+.studio-more-actions span { color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.5; }
+.studio-result-cost { padding: 24px; display: grid; gap: 12px; color: var(--ui-fg); }
+.studio-result-cost > p { margin: 0; color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.7; }
+.simple-workbench-heading > .studio-result-actions { margin-left: auto; }
+.ss-inline-composer { padding: 16px; display: grid; gap: 12px; }
+.ss-inline-composer > .field { width: 100%; min-height: 76px; }
+.ss-inline-composer .simple-composer-actions { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.studio-inline-key, .simple-composer-options > label { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; color: var(--ui-fg-secondary); font-size: 13px; }
+.studio-inline-key > .custom-select, .simple-composer-options > label > .custom-select { min-width: 130px; max-width: 210px; flex: 1; }
+.studio-inline-key > small, .simple-composer-options > label > small { flex-basis: 100%; max-width: 310px; line-height: 1.5; color: var(--ui-danger); }
+.simple-studio-drawer > .delivery-panel { margin: 18px; width: auto; }
+@media (max-width: 700px) { .studio-result-actions { gap: 5px; } .studio-result-actions > .btn { padding-inline: 10px; } }

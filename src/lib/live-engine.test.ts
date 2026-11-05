@@ -93,7 +93,7 @@ describe('真实工作流状态、传递、费用与交付', () => {
   it('无Key或不支持能力在发送请求前拦截', async () => {
     const f = await fixture(); const input = request(); input.workflow.steps[0].credentialId = undefined;
     expect((await f.engine.preflight(input)).errors.join('')).toContain('API Key');
-    await expect(f.engine.start(input)).rejects.toThrow(); expect(f.calls).toHaveLength(0); await f.engine.shutdown();
+    await expect(f.engine.start(input)).rejects.toMatchObject({ code: 'WORKFLOW_PREFLIGHT' }); expect(f.calls).toHaveLength(0); expect((await f.engine.snapshot()).runs).toHaveLength(0); await f.engine.shutdown();
   });
   it('失败响应已返回用量时仍核算费用并保留请求ID', async () => {
     const f = await fixture(async () => { throw Object.assign(new Error('服务已产生用量但输出失败'), { name: 'ModelRuntimeError', requestStarted: true, usage: { inputTokens: 100, outputTokens: 50 }, providerRequestId: 'test-provider-request' }); });
@@ -213,6 +213,23 @@ describe('真实工作流状态、传递、费用与交付', () => {
     const run = await f.engine.start(input); await waitFor(f.engine, snapshot => snapshot.runs[0]?.status === 'failed');
     await f.engine.control({ id: run.id, action: 'continue', stepBudgetCents: 0 }); const done = await waitFor(f.engine, snapshot => snapshot.runs[0].status === 'complete');
     expect(done.ledger).toHaveLength(2); expect(done.ledger.reduce((sum, entry) => sum + entry.costCents, 0)).toBe(10); expect(done.ledger.some(entry => entry.queryOnly && entry.costCents === 0)).toBe(true);
+    await f.engine.shutdown();
+  });
+  it('视频多次查询失败后仍只给原生成任务计费，不将失败查询当成新的生成费', async () => {
+    let count = 0; let store: Store | undefined;
+    const f = await fixture(async input => {
+      count++;
+      if (count === 1) throw Object.assign(new Error('生成等待中断'), { name: 'ModelRuntimeError', requestStarted: true, providerRequestId: 'owned-video-multiple', usage: { providerRequestId: 'owned-video-multiple' } });
+      expect(input.options?.existingTaskId).toBe('owned-video-multiple');
+      if (count === 2) throw Object.assign(new Error('只读查询暂时失败'), { name: 'ModelRuntimeError', requestStarted: true, providerRequestId: 'owned-video-multiple' });
+      return { text: '已读取原视频结果', artifacts: [await store!.write({ name: 'video.mp4', mimeType: 'video/mp4', buffer: Buffer.from('owned-video-result') })], usage: { seconds: 4 }, providerRequestId: 'owned-video-multiple' } as ModelResult;
+    });
+    store = f.store; f.options.modelRuntime.supports = (_connection: unknown, kind: string) => kind === 'video-generation';
+    const input = request(); input.project.kind = 'image'; input.workflow.outputKind = 'image'; input.connections[0].providerId = 'siliconflow'; input.connections[0].protocol = 'video'; input.models[0].capabilities = ['video-generation']; input.models[0].pricing = { unit: 'request', currency: 'CNY', input: '', output: '0.10' }; input.workflow.steps = [{ ...input.workflow.steps[0], kind: 'video-generation' }, input.workflow.steps[3]];
+    const run = await f.engine.start(input); await waitFor(f.engine, snapshot => snapshot.runs[0]?.status === 'failed');
+    await f.engine.control({ id: run.id, action: 'continue', stepBudgetCents: 0 }); await waitFor(f.engine, snapshot => snapshot.runs[0]?.status === 'failed' && snapshot.ledger.length === 2);
+    await f.engine.control({ id: run.id, action: 'continue', stepBudgetCents: 0 }); const done = await waitFor(f.engine, snapshot => snapshot.runs[0]?.status === 'complete');
+    expect(count).toBe(3); expect(done.ledger).toHaveLength(3); expect(done.ledger.find(entry => !entry.queryOnly)?.costCents).toBe(10); expect(done.ledger.filter(entry => entry.queryOnly).map(entry => entry.costCents)).toEqual([0, 0]); expect(done.ledger.reduce((sum, entry) => sum + entry.costCents, 0)).toBe(10);
     await f.engine.shutdown();
   });
 });

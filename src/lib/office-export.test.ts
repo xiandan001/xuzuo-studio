@@ -17,6 +17,7 @@ interface Zip { files: Record<string, { dir: boolean }>; file: (filename: string
 interface Workbook { xlsx: { load: (buffer: Buffer) => Promise<void> }; getWorksheet: (name: string) => { getCell: (address: string) => { value: unknown; formula?: string; result?: unknown } } | undefined; }
 const require = createRequire(import.meta.url);
 const { createArtifactStore } = require('../../electron/artifact-store.cjs') as { createArtifactStore: (options: { directory: string; loadModule: NodeRequire }) => Store };
+const { stripSavedTimestamp } = require('../../electron/saved-filename.cjs') as { stripSavedTimestamp: (name: string) => string };
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const runtimeManifest = path.join(projectRoot, 'work', 'ui-build', 'package.json');
 const dependencies = createRequire(existsSync(runtimeManifest) ? runtimeManifest : path.join(projectRoot, 'package.json'));
@@ -32,7 +33,7 @@ async function fixture() {
 }
 
 async function reportFrom(store: Store, artifacts: ArtifactMetadata[]) {
-  const report = artifacts.find(artifact => artifact.name.endsWith('-检查报告.json'));
+  const report = artifacts.find(artifact => stripSavedTimestamp(artifact.name).endsWith('-检查报告.json'));
   if (!report) throw new Error('missing report');
   return JSON.parse((await store.read(report.id)).buffer.toString('utf8')) as { embeddedImages: number; unplacedImageIds: string[]; rendered: boolean; originalLayoutPreserved: boolean; status: string; pages?: number; formulas: { count: number; cells: string[]; recalculated: boolean; resultsVerified: boolean } };
 }
@@ -44,7 +45,9 @@ describe('实际产物登记与 Office 导出', () => {
     const second = await store.write({ name: '同名.txt', mimeType: 'text/plain', text: '第二份' });
     expect(first.id).not.toBe(second.id);
     expect(first.path).not.toBe(second.path);
-    expect(first.name).toBe('同名.txt');
+    expect(first.name).toMatch(/^同名_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}(?:-\d+)?\.txt$/);
+    expect(stripSavedTimestamp(second.name)).toBe('同名.txt');
+    expect(first.name).not.toBe(second.name);
     const reopened = createArtifactStore({ directory, loadModule: dependencies });
     expect((await reopened.read(first.id)).buffer.toString()).toBe('第一份');
     expect((await reopened.read(second.id)).buffer.toString()).toBe('第二份');
@@ -62,6 +65,7 @@ describe('实际产物登记与 Office 导出', () => {
     const pdfFile = path.join(sourceDirectory, '样例.pdf');
     await fs.writeFile(textFile, '本机输入文字', 'utf8'); await fs.writeFile(pngFile, PNG); await fs.writeFile(pdfFile, '%PDF-1.4 test-only');
     const imported = await store.importPaths([textFile, pngFile, pdfFile], { projectId: 'local-project' });
+    expect(imported.map(item => item.name)).toEqual(['说明.txt', '图片.png', '样例.pdf']);
     expect(imported.every(item => item.projectId === 'local-project' && item.path !== textFile)).toBe(true);
     expect((await store.preview(imported[0].id)).text).toBe('本机输入文字');
     expect((await store.preview(imported[1].id)).dataUrl).toBe(`data:image/png;base64,${PNG.toString('base64')}`);

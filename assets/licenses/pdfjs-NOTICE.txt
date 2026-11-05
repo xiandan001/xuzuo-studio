@@ -1,0 +1,6 @@
+PDF.js (pdfjs-dist) 5.6.205
+Copyright Mozilla Foundation and contributors.
+Source: https://github.com/mozilla/pdf.js
+Package: https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.6.205.tgz
+License: Apache-2.0. The full license is included as pdfjs-Apache-2.0.txt.
+PDF.js is bundled locally for PDF page rendering; no remote PDF service is used.

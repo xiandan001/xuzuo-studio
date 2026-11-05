@@ -10,13 +10,13 @@ export function useWorkspaceFiles(options: Options) {
     const bridge = window.desktop?.workspaceFiles; if (!bridge) return;
     const locations = await bridge.list();
     current.current.setWorkspaces(items => items.map(item => { const location = locations.workspaces.find(entry => entry.workspaceId === item.id); return location && location.directory !== item.directory ? { ...item, directory: location.directory } : item; }));
-    current.current.setProjects(items => items.map(item => { const location = locations.projects.find(entry => entry.projectId === item.id); return location && (location.directory !== item.directory || location.workspaceId !== item.workspaceId) ? { ...item, directory: location.directory, workspaceId: location.workspaceId, businessCategoryId: location.workspaceId === item.workspaceId ? item.businessCategoryId : undefined } : item; }));
+    current.current.setProjects(items => items.map(item => { if (item.purgedAt) return item; const location = locations.projects.find(entry => entry.projectId === item.id); return location && (location.directory !== item.directory || location.workspaceId !== item.workspaceId) ? { ...item, directory: location.directory, workspaceId: location.workspaceId, businessCategoryId: location.workspaceId === item.workspaceId ? item.businessCategoryId : undefined } : item; }));
     return locations;
   };
   useEffect(() => { void refresh().catch(error => current.current.notify(publicError(error), 'error')); }, []);
   const choose = async (workspace: Pick<Workspace, 'id' | 'name'>) => {
     const bridge = window.desktop?.workspaceFiles; if (!bridge) return undefined;
-    const result = await bridge.choose({ workspaceId: workspace.id, name: workspace.name, projects: current.current.projects.filter(project => project.workspaceId === workspace.id).map(({ id, name, workspaceId }) => ({ id, name, workspaceId })) });
+    const result = await bridge.choose({ workspaceId: workspace.id, name: workspace.name, projects: current.current.projects.filter(project => project.workspaceId === workspace.id && !project.purgedAt).map(({ id, name, workspaceId }) => ({ id, name, workspaceId })) });
     if (result) await refresh();
     return result;
   };
@@ -52,12 +52,14 @@ export function useWorkspaceFiles(options: Options) {
       catch (error) { current.current.notify(publicError(error), 'error'); return false; }
     },
     async ensureProject(project: Project) {
+      if (project.purgedAt) throw new Error('项目已永久移除，不能重新创建其目录；历史费用保留。');
       const bridge = window.desktop?.workspaceFiles; if (!bridge) return undefined;
       const workspace = current.current.workspaces.find(item => item.id === project.workspaceId); if (!workspace) throw new Error('项目工作区不存在。');
       if (!await ensureBound(workspace)) return null;
       return bridge.ensureProject({ projectId: project.id, workspaceId: project.workspaceId, name: project.name });
     },
     async move(project: Project, destination: string) {
+      if (project.purgedAt) throw new Error('项目已永久移除，不能移动或恢复。');
       const bridge = window.desktop?.workspaceFiles; if (!bridge) return undefined;
       const workspace = current.current.workspaces.find(item => item.id === destination); if (!workspace) throw new Error('目标工作区不存在。');
       const locations = await refresh();
@@ -75,6 +77,7 @@ export function useWorkspaceFiles(options: Options) {
       }
     },
     async open(workspaceId: string, projectId?: string) {
+      if (projectId && current.current.projects.some(project => project.id === projectId && project.purgedAt)) { current.current.notify('项目已永久移除，不能从软件打开；历史费用保留。', 'info'); return; }
       try { await window.desktop?.workspaceFiles?.open(projectId ? { projectId } : { workspaceId }); }
       catch (error) { current.current.notify(publicError(error), 'error'); }
     },

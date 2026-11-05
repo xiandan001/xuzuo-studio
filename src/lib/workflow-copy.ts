@@ -13,7 +13,10 @@ export function copyWorkflow(source: WorkflowDefinition, newId: () => string = (
       ...step,
       id: ids.get(step.id)!,
       ...(step.contentSourceStepId ? { contentSourceStepId: ids.get(step.contentSourceStepId) || step.contentSourceStepId } : {}),
+      ...(step.contentSourceStepIds ? { contentSourceStepIds: step.contentSourceStepIds.map(id => ids.get(id) || id) } : {}),
+      ...(step.imageSourceStepId ? { imageSourceStepId: ids.get(step.imageSourceStepId) || step.imageSourceStepId } : {}),
       ...(step.documentImageStepIds ? { documentImageStepIds: step.documentImageStepIds.map(id => ids.get(id) || id) } : {}),
+      ...(step.qualityGate ? { qualityGate: { ...step.qualityGate, ...(step.qualityGate.repairStepId ? { repairStepId: ids.get(step.qualityGate.repairStepId) || step.qualityGate.repairStepId } : {}) } } : {}),
     })),
   };
 }

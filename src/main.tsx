@@ -4,9 +4,8 @@ import App from './App';
 import './styles.css';
 import './theme.css';
 import './appearance-palettes.css';
-import './app-shell.css';
-import './simple-layout.css';
 import './surface-depth.css';
+import './next-interface.css';
 import { initializeAppearance } from './lib/appearance';
 
 initializeAppearance();

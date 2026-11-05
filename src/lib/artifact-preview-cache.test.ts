@@ -35,3 +35,22 @@ describe('预览仅合并正在执行的读取', () => {
     await expect(cache.preview('one', 'file', read, { ...metadata, trashedAt: 'now' })).rejects.toThrow('不可预览');
   });
 });
+
+describe('缩略图完成缓存受容量、时间和文件状态约束', () => {
+  it('只在启用时复用完成结果，过期或回收后重新读取', async () => {
+    let time = 0;
+    const cache = createArtifactPreviewCache({ completed: true, ttlMs: 20, now: () => time });
+    const read = vi.fn(async () => ({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,aaaa', thumbnail: true }));
+    await cache.preview('one', 'file', read, metadata); await cache.preview('one', 'file', read, metadata); expect(read).toHaveBeenCalledTimes(1);
+    time = 21; await cache.preview('one', 'file', read, metadata); expect(read).toHaveBeenCalledTimes(2);
+    cache.invalidate('file'); await cache.preview('one', 'file', read, metadata); expect(read).toHaveBeenCalledTimes(3);
+    await expect(cache.preview('one', 'file', read, { ...metadata, trashedAt: 'now' })).rejects.toThrow('不可预览');
+  });
+  it('条数和字节限制会驱逐旧缩略图，不常驻原图或失败结果', async () => {
+    const cache = createArtifactPreviewCache({ completed: true, maxEntries: 1, maxBytes: 100 });
+    const read = vi.fn(async () => ({ mimeType: 'image/png', dataUrl: 'small' }));
+    await cache.preview('one', 'first', read); await cache.preview('one', 'second', read); await cache.preview('one', 'first', read); expect(read).toHaveBeenCalledTimes(3);
+    const oversized = vi.fn(async () => ({ mimeType: 'image/png', dataUrl: 'a'.repeat(101) }));
+    await cache.preview('one', 'large', oversized); await cache.preview('one', 'large', oversized); expect(oversized).toHaveBeenCalledTimes(2);
+  });
+});

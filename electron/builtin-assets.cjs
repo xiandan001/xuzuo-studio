@@ -58,7 +58,7 @@ function createBuiltinAssets({ directory = path.join(__dirname, '..', 'assets', 
     read,
     async validateId(id) { await selected(id); },
     async import({ workspaceId, id }) { await workspaceStorage.validateWorkspace(workspaceId); return assetLibrary.importBuiltin({ workspaceId, file: await read({ id }) }); },
-    async attach({ workspaceId, id, projectId }) { await workspaceStorage.assertProject(projectId, workspaceId); return artifactStore.write({ ...await read({ id }), projectId }); },
+    async attach({ workspaceId, id, projectId }) { await workspaceStorage.assertProject(projectId, workspaceId); return artifactStore.write({ ...await read({ id }), projectId, preserveOriginalName: true }); },
     async bundle({ id }) {
       const { item, license, packId } = await selected(id), file = await read({ id });
       const vector = await verified(item.vectorPath, item.vectorBytes, item.vectorSha256), notice = await checked(license.path, 40000);

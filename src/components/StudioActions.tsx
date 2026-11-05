@@ -6,7 +6,7 @@ import type { FormEvent } from 'react';
 import { ArrowRight, Check, GitBranch, Pencil, Play, Plus, Power, ShieldCheck, X } from 'lucide-react';
 import type { StudioAction, WorkflowDraft } from '../configuration-types';
 import type { PageProps, ProjectKind } from '../types';
-import { blankWorkflow, WorkflowEditor } from '../pages/Workflows';
+import { blankWorkflow, WorkflowEditor } from './WorkflowEditor';
 import './studio-actions.css';
 
 export interface StudioActionsProps { props: PageProps; studio: 'documents' | 'images'; projectId: string; outputKind: ProjectKind; input?: string; attachmentIds?: string[]; onBeforeRun?: () => boolean; }

@@ -6,27 +6,29 @@ import { StudioDrawer } from './StudioDrawer';
 
 const imageUrl = (value?: string) => value && /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(value) ? value : undefined;
 
-function useImagePreview(artifactId: string | undefined, runner: WorkflowRunner, enabled = true) {
+function useImagePreview(artifactId: string | undefined, runner: WorkflowRunner, enabled = true, thumbnail = false) {
   const runnerRef = useRef(runner); runnerRef.current = runner;
   const [preview, setPreview] = useState<{ id?: string; url?: string; loading: boolean; error: boolean }>({ loading: false, error: false });
   useEffect(() => {
     if (!artifactId || !enabled) { setPreview({ loading: false, error: false }); return; }
     let current = true;
     setPreview({ id: artifactId, loading: true, error: false });
-    void runnerRef.current.previewArtifact(artifactId).then(result => {
+    const currentRunner = runnerRef.current;
+    const read = thumbnail && currentRunner.thumbnailArtifact ? currentRunner.thumbnailArtifact : currentRunner.previewArtifact;
+    void read(artifactId).then(result => {
       if (!current) return;
       const url = imageUrl(result.dataUrl);
       setPreview({ id: artifactId, url, loading: false, error: !url });
     }).catch(() => { if (current) setPreview({ id: artifactId, loading: false, error: true }); });
     return () => { current = false; };
-  }, [artifactId, enabled]);
+  }, [artifactId, enabled, thumbnail]);
   return preview.id === artifactId ? preview : { loading: Boolean(artifactId && enabled), error: false, url: undefined };
 }
 
 function ImageThumbnail({ artifact, selected, runner, onSelect, index }: { artifact: ArtifactMetadata; selected: boolean; runner: WorkflowRunner; onSelect: () => void; index: number }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [visible, setVisible] = useState(false);
-  const preview = useImagePreview(artifact.id, runner, visible || selected);
+  const preview = useImagePreview(artifact.id, runner, visible || selected, true);
   useEffect(() => {
     if (!buttonRef.current) return;
     const observer = new IntersectionObserver(entries => {
@@ -41,7 +43,7 @@ function ImageThumbnail({ artifact, selected, runner, onSelect, index }: { artif
   </button>;
 }
 
-export function ImageGallery({ images, selectedId, runner, onSelect, onRefine, onSave, saving, canRefine, onImageReady, reference }: { reference?: { name: string; url?: string; loading?: boolean; error?: string }; images: ArtifactMetadata[]; selectedId?: string; runner: WorkflowRunner; onSelect: (id: string) => void; onRefine: (artifact: ArtifactMetadata) => void; onSave: (artifact: ArtifactMetadata) => void; saving: boolean; canRefine: boolean; onImageReady?: (id: string, image: HTMLImageElement) => void }) {
+export function ImageGallery({ images, selectedId, runner, onSelect, onRefine, onSave, saving, canRefine, onImageReady, reference, hideActions = false, showHistory = true, onCreate }: { reference?: { name: string; url?: string; loading?: boolean; error?: string }; images: ArtifactMetadata[]; selectedId?: string; runner: WorkflowRunner; onSelect: (id: string) => void; onRefine: (artifact: ArtifactMetadata) => void; onSave: (artifact: ArtifactMetadata) => void; saving: boolean; canRefine: boolean; onImageReady?: (id: string, image: HTMLImageElement) => void; hideActions?: boolean; showHistory?: boolean; onCreate?: () => void }) {
   const selected = images.find(image => image.id === selectedId) || images[0];
   const preview = useImagePreview(selected?.id, runner);
   const [expanded, setExpanded] = useState(false);
@@ -50,10 +52,14 @@ export function ImageGallery({ images, selectedId, runner, onSelect, onRefine, o
   return <section className="ig-gallery simple-result-gallery" aria-label="真实图片结果">
     <header className="ig-gallery-heading"><span><ImagePlus size={18} /><strong>{selected ? '当前图片结果' : '从一段描述开始'}</strong><small>{images.length ? `${images.length} 张真实图片` : '生成结果会保留在当前项目'}</small></span>{selected && preview.url && <button className="btn btn-ghost" onClick={() => setExpanded(true)}><Maximize2 size={15} />放大查看</button>}</header>
     <div className={`ig-preview ${selected ? 'ig-preview-checker' : ''}`}>
-      {!selected ? <div className="ig-empty"><span><ImagePlus size={32} /></span><h2>把想法写在下方，开始第一张图片</h2><p>选择用途和模型，确认后生成。需要参考时可先添加图片。</p></div> : preview.loading ? <div className="ig-preview-message" role="status"><LoaderCircle size={28} className="spin" /><p>正在读取本机图片…</p></div> : preview.url ? <img className="ig-main-image" style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', width: '100%', height: '100%', objectFit: 'contain' }} src={preview.url} alt={selected.name} onLoad={event => onImageReady?.(selected.id, event.currentTarget)} /> : <div className="ig-preview-message"><ImageIcon size={34} /><p>这张图片暂不能内置预览</p><small>可尝试另存，或检查文件与回收站。</small><button className="btn btn-secondary" onClick={() => onSave(selected)}>尝试另存</button></div>}
+      {!selected ? <div className="ig-empty"><span><ImagePlus size={32} /></span><h2>从一个想法，开始第一张图片</h2><p>在 AI 创作面板说明用途与画面；需要参考时可先添加素材。</p>{onCreate && <button type="button" className="btn btn-primary" onClick={onCreate}>打开创作输入</button>}</div> : preview.loading ? <div className="ig-preview-message" role="status"><LoaderCircle size={28} className="spin" /><p>正在读取本机图片…</p></div> : preview.url ? <img className="ig-main-image" style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', width: '100%', height: '100%', objectFit: 'contain' }} src={preview.url} alt={selected.name} onLoad={event => onImageReady?.(selected.id, event.currentTarget)} /> : <div className="ig-preview-message"><ImageIcon size={34} /><p>这张图片暂不能内置预览</p><small>可尝试另存，或检查文件与回收站。</small><button className="btn btn-secondary" onClick={() => onSave(selected)}>尝试另存</button></div>}
     </div>
-    {selected && <div className="ig-selected-caption"><div><strong title={selected.name}>{selected.name}</strong><span>{selected.mimeType} · {(selected.bytes / 1024).toFixed(0)} KB</span></div><div className="simple-result-actions"><button className="btn btn-primary" disabled={!canRefine} onClick={() => onRefine(selected)}><WandSparkles size={16} />编辑图片</button><button className="btn btn-secondary" disabled={saving} onClick={() => onSave(selected)}>{saving ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}另存图片</button></div></div>}
-    {images.length > 0 && <div className="simple-image-history"><h3>最近的结果</h3><div className="ig-thumbnails" aria-label="本项目图片历史">{images.map((artifact, index) => <ImageThumbnail key={artifact.id} artifact={artifact} selected={artifact.id === selected?.id} runner={runner} index={index} onSelect={() => onSelect(artifact.id)} />)}</div></div>}
+    {selected && <div className="ig-selected-caption"><div><strong title={selected.name}>{selected.name}</strong><span>{selected.mimeType} · {(selected.bytes / 1024).toFixed(0)} KB</span></div>{!hideActions && <div className="simple-result-actions"><button className="btn btn-primary" disabled={!canRefine} onClick={() => onRefine(selected)}><WandSparkles size={16} />编辑图片</button><button className="btn btn-secondary" disabled={saving} onClick={() => onSave(selected)}>{saving ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}另存图片</button></div>}</div>}
+    {showHistory && images.length > 0 && <div className="simple-image-history"><h3>最近的结果</h3><div className="ig-thumbnails" aria-label="本项目图片历史">{images.map((artifact, index) => <ImageThumbnail key={artifact.id} artifact={artifact} selected={artifact.id === selected?.id} runner={runner} index={index} onSelect={() => onSelect(artifact.id)} />)}</div></div>}
     {expanded && selected && preview.url && <StudioDrawer title="查看原图" description={selected.name} onClose={() => setExpanded(false)}><div className="simple-image-lightbox"><img src={preview.url} alt={selected.name} style={{ maxWidth: '100%', maxHeight: '75dvh', objectFit: 'contain' }} /><button className="btn btn-secondary" onClick={() => onSave(selected)}><Download size={16} />另存原图</button></div></StudioDrawer>}
   </section>;
+}
+
+export function ImageHistoryNavigation({ images, selectedId, runner, onSelect }: { images: ArtifactMetadata[]; selectedId?: string; runner: WorkflowRunner; onSelect: (id: string) => void }) {
+  return <nav className="sw-content-nav sw-image-navigation" aria-label="本项目图片历史">{images.length ? images.map((artifact, index) => <ImageThumbnail key={artifact.id} artifact={artifact} selected={artifact.id === selectedId} runner={runner} index={index} onSelect={() => onSelect(artifact.id)} />) : <p className="sw-placeholder">还没有生成结果。首张图片完成后会显示在这里。</p>}</nav>;
 }

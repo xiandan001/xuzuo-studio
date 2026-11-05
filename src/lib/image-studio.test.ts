@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowRun } from '../configuration-types';
 import type { ArtifactMetadata } from '../live-types';
 import { followGalleryImage, imageArtifactTarget, imageCapability, imageCreationDescription, imageReferenceIds, imageTaskRequest, isGalleryImageBase, projectImageContent, readImageDraft, updateImageDraft } from './image-studio';
+import { MAX_IMAGE_QUANTITY, validImageQuantity } from './image-quantity';
 
 const file = (id: string, kind: ArtifactMetadata['kind'] = 'image'): ArtifactMetadata => ({ id, name: `${id}.${kind === 'image' ? 'png' : 'txt'}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain', bytes: 20, path: `files/${id}`, kind, projectId: 'project', createdAt: '2026-10-30T01:00:00Z' });
 function run(id: string, artifacts: ArtifactMetadata[], updatedAt: string, workflowId = id): WorkflowRun {
@@ -9,6 +10,20 @@ function run(id: string, artifacts: ArtifactMetadata[], updatedAt: string, workf
 }
 
 describe('图片工作台的真实结果与描述', () => {
+  it('自定义整数张数在创建、精修、草稿重载后保持一致，不再限于1/2/4', () => {
+    for (let quantity = 1; quantity <= MAX_IMAGE_QUANTITY; quantity++) {
+      const draft = readImageDraft(JSON.stringify({ quantity, prompt: '制作表情包', refinePrompt: '清理边缘' }), '');
+      expect(validImageQuantity(quantity)).toBe(true);
+      expect(draft.quantity).toBe(quantity);
+      expect(imageTaskRequest(draft).count).toBe(quantity);
+      expect(imageTaskRequest({ ...draft, mode: 'refine' }, 'original').parameters.attachmentIds).toEqual(['original']);
+      expect(imageTaskRequest({ ...draft, mode: 'refine' }, 'original').count).toBe(quantity);
+    }
+  });
+  it.each([undefined, null, '', '3', 0, -1, 1.5, 21, 90, Number.NaN, Number.POSITIVE_INFINITY])('拒绝非法张数 %s，持久化数据安全回退到1张', quantity => {
+    expect(validImageQuantity(quantity)).toBe(false);
+    expect(readImageDraft(JSON.stringify({ quantity }), '').quantity).toBe(1);
+  });
   it('参考图仅保留在项目文件，不因导出引用进入生成结果；真实partial和可核实legacy仍保留', () => {
     const generated = file('new-result'), person = file('person'), clothes = file('clothes');
     const actual = run('generation', [generated], '2026-10-30T01:00:00Z');

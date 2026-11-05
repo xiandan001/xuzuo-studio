@@ -13,7 +13,7 @@ export function generationQualityInstructions(kind: ProjectKind, capability = 't
   ].filter(Boolean).join('\n');
   if (kind === 'ppt') return `${factual}\n必须返回可解析的 JSON 对象 {"title":"演示标题","slides":[{"title":"每页标题","bullets":["可直接上版的完整正文要点"],"notes":"补充讲解与数据依据"}],"meta":{"missingInputs":[]}}，不要 Markdown 围栏。${options.pageCount ? `目标为 ${options.pageCount} 页，遵守用户明确要求的页数。` : '严格遵守用户指定页数；未指定时根据内容组织完整的适量页面。'}每页围绕一个明确结论，通常 2–5 条简洁要点；避免长段堆砌、只有提纲或页码标题。形成封面、背景/问题、核心方案、执行计划与结论的连贯叙事，按用途调整；不要凭空增加无关章节。精修时返回完整修订文稿，保留未要求修改的内容。`;
   if (kind === 'word') return `${factual}\n必须返回可解析的 JSON 对象，不要 Markdown 围栏。纯文字文稿使用 {"title":"文档标题","sections":[{"heading":"章节标题","paragraphs":["可直接交付的完整正文段落"]}],"meta":{"missingInputs":[]}}。需要表格时改用 {"schemaVersion":1,"kind":"word","title":"文档标题","blocks":[{"id":"body-1","type":"paragraph","text":"完整正文","fontSize":12,"align":"left","bold":false,"italic":false},{"id":"table-1","type":"table","text":"","fontSize":12,"align":"left","bold":false,"italic":false,"table":{"columns":[{"id":"column-1"},{"id":"column-2"}],"rows":[{"id":"row-1","cells":[{"id":"cell-1","text":"表头一"},{"id":"cell-2","text":"表头二"}]},{"id":"row-2","cells":[{"id":"cell-3","text":"实际内容"},{"id":"cell-4","text":"实际内容"}]}],"header":true,"borders":true}}],"meta":{"missingInputs":[]}}。blocks 与 sections 只选一种；标题段落 type 为 heading，项目列表为 bullet，均保留同样样式字段。表格必须是原生 table 结构，禁止用图片或竖线文本代替；每表 1–30 行、1–12 列，各行单元格数与 columns 一致，表内行/列/单元格 id 唯一且精修时保留，text 始终为空。章节有清晰层级，段落完整、术语一致，明确目的、范围、安排和结论；根据用户用途取舍，不输出空泛提纲或重复套话。事实来源和需要客户提供的信息单列在 meta，不假造引文。精修时返回整份修订正文，保留未要求修改的表格与稳定编号。`;
-  if (kind === 'excel') return `${factual}\n返回可解析的 JSON 对象 {"title":"表格标题","sheets":[{"name":"工作表名","columns":["列名"],"rows":[["实际数据",0,{"formula":"SUM(B2:B3)"}]]}]}，不要 Markdown 围栏。列名、单位、数据类型明确，逐行数据完整，公式仅引用真实存在的单元格；不要用演示金额冒充用户数据。公式结果需要在交付前重算核验，不能声称已执行实际未执行的计算。`;
+  if (kind === 'excel') return `${factual}\n返回可解析的 JSON 对象 {"title":"表格标题","sheets":[{"name":"工作表名","columns":["列名"],"rows":[["实际数据",0,{"formula":"SUM(B2:B3)"}]],"formatting":{"boldRanges":["A1:C1"],"columnWidths":{"A":18},"numberFormats":{"B2":"0.00"}}}]}，不要 Markdown 围栏。软件会将 JSON 写入真实 XLSX 并重算，不要声称交付不能包含表格文件。列名、单位、数据类型明确，逐行数据完整，公式仅引用真实存在的单元格；不要用演示金额冒充用户数据。columns 定义的表头由软件默认加粗；可用 formatting.boldRanges 指定加粗区域、columnWidths 指定8.43–90字符列宽、numberFormats 指定 General、0、0.00 或0.00%格式，每类最多200个区域。也可用 {"value":200,"bold":true,"format":"currency"} 形式指定单元格，format仅支持 general、integer、number、currency、percent；公式对象可带同样样式字段。不要输出其他未支持的格式指令，不能把样式要求只写在文字说明。公式结果由软件在交付前重算核验，不能声称已执行实际未执行的计算。`;
   return factual;
 }
 
@@ -31,6 +31,7 @@ export function withCreationFoundation(workflow: WorkflowDefinition): WorkflowDe
   const exporter = enabled.filter(step => step.kind === 'export').at(-1);
   const finalText = exporter?.contentSourceStepId || enabled.filter(step => step.kind === 'text').at(-1)?.id;
   return { ...workflow, steps: workflow.steps.map(step => {
+    if (step.role === 'planner' || step.role === 'reviewer') return step;
     if (!step.enabled || step.prompt.startsWith(FOUNDATION_MARKER)) return step;
     const image = ['image-generation', 'image-editing'].includes(step.kind);
     const document = workflow.outputKind !== 'image' && step.kind === 'text' && step.id === finalText;

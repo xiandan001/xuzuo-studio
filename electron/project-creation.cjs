@@ -2,7 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { key } = require('./workspace-paths.cjs');
 
 function registerProjectCreation({ handle, dialog, getWindow, workspaceStorage, withProjectWrite, beforeReconnect = async () => undefined }) {
-  let selection, choosing = false, creating = false, reconnecting = false;
+  let selection, claimedSelectionId, choosing = false, creating = false, reconnecting = false;
   handle('workspace-reconnect', async input => {
     if (choosing || creating || reconnecting) throw new Error('项目文件夹正在处理中，请等待当前操作完成。');
     if (!input || typeof input.workspaceId !== 'string') throw new Error('请选择需要重新连接的工作区。');
@@ -29,7 +29,7 @@ function registerProjectCreation({ handle, dialog, getWindow, workspaceStorage, 
       const directory = await workspaceStorage.validateWorkspace(input.workspaceId);
       const result = await dialog.showOpenDialog(getWindow(), {
         title: '选择或新建项目文件夹', buttonLabel: '使用此项目文件夹',
-        defaultPath: selection?.workspaceId === input.workspaceId ? selection.directory : directory,
+        defaultPath: selection?.workspaceId === input.workspaceId && selection.selectionId !== claimedSelectionId ? selection.directory : directory,
         properties: ['openDirectory', 'createDirectory'], allowedRoot: directory, selectEmpty: true,
         validateSelection: paths => workspaceStorage.inspectProjectFolder({ workspaceId: input.workspaceId, directory: paths[0] }),
       });
@@ -44,7 +44,11 @@ function registerProjectCreation({ handle, dialog, getWindow, workspaceStorage, 
     if (!selection || !input || input.selectionId !== selection.selectionId) throw new Error('请先选择或新建项目文件夹，再创建项目。');
     if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 50) throw new Error('项目名称需要1至50个字符。');
     const chosen = selection; creating = true;
-    try { return await withProjectWrite(chosen.projectId, () => workspaceStorage.claimProjectFolder({ projectId: chosen.projectId, workspaceId: chosen.workspaceId, name: input.name.trim(), directory: chosen.directory })); }
+    try {
+      const result = await withProjectWrite(chosen.projectId, () => workspaceStorage.claimProjectFolder({ projectId: chosen.projectId, workspaceId: chosen.workspaceId, name: input.name.trim(), directory: chosen.directory }));
+      claimedSelectionId = chosen.selectionId;
+      return result;
+    }
     finally { creating = false; }
   });
 }

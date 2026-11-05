@@ -39,6 +39,23 @@ describe('folder-first native selection authority', () => {
     await expect(f.choose({ workspaceId: 'workspace' })).rejects.toThrow('处理中');
     expect(f.storage.inspectProjectFolder).not.toHaveBeenCalled(); resolve({ canceled: true, filePaths: [] }); await pending;
   });
+  it('new projects start at the workspace root after a successful claim while a retry keeps its original ticket', async () => {
+    const f = fixture(), selected = await f.choose({ workspaceId: 'workspace' });
+    f.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] }); await f.choose({ workspaceId: 'workspace' });
+    expect(f.showOpenDialog.mock.calls.at(-1)[1].defaultPath).toBe(selected.directory);
+    const input = { selectionId: selected.selectionId, name: 'first' }, created = await f.create(input);
+    await expect(f.create(input)).resolves.toEqual(created);
+    f.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] }); await f.choose({ workspaceId: 'workspace' });
+    expect(f.showOpenDialog.mock.calls.at(-1)[1].defaultPath).toBe('C:/workspace');
+  });
+  it('a failed claim does not forget the still-unclaimed folder', async () => {
+    const f = fixture(), selected = await f.choose({ workspaceId: 'workspace' });
+    f.storage.claimProjectFolder.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    await expect(f.create({ selectionId: selected.selectionId, name: 'first' })).rejects.toThrow('temporarily');
+    f.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] }); await f.choose({ workspaceId: 'workspace' });
+    expect(f.showOpenDialog.mock.calls.at(-1)[1].defaultPath).toBe(selected.directory);
+    await expect(f.create({ selectionId: selected.selectionId, name: 'first' })).resolves.toMatchObject({ projectId: selected.projectId });
+  });
 });
 
 

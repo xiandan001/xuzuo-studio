@@ -42,6 +42,7 @@ describe('可信内置素材与独立工作区副本', () => {
     expect(await f.library.list({ workspaceId: 'one' })).toHaveLength(1);
     const reopened = createAssetLibrary(f.libraryOptions); expect((await reopened.list({ workspaceId: 'one' }))[0].provenance).toMatchObject({ builtinId: icon.id, licenseId: 'ISC', origin: 'open-source' });
     const project = await f.library.attach({ workspaceId: 'one', id: own.id, projectId: 'project-one' });
+    expect(project.name).toBe(own.name);
     await f.library.update({ workspaceId: 'one', id: own.id, archived: true });
     const artifact = await createArtifactStore(f.storeOptions).read(project.id);
     expect(artifact.provenance).toMatchObject({ builtinId: icon.id, licenseId: 'ISC' }); expect(artifact.buffer).toEqual(await fs.readFile(path.join(pack, icon.path)));
@@ -51,6 +52,7 @@ describe('可信内置素材与独立工作区副本', () => {
     const f = await fixture(), item = catalog.assets.find(item => item.origin === 'open-source');
     await expect(f.service.attach({ workspaceId: 'one', projectId: 'project-two', id: item.id })).rejects.toThrow(/不属于|工作区/);
     const file = await f.service.attach({ workspaceId: 'one', projectId: 'project-one', id: item.id });
+    expect(file.name).toBe(`${item.name}.png`);
     const actual = await f.store.read(file.id); expect(actual.provenance.licenseNotice).toContain('Permission to use');
     expect(actual.buffer.includes(Buffer.from('Permission to use'))).toBe(true);
     expect(actual.path.startsWith(f.first)).toBe(true); expect(await f.library.list({ workspaceId: 'one' })).toEqual([]);

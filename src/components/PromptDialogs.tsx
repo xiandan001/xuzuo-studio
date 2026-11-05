@@ -11,6 +11,7 @@ import { BusinessCategorySelect } from './BusinessCategorySelect';
 import { PROMPT_CATEGORY_LABELS } from '../prompt-data';
 import { extractVariables, resolvePrompt } from '../lib/prompt-variables';
 import { availableImageUseTemplates } from '../lib/image-use-templates';
+import { promptAvailable } from '../lib/prompt-lifecycle';
 import '../pages/prompts.css';
 
 const CATEGORY_ORDER: PromptCategory[] = ['ppt', 'word', 'excel', 'image', 'general'];
@@ -61,7 +62,7 @@ export interface PromptPickerProps {
 }
 
 export function PromptPicker({ prompts, useTemplates = [], category, onClose, onUse }: PromptPickerProps) {
-  const available = useMemo(() => prompts.filter(prompt => !category || prompt.category === category || prompt.category === 'general'), [prompts, category]);
+  const available = useMemo(() => prompts.filter(prompt => promptAvailable(prompt) && (!category || prompt.category === category || prompt.category === 'general')), [prompts, category]);
   const [selected, setSelected] = useState<PromptTemplate | null>(() => available.length === 1 ? available[0] : null);
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<PromptCategory | 'all'>('all');
@@ -81,7 +82,7 @@ export function PromptPicker({ prompts, useTemplates = [], category, onClose, on
 
   function choose(prompt: PromptTemplate) { setSelected(prompt); setValues({}); setPreview('resolved'); setError(''); }
   function apply() {
-    if (!selected) return;
+    if (!selected || !promptAvailable(selected)) return;
     if (!resolution.complete) { setError(`请先填写：${resolution.missing.join('、')}`); return; }
     onUse(selected, resolution.content);
     onClose();

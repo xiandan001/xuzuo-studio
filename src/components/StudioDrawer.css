@@ -1,0 +1,10 @@
+.simple-drawer-backdrop{position:fixed;inset:32px 0 0;z-index:110;display:flex;justify-content:flex-end;background:var(--ui-backdrop)}
+.simple-studio-drawer{width:430px;max-width:min(95vw,650px);height:100%;display:flex;flex-direction:column;min-height:0;background:var(--ui-surface);border-left:1px solid var(--ui-border-strong);box-shadow:var(--ui-shadow-lg);color:var(--ui-fg)}
+.simple-studio-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:21px 22px;border-bottom:1px solid var(--ui-border);flex-shrink:0}
+.simple-studio-drawer>header>div{min-width:0}
+.simple-studio-drawer h2{font-size:18px;font-weight:600;line-height:1.6;margin:0}
+.simple-studio-drawer>header p{font-size:13px;line-height:1.8;color:var(--ui-fg-secondary);margin:5px 0 0;overflow-wrap:anywhere}
+.simple-studio-drawer>header>.btn-icon{flex-shrink:0}
+.simple-image-lightbox{flex:1;min-height:0;overflow:auto;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+.simple-image-lightbox>img{width:100%;height:auto;max-height:75dvh;object-fit:contain}
+.simple-studio-drawer:has(.simple-image-lightbox){width:min(900px,95vw)}

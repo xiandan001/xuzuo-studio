@@ -1,5 +1,5 @@
 const { validateSpreadsheetDocument, calculateSpreadsheet } = require('./spreadsheet-engine.cjs');
-const FORMATS = { general: 'General', number: '0.00', currency: '"¥"#,##0.00', percent: '0.00%' };
+const FORMATS = { general: 'General', integer: '0', number: '0.00', currency: '"¥"#,##0.00', percent: '0.00%' };
 
 async function buildSpreadsheetWorkbook(input, loadModule = require) {
   const document = validateSpreadsheetDocument(input), calculation = calculateSpreadsheet(document);
@@ -7,8 +7,11 @@ async function buildSpreadsheetWorkbook(input, loadModule = require) {
   workbook.creator = '序作工作台'; workbook.title = document.title; workbook.calcProperties.fullCalcOnLoad = true;
   for (const source of document.sheets) {
     const sheet = workbook.addWorksheet(source.name);
-    sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    for (let column = 1; column <= source.columnCount; column++) sheet.getColumn(column).width = 18;
+    sheet.views = source.view?.header === false ? [{ state: 'normal' }] : [{ state: 'frozen', ySplit: 1 }];
+    for (let column = 1; column <= source.columnCount; column++) {
+      const label = sheet.getColumn(column).letter, pixels = source.columnWidths?.[label];
+      sheet.getColumn(column).width = pixels ? Math.round((pixels - 5) / 7 * 100) / 100 : 18;
+    }
     for (const [address, value] of Object.entries(source.cells)) {
       const target = sheet.getCell(address), result = calculation.cells[source.id][address];
       if (value.formula !== undefined) {
@@ -23,6 +26,14 @@ async function buildSpreadsheetWorkbook(input, loadModule = require) {
       target.font = { name: 'Microsoft YaHei', size: 11, bold: value.bold || false };
       target.alignment = { vertical: 'middle', horizontal: value.align || (typeof value.value === 'number' || value.formula ? 'right' : 'left'), wrapText: true };
       target.numFmt = FORMATS[value.format || 'general'];
+    }
+    if (source.view?.filter?.text.trim()) {
+      const column = sheet.getColumn(source.view.filter.column).letter, query = source.view.filter.text.trim().toLocaleLowerCase();
+      if (source.view.header) sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: source.rowCount, column: source.columnCount } };
+      for (let row = source.view.header ? 2 : 1; row <= source.rowCount; row++) {
+        const address = `${column}${row}`, calculated = calculation.cells[source.id][address], value = calculated?.status === 'calculated' || calculated?.status === 'value' ? calculated.value : source.cells[address]?.value;
+        sheet.getRow(row).hidden = !String(value ?? '').toLocaleLowerCase().includes(query);
+      }
     }
   }
   return { buffer: Buffer.from(await workbook.xlsx.writeBuffer()), document, calculation };

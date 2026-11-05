@@ -142,6 +142,32 @@ describe('custom native dialog broker', () => {
     await f.invoke(window, 'accept', { directory: f.workspace, filename: '结果.txt', overwriteToken: overwrite.token });
     const result = await pending; expect(window.destroyed).toBe(true); expect(await writeDialogFile(result, Buffer.from('新内容'))).toMatchObject({ saved: true, path: target }); expect(await fs.readFile(target, 'utf8')).toBe('新内容'); f.broker.dispose();
   });
+  it('timestamps all save defaults, refreshes an existing stamp and keeps the final authorized filename exact', async () => {
+    const f = await fixture();
+    for (const extension of ['docx', 'pptx', 'xlsx', 'png', 'svg', 'pdf', 'zip', 'json']) {
+      const pending = f.broker.showSaveDialog({ defaultPath: path.join(f.workspace, `中文成品_2020-01-01_00-00-00-000.${extension}`) });
+      const window = await f.nextWindow(f.windows.length - 1), config = await f.invoke(window, 'request');
+      expect(config.seed.defaultFilename).toMatch(new RegExp(`^中文成品_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-\\d{3}(?:-\\d+)?\\.${extension}$`));
+      expect(config.seed.defaultFilename).not.toContain('2020-01-01');
+      const finalName = `用户确认的名称.${extension}`;
+      await f.invoke(window, 'accept', { directory: f.workspace, filename: finalName });
+      const selected = await pending;
+      expect(selected.filePath).toBe(path.join(f.workspace, finalName));
+      expect(await writeDialogFile(selected, Buffer.from('实际保存内容'))).toMatchObject({ saved: true, path: path.join(f.workspace, finalName) });
+    }
+    f.broker.dispose();
+  });
+  it('applies the same timestamp at the saveText entry point before authorizing its final destination', async () => {
+    const f = await fixture();
+    const pending = f.handlers.get('file-dialog:save-text')({ sender: f.owner.webContents }, { filename: '工作区备份.json', text: '{"fixture":true}' });
+    const window = await f.nextWindow(), config = await f.invoke(window, 'request');
+    expect(config.seed.defaultFilename).toMatch(/^工作区备份_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}(?:-\d+)?\.json$/);
+    await f.invoke(window, 'accept', { directory: f.workspace, filename: config.seed.defaultFilename });
+    const result = await pending;
+    expect(result).toMatchObject({ saved: true, path: path.join(f.workspace, config.seed.defaultFilename) });
+    expect(await fs.readFile(result.path, 'utf8')).toBe('{"fixture":true}');
+    f.broker.dispose();
+  });
   it('does not overwrite a target that changed after approval, and cleans its own temporary file', async () => {
     const f = await fixture(), target = path.join(f.workspace, '结果.txt');
     const pending = f.broker.showSaveDialog({ defaultPath: target }); const window = await f.nextWindow(); await f.invoke(window, 'request');

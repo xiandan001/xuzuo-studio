@@ -1,3 +1,5 @@
+import { timestampedFilename } from './saved-filename';
+
 export async function downloadFile(filename: string, content: string, type = 'application/json;charset=utf-8'): Promise<boolean> {
   if (typeof window !== 'undefined' && window.desktop?.fileDialogs?.saveText) {
     return (await window.desktop.fileDialogs.saveText({ filename, text: content, mimeType: type })).saved;
@@ -5,7 +7,7 @@ export async function downloadFile(filename: string, content: string, type = 'ap
   const href = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement('a');
   link.href = href;
-  link.download = filename;
+  link.download = timestampedFilename(filename);
   document.body.appendChild(link);
   link.click();
   link.remove();
