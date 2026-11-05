@@ -60,8 +60,7 @@
 .creation-conversation-header .btn{font-size:13px;min-height:34px;padding:7px 10px}
 .conversation-home .creation-journey .home-chat-thread{border:0;border-radius:0;box-shadow:none;background:transparent;min-height:0;overflow:hidden}
 .conversation-home .creation-journey .home-chat-messages{display:flex;flex-direction:column;align-items:stretch;padding:8px 10px 24px;scrollbar-gutter:stable;gap:28px;min-height:100px}
-.creation-journey{--chat-user-bg:color-mix(in srgb,var(--ui-accent) 12%,var(--ui-surface));--chat-user-border:color-mix(in srgb,var(--ui-accent) 30%,var(--ui-border))}
-html[data-app-theme="dark"] .creation-journey{--chat-user-bg:#143348;--chat-user-border:#296183}
+.creation-journey{--chat-user-bg:var(--ui-accent);--chat-user-border:var(--ui-accent-hover)}
 .creation-journey .home-chat-message{flex:none;min-width:0;max-width:96%;width:96%;margin:0;display:flex;flex-direction:column;align-items:stretch;align-self:flex-start;gap:10px}
 .creation-journey .home-chat-speaker{display:flex;align-items:center;gap:8px;min-width:0;margin:0;padding:0;color:var(--ui-fg);font-size:14px;font-weight:600;line-height:1.5}
 .creation-journey .home-chat-avatar{display:grid;place-items:center;flex-shrink:0;width:30px;height:30px;border:1px solid var(--ui-border);border-radius:50%;color:var(--ui-accent);background:var(--ui-focus-soft)}
@@ -69,10 +68,12 @@ html[data-app-theme="dark"] .creation-journey{--chat-user-bg:#143348;--chat-user
 .creation-journey .home-chat-speaker>small{min-width:0;max-width:70%;font-size:12px;font-weight:400;color:var(--ui-fg-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .creation-journey .home-chat-user{width:fit-content;max-width:78%;align-self:flex-end;align-items:flex-end;margin-left:auto}
 .creation-journey .home-chat-user .home-chat-speaker{flex-direction:row-reverse;align-self:flex-end}
-.creation-journey .home-chat-user .home-chat-avatar{color:var(--ui-fg);background:var(--chat-user-bg);border-color:var(--chat-user-border)}
-.creation-journey .home-chat-user .home-chat-bubble{background:var(--chat-user-bg);border:1px solid var(--chat-user-border);padding:14px 17px;border-radius:16px 16px 4px 16px;box-shadow:var(--ui-shadow-sm)}
+.creation-journey .home-chat-user .home-chat-avatar{color:var(--ui-on-accent);background:var(--chat-user-bg);border-color:var(--chat-user-border)}
+.creation-journey .home-chat-user .home-chat-bubble{background:var(--chat-user-bg);color:var(--ui-on-accent);border:1px solid var(--chat-user-border);padding:14px 17px;border-radius:16px 16px 4px 16px;box-shadow:var(--ui-shadow-sm)}
 .creation-journey .home-chat-bubble>p{font-size:15px;line-height:1.85;color:var(--ui-fg)}
-.creation-journey .home-chat-assistant .home-chat-bubble{width:calc(100% - 38px);margin-left:38px;border:1px solid var(--ui-border);background:var(--ui-surface);box-shadow:var(--ui-shadow-sm);padding:15px 17px;border-radius:4px 14px 14px 14px}
+.creation-journey .home-chat-user .home-chat-bubble>p,.creation-journey .home-chat-user .home-chat-bubble .text-button{color:var(--ui-on-accent)}
+.creation-journey .home-chat-user .home-chat-bubble .text-button{text-decoration:underline;text-underline-offset:3px}
+.creation-journey .home-chat-assistant .home-chat-bubble{width:calc(100% - 38px);margin-left:38px;border:1px solid var(--ui-border);background:var(--ui-surface-raised);box-shadow:var(--ui-shadow-sm);padding:15px 17px;border-radius:4px 14px 14px 14px}
 .creation-journey .home-chat-assistant .home-chat-bubble.is-plan-card{border:0;background:transparent;box-shadow:none;padding:0;border-radius:0}
 .creation-journey .home-chat-system{align-self:center;max-width:calc(100% - 76px);width:calc(100% - 76px)}
 .creation-journey .home-chat-system .home-chat-speaker{font-size:13px;color:var(--ui-fg-secondary)}
@@ -160,4 +161,5 @@ html[data-app-theme="dark"] .creation-journey{--chat-user-bg:#143348;--chat-user
 @media(prefers-reduced-motion:reduce){.creation-journey *{transition:none!important}}
 
 .creation-journey .home-chat-assistant .creation-production{background:var(--ui-surface-subtle);border-color:var(--ui-border-strong)}
+.creation-journey .home-chat-assistant .home-plan{background:var(--ui-surface-raised)}
 .creation-production-stage{font-size:12px;font-weight:600;color:var(--ui-fg-secondary);margin-bottom:5px}
