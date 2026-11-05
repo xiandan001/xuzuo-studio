@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, ChevronDown, Download, FileSpreadsheet, FileText, FolderOpen, History, Image, LoaderCircle, Plus, Presentation, ShieldCheck, Sparkles, Square } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, Download, FileSpreadsheet, FileText, FolderOpen, History, Image, Info, LoaderCircle, Plus, Presentation, ShieldCheck, Sparkles, Square, UserRound } from 'lucide-react';
 import type { LedgerEntry, PageProps, ProjectKind } from '../types';
 import type { HomeAutomationMessage } from '../lib/home-automation-chat';
 import { homeChatCommand, homeChatSendIssue, homeFollowupInput, homeRefinementCommand } from '../lib/home-automation-chat';
 import { homeFolderSendMatches, type HomeFolderSendIntent } from '../lib/home-folder-send';
+import { homeConversationContinuation } from '../lib/home-continuation';
 import { homeConversationCosts, linkHomeConversationWorkflows, type HomeLinkedJobRun } from '../lib/home-conversation-costs';
 import { adjustNaturalImageRefinements, parseNaturalAutomationPlan } from '../lib/natural-automation-plan';
 import { useNaturalAutomationSession } from '../hooks/useNaturalAutomationSession';
@@ -51,6 +52,9 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
   const { targetPurged, billingOwnerPurged } = useMemo(() => automationProjectAvailability(props.workspaceId, props.projects, props.purgedProjects, draft.projectId, chat.conversation.billingProjectId || session.ownerId), [props.workspaceId, props.projects, props.purgedProjects, draft.projectId, chat.conversation.billingProjectId, session.ownerId]);
   const canReadPlans = !targetPurged;
   const activeRequestId = draft.acceptedRequestId || (draft.plan ? draft.requestId : undefined);
+  const continuation = useMemo(() => homeConversationContinuation(props.workspaceId, draft.projectId, draft.ruleId, chat.conversation.messages, props.workflowRunner.runs), [props.workspaceId, draft.projectId, draft.ruleId, chat.conversation.messages, props.workflowRunner.runs]);
+  const billingProjectId = chat.conversation.billingProjectId || session.project?.id;
+  const productionBusy = useMemo(() => props.workflowRunner.runs.find(run => run.mode === 'live' && run.purpose !== 'automation-plan' && run.projectId === billingProjectId && ['running', 'paused'].includes(run.status)), [props.workflowRunner.runs, billingProjectId]);
   const answers = draft.ruleId ? session.readiness.answers : draft.preparationAnswers || {};
   const latest = useRef({ props, chat, session }); latest.current = { props, chat, session };
   const blocked = session.locked || planning.active || folderPending || referenceBusy;
@@ -92,10 +96,11 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
     else append('system', 'created', text, { requestId: activeRequestId, ruleId: draft.ruleId, workflowId: draft.workflowId });
   }, [draft.ruleId, draft.workflowId, session.runBusy, session.readiness.loadedRuleId, session.readiness.dispatchLoading, session.readiness.dispatchUnknown, session.readiness.lastJob?.id]);
   useEffect(() => {
-    if (!session.error || draft.plan) return;
+    const failedFollowup = draft.requestId !== activeRequestId && planning.record?.id === draft.requestId && planning.record?.status === 'failed';
+    if (!session.error || draft.plan && !failedFollowup) return;
     const tail = chat.current.current.conversation.messages.at(-1);
-    if (tail?.kind !== 'error' || tail.text !== session.error) append('system', 'error', session.error, { requestId: draft.requestId });
-  }, [session.error]);
+    if (!tail || !['error', 'status'].includes(tail.kind) || tail.text !== session.error) append('system', 'error', session.error, { requestId: draft.requestId });
+  }, [session.error, draft.requestId, activeRequestId, planning.record?.status]);
   const last = chat.conversation.messages.at(-1);
   useEffect(() => { if (pinned.current || last?.role === 'user') requestAnimationFrame(() => { if (messages.current) messages.current.scrollTop = messages.current.scrollHeight; }); }, [last?.id]);
   const costs = useMemo(() => homeConversationCosts(props.workspaceId, chat.conversation.messages, props.workflowRunner.runs, props.ledger, planning.record?.runId, linkedJobRuns, checkedCostRules), [props.workspaceId, chat.conversation.messages, props.workflowRunner.runs, props.ledger, planning.record?.runId, linkedJobRuns, checkedCostRules]);
@@ -139,7 +144,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
     const command = homeChatCommand(text);
     if (command) {
       if (!append('user', 'status', text)) return; setText('');
-      if (command === 'create') { if (draft.ruleId) append('system', 'status', '这套自动化已经创建，原流程和费用保留。可以继续补资料或运行，不会重复创建。', { requestId: activeRequestId, ruleId: draft.ruleId }); else await session.save(); } else { const outcome = await session.createAndRun(); if (outcome.status === 'needs-input') append('system', 'status', '在方案卡里补齐必要信息，再点击继续制作；不需要重新规划。'); }
+      if (command === 'create') { if (draft.ruleId) append('system', 'status', '这套自动化已经创建，原流程和费用保留。可以继续补资料或运行，不会重复创建。', { requestId: activeRequestId, ruleId: draft.ruleId }); else await session.save(); } else { const outcome = await session.createAndRun({ continuation }); if (outcome.status === 'needs-input') append('system', 'status', '在方案卡里补齐必要信息，再点击继续制作；不需要重新规划。'); }
       return;
     }
     const rounds = draft.plan?.outputKind === 'image' ? homeRefinementCommand(text) : undefined;
@@ -179,6 +184,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
       setLocalError(!planning.bridge ? '请使用新版 Windows 桌面应用进行 AI 对话。' : !billingProjectId ? '先选择或新建保存项目，让方案和费用有明确归属。' : !props.projects.some(project => project.id === billingProjectId) ? '原记账项目暂不可用，可以新开对话；原方案和费用仍保留。' : '在输入区上方选择对话模型和对应 Key，再发送即可。'); return;
     }
     const priorPlanId = activeRequestId;
+    if (productionBusy) { setLocalError(productionBusy.status === 'paused' ? '上一轮制作已暂停，请先在任务进度里继续或取消，再发送这条需求。输入已保留。' : '上一轮还在制作，请稍候再发送，或先查看任务进度。输入已保留。'); return; }
     const requestText = homeCreationPlanningInput(homeFollowupInput(text, chat.current.current.conversation.messages, !!priorPlanId), kind, !!priorPlanId);
     if (requestText.length > 10000) { setLocalError('这次补充和原始需求合起来较长，请缩短后重试；没有发送新的 AI 请求。'); return; }
     const notes = draft.plan?.questions.flatMap(question => { const answer = naturalQuestionAnswer(answers, question).trim(); return answer ? [`${question}\n用户已补充：${answer}`] : []; }).join('\n\n') || '';
@@ -205,10 +211,16 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
       const record = await planning.bridge.read({ id: requestId, workspaceId: props.workspaceId });
       if (!mounted.current || generation !== readGeneration.current) return;
       if (snapshot !== session.store.current.current || latest.current.session.locked || latest.current.session.planning.active) { append('system', 'status', '旧方案已经读取；你刚才已调整当前方案，因此没有替换它，也没有新增调用。'); return; }
-      if (record.status !== 'complete' || !record.resultText) { append('system', 'status', record.error || '这次还没有完整的可用方案，已有结果和费用保留；没有重新发送模型请求。'); return; }
+      if (record.status !== 'complete' || !record.resultText) { setLocalError(record.status === 'failed' ? `这轮未能完成：${record.error || '暂未返回可用方案。'} 可点“重新编辑这条需求”再次发送；查看状态不调用 AI，已有费用保留。` : record.error || '这轮还没有可用方案；可重新编辑这条需求。查看状态没有调用 AI，已有结果和费用保留。'); return; }
       if (!planning.restore(record, parseNaturalAutomationPlan(record.resultText))) return;
+      setLocalError(''); session.setError('');
       session.setSavedRule(undefined); append('system', 'status', '已免费读取这份 AI 原方案。原自动化不会被覆盖，后续可以基于它再创建一套。');
     } catch (cause) { if (mounted.current && generation === readGeneration.current) setLocalError(cause instanceof Error ? cause.message : '原方案暂时无法读取。'); }
+  }
+  function editRequest(message: HomeAutomationMessage) {
+    if (blocked) return;
+    setText(message.text); setLocalError(''); session.setError(''); pinned.current = true;
+    requestAnimationFrame(() => { textarea.current?.focus(); textarea.current?.scrollIntoView({ block: 'nearest' }); });
   }
   function openModels(capability?: string) {
     setProductionOpen(true);
@@ -240,16 +252,16 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
     {historyOpen && <div className="home-chat-history"><Select aria-label="选择首页历史对话" value={conversationId} options={chat.index.items.map(item => ({ value: item.id, label: item.title, description: new Date(item.updatedAt).toLocaleString('zh-CN') }))} onValueChange={id => chat.select(id)} /><button type="button" className="btn btn-secondary" onClick={() => { void chat.exportConversation(); }}><Download size={15} />导出对话</button></div>}
     {!idle && <div className="home-chat-thread" role="region" aria-label="对话记录"><div className="home-chat-messages" role="log" aria-label="首页自动化对话消息" aria-live="polite" ref={messages} onScroll={() => { const element = messages.current; if (element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
       {chat.conversation.messages.length > visible && <button type="button" className="text-button home-chat-earlier" onClick={() => setVisible(value => value + 20)}>查看更早的消息</button>}
-      {currentMessages.map(message => <article className={`home-chat-message home-chat-${message.role}`} key={message.id}><div className="home-chat-speaker">{message.role === 'user' ? '你' : message.role === 'assistant' ? <><Sparkles size={14} />序作{message.modelName && <small> · {message.modelName}</small>}</> : '操作反馈'}</div><div className={`home-chat-bubble ${message.kind === 'error' ? 'is-error' : ''}`}>
-        {message.kind === 'plan' && message.requestId === activeRequestId && draft.plan ? <HomePlanCard props={props} session={session} onOpenModels={openModels} /> : <p>{message.text}</p>}
-        {canReadPlans && message.kind === 'error' && message.requestId && <button type="button" className="text-button" disabled={blocked} onClick={() => { void readOld(message.requestId!); }}>免费读取关联的已存结果</button>}
-        {canReadPlans && message.role === 'user' && message.requestId && !chat.conversation.messages.some(item => item.kind === 'plan' && item.requestId === message.requestId) && !planning.active && <button type="button" className="text-button" disabled={blocked} onClick={() => { void readOld(message.requestId!); }}>读取本轮已保存结果</button>}
+      {currentMessages.map(message => <article className={`home-chat-message home-chat-${message.role}`} key={message.id} data-message-kind={message.kind} aria-label={message.role === 'user' ? '你发送的消息' : message.role === 'assistant' ? '序作AI回复' : '系统提示'}><div className="home-chat-speaker"><span className="home-chat-avatar" aria-hidden="true">{message.role === 'user' ? <UserRound size={16} /> : message.role === 'assistant' ? <Sparkles size={16} /> : <Info size={14} />}</span><span className="home-chat-author">{message.role === 'user' ? '你' : message.role === 'assistant' ? '序作 AI' : '系统提示'}</span>{message.role === 'assistant' && message.modelName && <small>{message.modelName}</small>}</div><div className={`home-chat-bubble ${message.kind === 'error' ? 'is-error' : ''} ${message.kind === 'plan' && message.requestId === activeRequestId && draft.plan ? 'is-plan-card' : ''}`}>
+        {message.kind === 'plan' && message.requestId === activeRequestId && draft.plan ? <HomePlanCard props={props} session={session} onOpenModels={openModels} continuation={continuation} /> : <p>{message.text}</p>}
+        {canReadPlans && message.kind === 'error' && message.requestId && <button type="button" className="text-button" disabled={blocked} onClick={() => { void readOld(message.requestId!); }}>查看关联请求状态</button>}
+        {canReadPlans && message.role === 'user' && message.requestId && !chat.conversation.messages.some(item => item.kind === 'plan' && item.requestId === message.requestId) && !planning.active && <div className="home-chat-request-recovery"><button type="button" className="text-button" disabled={blocked} onClick={() => { void readOld(message.requestId!); }}>查看本轮状态</button><button type="button" className="text-button" disabled={blocked} onClick={() => editRequest(message)}>重新编辑这条需求</button></div>}
         {message.kind === 'plan' && message.requestId && message.requestId !== activeRequestId && <><ol className="home-chat-old-steps">{message.steps?.slice(0, 4).map((step, index) => <li key={index}>{step.replace(/^\d+\.\s*/, '')}</li>)}</ol>{canReadPlans && <button type="button" className="text-button" disabled={blocked} onClick={() => { void readOld(message.requestId!); }}>免费读取这版 AI 原方案</button>}</>}
         {message.runId && message.role === 'assistant' && <HomeChatTurnCost ledger={props.ledger} runId={message.runId} />}
       </div></article>)}
       {planning.active && <div className="home-chat-pending" role="status"><LoaderCircle size={17} className="spin" />正在整理目标和制作步骤…<button type="button" className="text-button" onClick={() => { void stopPlanning(); }}><Square size={13} />停止</button></div>}
     </div></div>}
-    {(localError || chat.issue || session.store.issue || session.store.recovery.error) && <div className="home-chat-alert" role="alert">{localError || chat.issue || session.store.issue || session.store.recovery.error}{chat.issue && <button type="button" className="text-button" onClick={() => { void chat.recoverAndStart().catch(cause => setLocalError(cause instanceof Error ? cause.message : '对话未能恢复。')); }}>导出原记录并新建对话</button>}</div>}
+    {(localError || chat.issue || session.store.issue || session.store.recovery.error) && <div className="home-chat-alert" role="alert">{localError || chat.issue || session.store.issue || session.store.recovery.error}{productionBusy && localError && <button type="button" className="text-button" onClick={() => props.navigate('activity', productionBusy.projectId)}>查看上一轮任务</button>}{chat.issue && <button type="button" className="text-button" onClick={() => { void chat.recoverAndStart().catch(cause => setLocalError(cause instanceof Error ? cause.message : '对话未能恢复。')); }}>导出原记录并新建对话</button>}</div>}
     {folderPending && <p className="home-chat-pending" role="status">先选择这段对话的本地保存文件夹。需求会保留，取消不会调用 AI。</p>}
     {billingOwnerPurged && !targetPurged && <p className="creation-owner-note">原规划项目已永久删除；当前作品可继续制作，新的 AI 需求请新建对话。</p>}
     <HomeAutomationComposer props={props} session={session} blocked={blocked || !!targetPurged} input={input} onText={setText} textareaRef={textarea} onSend={send} kind={kind} onKind={value => { inputVersion.current++; setFormat(value); }} onReferences={() => { void addReferences(); }} referenceCount={session.project?.referenceFiles?.length} productionOpen={productionOpen} onProductionOpen={setProductionOpen} destination={destination} needsFolder={!session.project} cost={costs.entries.length ? summarizeCosts(costs.entries) : undefined} costPending={!!costs.pendingRuleIds.length || !!session.readiness.dispatchUnknown || costSyncIssue} onSyncCosts={() => { setCostSyncVersion(value => value + 1); void session.readiness.readDispatch(); }}>

@@ -11,6 +11,21 @@ function fixture() {
   return { values, jobs, storage, trigger, bridge };
 }
 describe('自动化明确执行与未知受理恢复', () => {
+  it('仅明确运行时带入本对话上一轮引用，读取和重复提交不增加触发', async () => {
+    const test = fixture(), continuation = { previousRuleId: 'previous-rule', previousRunId: 'previous-run' };
+    expect((await dispatchAutomationOnce(test.bridge, test.storage, 'workspace', 'rule', { continuation })).status).toBe('started');
+    expect(test.trigger).toHaveBeenCalledWith({ ruleId: 'rule', continuation });
+    expect((await dispatchAutomationOnce(test.bridge, test.storage, 'workspace', 'rule', { continuation })).status).toBe('existing'); expect(test.trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('后台确认接续未提交且权威读取没有job时解除本地未知标记，不自动重发', async () => {
+    const test = fixture(); test.trigger.mockRejectedValue(Error('接续制作未提交：上一轮状态已变化，原任务和费用保留。'));
+    const result = await dispatchAutomationOnce(test.bridge, test.storage, 'workspace', 'rule', { continuation: { previousRuleId: 'previous', previousRunId: 'run' } });
+    expect(result.status).toBe('failed'); expect(result.error).toContain('接续制作未提交');
+    expect(readAutomationDispatch(test.storage, 'workspace', 'rule', [])).toEqual({ job: undefined, unknown: false });
+    await test.bridge.snapshot('workspace'); expect(test.trigger).toHaveBeenCalledTimes(1);
+  });
+
   it('派发前记录只读恢复标记，成功后保留job引用；重复查看不再次触发', async () => {
     const test = fixture(); const first = await dispatchAutomationOnce(test.bridge, test.storage, 'workspace', 'rule', { reuseCompleted: true }); expect(first.status).toBe('started');
     expect((await dispatchAutomationOnce(test.bridge, test.storage, 'workspace', 'rule', { reuseCompleted: true })).status).toBe('existing'); expect(test.trigger).toHaveBeenCalledTimes(1);

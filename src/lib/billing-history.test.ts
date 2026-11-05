@@ -28,6 +28,37 @@ async function fixture(item = record(), bindIdentity = true) {
   return { engine, directory, filename, options, modelCalls: () => modelCalls };
 }
 describe('已有调用的自动费用恢复', () => {
+  it('SVG图片与作者费率一起落盘，重启和主动复算不受当前作者调价影响且不调用模型', async () => {
+    const { resolveOfficialBillingRule } = require('../../electron/official-billing.cjs');
+    const registry = require('../../electron/billing-rules.json');
+    const item = record();
+    const time = '2026-11-05T03:00:00.000Z';
+    item.run.createdAt = item.run.updatedAt = item.run.attempts[0].startedAt = item.ledger[0].time = time;
+    item.request.models[0].modelId = 'gpt-image-2.6-sunburst';
+    item.request.models[0].pricing.verifiedAt = '2026-11-05';
+    const context = { modelId: item.request.models[0].modelId, operation: 'image-generation', connection: item.request.connections[0], startedAt: time };
+    Object.assign(item.ledger[0], { modelId: context.modelId, operation: context.operation, billingConnectionSnapshot: context.connection, billingRuleSnapshot: resolveOfficialBillingRule(context, item.request.models[0].pricing) });
+    Object.assign(item.ledger[0].usage, { imageOutputFormat: 'svg', svgUsage: { model: 'gpt-6.1-sol', inputTokens: 100, outputTokens: 200, reasoningTokens: 150, totalTokens: 300 } });
+    const f = await fixture(item);
+    const entry = (await f.engine.snapshot()).ledger[0];
+    expect(entry).toMatchObject({ costState: 'calculated', calculation: { nativeAmount: '0.00823', completeness: 'complete' }, usage: { svgUsage: { model: 'gpt-6.1-sol', reasoningTokens: 150 } } });
+    const disk = await readLiveHistory(f.directory);
+    const frozen = disk.records[0].ledger[0].billingRuleSnapshot;
+    expect(frozen.svgAuthorRules.find((rule: { modelId: string }) => rule.modelId === 'gpt-6.1-sol').rates.output).toBe('10');
+    await f.engine.shutdown();
+    const author = registry.rules.find((rule: { modelId: string }) => rule.modelId === 'gpt-6.1-sol');
+    const rates = { ...author.rates };
+    try {
+      author.rates.input = author.rates.output = '999';
+      const reopened = createLiveWorkflowEngine(f.options);
+      try {
+        expect((await reopened.snapshot()).ledger[0].calculation?.nativeAmount).toBe('0.00823');
+        expect(await reopened.recalculateCosts()).toEqual({ updated: 0 });
+        expect((await readLiveHistory(f.directory)).records[0].ledger[0].billingRuleSnapshot).toEqual(frozen);
+        expect(f.modelCalls()).toBe(0);
+      } finally { await reopened.shutdown(); }
+    } finally { author.rates = rates; }
+  });
   it('相同条目准确恢复 $0.00603，保留原价、请求ID和旧金额，重复与重启不重复修订', async () => {
     const f = await fixture();
     const snapshot = await f.engine.snapshot();

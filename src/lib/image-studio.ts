@@ -2,6 +2,8 @@ import type { WorkflowRun } from '../configuration-types';
 import { isProductionRun } from './workflow-purpose';
 import type { ArtifactMetadata } from '../live-types';
 import { validImageQuantity } from './image-quantity';
+import { effectiveImageOptions, readImageOutputOptions } from './image-output-options';
+import type { ImageOutputOptions } from '../image-options-types';
 import { BUILTIN_IMAGE_USE_TEMPLATES, IMAGE_PRESETS, IMAGE_SIZES, imageUseTemplateSnapshot, useTemplateDraftError } from './image-use-templates';
 import type { ImageUseTemplateSnapshot } from './image-use-templates';
 export { IMAGE_PRESETS, IMAGE_SIZES, PRESET_PROMPTS } from './image-use-templates';
@@ -27,6 +29,8 @@ export interface ImageDraft {
   editingModelId: string;
   references: ImageReference[];
   galleryBaseId?: string;
+  imageOptions?: ImageOutputOptions;
+  markupSourceId?: string;
 }
 
 export const imageDraftKey = (projectId: string) => `xuzuo-image-draft-v1-${projectId}`;
@@ -48,6 +52,8 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
       background: ['auto', 'opaque', 'transparent'].includes(value.background!) ? value.background! : 'auto',
       generationModelId: text(value.generationModelId, '', 240), editingModelId: text(value.editingModelId, '', 240),
       references,
+      ...(value.imageOptions ? { imageOptions: readImageOutputOptions(value.imageOptions) } : {}),
+      ...(typeof value.markupSourceId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.markupSourceId) ? { markupSourceId: value.markupSourceId } : {}),
       ...(typeof value.galleryBaseId === 'string' && references.length === 1 && references[0].id === value.galleryBaseId ? { galleryBaseId: value.galleryBaseId } : {}),
     };
   } catch { return defaults; }
@@ -90,12 +96,12 @@ export function imageMissingReferences(draft: ImageDraft, selectedImageId?: stri
   return Math.max(0, minimum - imageReferenceIds(draft.mode, draft.references, selectedImageId).length);
 }
 
-export function imageTaskRequest(draft: ImageDraft, selectedImageId?: string) {
+export function imageTaskRequest(draft: ImageDraft, selectedImageId?: string, modelId?: string) {
   const attachmentIds = imageReferenceIds(draft.mode, draft.references, selectedImageId);
   const capability = imageCapability(draft.mode, attachmentIds);
   return {
     count: draft.quantity,
-    parameters: { prompt: draft.mode === 'refine' ? draft.refinePrompt : draft.prompt, input: '', attachmentIds, imageSize: draft.size, imageBackground: imageDraftPurpose(draft)?.background === 'transparent' ? 'transparent' : draft.background, capability, modelConfigId: capability === 'image-editing' ? draft.editingModelId : draft.generationModelId },
+    parameters: { prompt: draft.mode === 'refine' ? draft.refinePrompt : draft.prompt, input: '', attachmentIds, imageSize: draft.imageOptions?.imageOutputFormat === 'gif' ? 'auto' : draft.size, imageBackground: ['svg', 'gif'].includes(draft.imageOptions?.imageOutputFormat || '') ? 'auto' : imageDraftPurpose(draft)?.background === 'transparent' ? 'transparent' : draft.background, capability, modelConfigId: capability === 'image-editing' ? draft.editingModelId : draft.generationModelId, ...effectiveImageOptions(draft.imageOptions, modelId, capability) },
   };
 }
 

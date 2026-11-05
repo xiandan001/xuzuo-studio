@@ -1,6 +1,7 @@
 const { createHash } = require('node:crypto');
 const { ruleCreationFingerprint } = require('./automation-rule-identity.cjs');
 const { normalizePreparation } = require('./automation-rule-preparation.cjs');
+const { validReplacement } = require('./automation-continuation.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 const triggers = new Set(['manual', 'schedule', 'reference-imported', 'run-completed']);
@@ -25,7 +26,7 @@ function validateAutomationBackup(records, scope = {}) {
   if (records.rules.some(rule => !ruleValid(rule))) throw Error('自动化规则备份无效。');
   for (const rule of [...records.rules, ...records.jobs.map(job => job.ruleSnapshot).filter(Boolean)]) normalizePreparation(rule.preparation);
   const rules = new Set(records.rules.map(rule => rule.id)), jobs = new Map(records.jobs.map(job => [job.id, job]));
-  if (records.jobs.some(job => !owns(job) || !rules.has(job.ruleId) || !['queued', 'dispatching', 'running', 'decision', 'complete', 'cancelled'].includes(job.status) || !/^[a-f0-9]{64}$/.test(job.dispatchKey) || job.ruleSnapshot && (!ruleShape(job.ruleSnapshot) || job.ruleSnapshot.projectId !== job.projectId || job.ruleSnapshot.id !== job.ruleId) || job.attachmentIds && (!Array.isArray(job.attachmentIds) || job.attachmentIds.some(id => !validId(id))))) throw Error('自动化派单备份无效。');
+  if (records.jobs.some(job => !owns(job) || !rules.has(job.ruleId) || !['queued', 'dispatching', 'running', 'decision', 'complete', 'cancelled'].includes(job.status) || !/^[a-f0-9]{64}$/.test(job.dispatchKey) || job.replacement !== undefined && !validReplacement(job.replacement) || job.ruleSnapshot && (!ruleShape(job.ruleSnapshot) || job.ruleSnapshot.projectId !== job.projectId || job.ruleSnapshot.id !== job.ruleId) || job.attachmentIds && (!Array.isArray(job.attachmentIds) || job.attachmentIds.some(id => !validId(id))))) throw Error('自动化派单备份无效。');
   if (records.events.some(event => !owns(event) || !triggers.has(event.trigger)) || records.decisions.some(card => !owns(card) || !jobs.has(card.jobId) || jobs.get(card.jobId).projectId !== card.projectId) || records.memories.some(memory => !owns(memory) || typeof memory.note !== 'string' || memory.note.length > 3000)) throw Error('自动化事件、决定或记忆归属无效。');
 }
 

@@ -6,6 +6,7 @@ const { safeRequest } = require('./live-workflow-engine.cjs');
 const { exportAutomationBackup, mergeAutomationBackup } = require('./automation-backup.cjs');
 const { ruleCreationFingerprint } = require('./automation-rule-identity.cjs');
 const { normalizePreparation, assertPreparation } = require('./automation-rule-preparation.cjs');
+const { validReplacement, sameContinuation, resolveContinuation, replacementRequest } = require('./automation-continuation.cjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 const active = run => ['running', 'paused', 'waiting-review'].includes(run.status);
@@ -22,7 +23,7 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
   const readinessEpochs = new Map();
   const now = () => new Date(clock()).toISOString();
   function setIssue(message) { if (issue === message) return; issue = message; try { onChanged({ revision: state.revision }); } catch { /* Read-only UI feedback cannot alter the journal. */ } }
-  const validate = value => value?.version === 1 && Number.isSafeInteger(value.revision) && ['rules', 'events', 'jobs', 'decisions', 'memories'].every(key => Array.isArray(value[key])) && value.context && value.rules.every(rule => validId(rule.id) && validId(rule.workspaceId) && validId(rule.projectId) && typeof rule.enabled === 'boolean' && triggers.has(rule.trigger)) && validCreationIdentity(value.rules) && value.jobs.every(job => validId(job.id) && validId(job.projectId) && /^[a-f0-9]{64}$/.test(job.dispatchKey));
+  const validate = value => value?.version === 1 && Number.isSafeInteger(value.revision) && ['rules', 'events', 'jobs', 'decisions', 'memories'].every(key => Array.isArray(value[key])) && value.context && value.rules.every(rule => validId(rule.id) && validId(rule.workspaceId) && validId(rule.projectId) && typeof rule.enabled === 'boolean' && triggers.has(rule.trigger)) && validCreationIdentity(value.rules) && value.jobs.every(job => validId(job.id) && validId(job.projectId) && /^[a-f0-9]{64}$/.test(job.dispatchKey) && (job.replacement === undefined || validReplacement(job.replacement)));
   async function load() {
     await checkedDirectory(fileSystem, path.dirname(filename), true);
     try { await checkedFile(fileSystem, filename); const stat = await fileSystem.stat(filename); if (stat.size > 32 * 1024 * 1024) throw Error('size'); const value = JSON.parse(await fileSystem.readFile(filename, 'utf8')); if (!validate(value) || ['projectArchives', 'projectOwners'].some(key => value[key] !== undefined && (!Array.isArray(value[key]) || value[key].some(item => !validId(item.projectId) || !validId(item.workspaceId))))) throw Error('shape'); for (const rule of [...value.rules, ...value.jobs.map(job => job.ruleSnapshot).filter(Boolean)]) normalizePreparation(rule.preparation); state = { ...value, projectArchives: value.projectArchives || [], projectOwners: value.projectOwners || [] }; for (const job of state.jobs) if (job.status === 'complete' && !job.cancelRequestedAt) delete job.error; setIssue(''); }
@@ -52,14 +53,14 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     return { project, workflow: { ...structuredClone(frozen), workspaceId: project.workspaceId } };
   }
   const nativeRun = (runs, job) => runs.find(run => run.projectId === job.projectId && (run.id === job.runId || run.dispatchKey === job.dispatchKey));
-  const reviewPending = (value, projectId, exceptJobId) => value.decisions.some(card => card.projectId === projectId && card.kind === 'review' && !card.resolvedAt && card.jobId !== exceptJobId && value.jobs.some(job => job.id === card.jobId && !['complete', 'cancelled'].includes(job.status)));
+  const reviewPending = (value, projectId, exceptJobId, replacedJobId) => value.decisions.some(card => card.projectId === projectId && card.kind === 'review' && !card.resolvedAt && card.jobId !== exceptJobId && card.jobId !== replacedJobId && value.jobs.some(job => job.id === card.jobId && !['complete', 'cancelled'].includes(job.status)));
   function resolveCards(value, jobId, action) { for (const card of value.decisions.filter(card => card.jobId === jobId && !card.resolvedAt)) { card.resolvedAt = now(); card.action = action; } }
   function terminalJob(value, job, run) {
     if (job.runId === run.id && job.nativeStatus === run.status && !job.cancellationPending && job.status === (run.status === 'complete' ? 'complete' : 'cancelled') && !value.decisions.some(card => card.jobId === job.id && !card.resolvedAt)) return false;
     job.runId = run.id; job.nativeStatus = run.status; job.cancellationPending = false; delete job.cancelError; job.status = run.status === 'complete' ? 'complete' : 'cancelled'; job.updatedAt = now();
     if (job.cancelRequestedAt) job.error = run.status === 'complete' ? '后台任务已经完成，已发生的费用与产物保留；取消没有撤回这次执行。' : `已停止本平台继续执行，后台状态为 ${run.status}；已发生费用保留。`;
     else delete job.error;
-    resolveCards(value, job.id, run.status === 'complete' ? 'refresh' : 'reject');
+    resolveCards(value, job.id, run.supersededByRunId ? 'superseded' : run.status === 'complete' ? 'refresh' : 'reject');
     return true;
   }
   function cancellationCard(value, job, detail) {
@@ -168,13 +169,14 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     return [...new Map([...retained, ...incoming].map(item => [item.id, item])).values()];
   }
   async function continueJob(job, action) {
-    if (reservations.has(job.projectId) || dispatchClaims.has(job.projectId) || archived(state, job.projectId) || reviewPending(state, job.projectId, job.id)) throw Error('项目正在整理目录或等待其他检查，请完成后再继续。');
+    if (reservations.has(job.projectId) || dispatchClaims.has(job.projectId) || archived(state, job.projectId) || reviewPending(state, job.projectId, job.id, job.replacement?.jobId)) throw Error('项目正在整理目录或等待其他检查，请完成后再继续。');
     const claim = Symbol(job.projectId); dispatchClaims.set(job.projectId, claim);
     try {
       const current = state.jobs.find(item => item.id === job.id); if (current.cancelRequestedAt) throw Error('此任务已请求取消，不能继续或重新派工；请先核对取消结果。');
       assertPreparation(current.ruleSnapshot || state.rules.find(rule => rule.id === current.ruleId) || {});
       const candidates = await runsFor(job.projectId), run = nativeRun(candidates, current);
-      if (candidates.some(other => other.projectId === job.projectId && other.id !== run?.id && active(other))) throw Error('项目已有其他运行或待检查任务，未执行续跑。');
+      const replacement = !run && current.replacement ? await resolveContinuation(state, current.ruleSnapshot, { previousRuleId: current.replacement.ruleId, previousRunId: current.replacement.runId }, liveEngine, current.replacement) : undefined;
+      if (candidates.some(other => other.projectId === job.projectId && other.id !== run?.id && other.id !== replacement?.runId && active(other))) throw Error('项目已有其他运行或待检查任务，未执行续跑。');
       if (!run) {
         if (current.runId) throw Error('原运行记录暂时找不到，请先重新读取或恢复原记录，未重新派工。');
         if (action !== 'continue') throw Error('请先重新核对派工状态，再明确继续。');
@@ -206,14 +208,14 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     value.decisions.push({ id: randomUUID(), jobId: job.id, runId: job.runId, workspaceId: job.workspaceId, projectId: job.projectId, kind, title, detail: String(detail).slice(0, 3000), createdAt: now() });
     return true;
   }
-  function enqueue(value, rule, event, chain = []) {
+  function enqueue(value, rule, event, chain = [], replacement) {
     if (reservations.has(rule.projectId) || archived(value, rule.projectId)) return undefined;
     if (chain.includes(rule.id) || chain.length >= 8) return undefined;
     const dispatchKey = hash(`${rule.id}\0${rule.updatedAt}\0${event.id}`), existing = value.jobs.find(job => job.dispatchKey === dispatchKey);
     if (existing) return existing;
     if (value.jobs.filter(job => ['queued', 'dispatching', 'running'].includes(job.status)).length >= 100) throw Error('待执行任务已达100项，请先处理队列。');
     if (!value.events.some(item => item.id === event.id)) value.events.push(event);
-    const job = { id: randomUUID(), ruleId: rule.id, ruleSnapshot: structuredClone(rule), workflowSnapshot: structuredClone(contextFor(value, rule).workflow), workspaceId: rule.workspaceId, projectId: rule.projectId, eventId: event.id, dispatchKey, status: 'queued', createdAt: now(), updatedAt: now(), attachmentIds: event.attachmentIds || [], ...(event.inputIssue ? { inputIssue: event.inputIssue } : {}), input: [rule.input, event.input].filter(Boolean).join('\n\n'), ruleChain: [...chain, rule.id] };
+    const job = { id: randomUUID(), ruleId: rule.id, ruleSnapshot: structuredClone(rule), workflowSnapshot: structuredClone(contextFor(value, rule).workflow), workspaceId: rule.workspaceId, projectId: rule.projectId, eventId: event.id, dispatchKey, status: 'queued', createdAt: now(), updatedAt: now(), attachmentIds: event.attachmentIds || [], ...(event.inputIssue ? { inputIssue: event.inputIssue } : {}), ...(replacement ? { replacement: structuredClone(replacement) } : {}), input: [rule.input, event.input].filter(Boolean).join('\n\n'), ruleChain: [...chain, rule.id] };
     value.jobs.push(job); rule.lastTriggeredAt = now(); return job;
   }
   async function pump() {
@@ -252,7 +254,12 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     for (const pending of state.jobs.filter(job => job.status === 'queued')) {
       if (closed || issue || !contextSynced) break;
       if (new Set([...snapshot.runs.filter(run => run.status === 'running').map(run => run.id), ...state.jobs.filter(job => ['dispatching', 'running'].includes(job.status)).map(job => job.runId || job.id)]).size >= 2) break;
-      if (reservations.has(pending.projectId) || dispatchClaims.has(pending.projectId) || archived(state, pending.projectId) || reviewPending(state, pending.projectId, pending.id) || snapshot.runs.some(run => run.projectId === pending.projectId && active(run)) || state.jobs.some(job => job.id !== pending.id && job.projectId === pending.projectId && (['dispatching', 'running'].includes(job.status) || job.cancellationPending))) continue;
+      let replacement;
+      if (pending.replacement) {
+        try { replacement = await resolveContinuation(state, pending.ruleSnapshot, { previousRuleId: pending.replacement.ruleId, previousRunId: pending.replacement.runId }, liveEngine, pending.replacement); }
+        catch (error) { await mutate(next => { const job = next.jobs.find(item => item.id === pending.id); if (job.status === 'cancelled' || job.cancelRequestedAt) return false; return addDecision(next, job, 'failure', '接续制作需要重新确认', error.message); }); continue; }
+      }
+      if (reservations.has(pending.projectId) || dispatchClaims.has(pending.projectId) || archived(state, pending.projectId) || reviewPending(state, pending.projectId, pending.id, replacement?.jobId) || snapshot.runs.some(run => run.projectId === pending.projectId && run.id !== replacement?.runId && active(run)) || state.jobs.some(job => job.id !== pending.id && job.id !== replacement?.jobId && job.projectId === pending.projectId && (['dispatching', 'running'].includes(job.status) || job.cancellationPending))) continue;
       let request; const claim = Symbol(pending.projectId); dispatchClaims.set(pending.projectId, claim);
       try {
         const rule = pending.ruleSnapshot || state.rules.find(rule => rule.id === pending.ruleId); if (!rule) throw Error('来源规则不存在。');
@@ -260,10 +267,11 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         const memories = state.memories.filter(memory => memory.workspaceId === pending.workspaceId && memory.projectId === pending.projectId).slice(-20);
         const remembered = memories.length ? `\n\n【用户明确保存的本项目偏好与决定】\n${memories.map(memory => `${memory.createdAt}：${memory.note}`).join('\n')}` : '';
         assertPreparation(rule);
-        request = safeRequest({ ...context, models: state.context.models, connections: state.context.connections, input: pending.input + remembered, variables: rule.variables, attachmentIds: requestAttachments(pending, context.project, context.workflow), dispatchKey: pending.dispatchKey, acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
-        const claimed = await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); if (!contextSynced || !job || job.status !== 'queued' || job.cancelRequestedAt || reservations.has(job.projectId) || dispatchClaims.get(job.projectId) !== claim || archived(next, job.projectId) || reviewPending(next, job.projectId, job.id)) return false; jobContext(next, job); job.status = 'dispatching'; job.updatedAt = now(); return true; });
+        request = safeRequest({ ...context, ...replacementRequest(replacement), models: state.context.models, connections: state.context.connections, input: pending.input + remembered, variables: rule.variables, attachmentIds: requestAttachments(pending, context.project, context.workflow), dispatchKey: pending.dispatchKey, acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+        const claimed = await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); if (!contextSynced || !job || job.status !== 'queued' || job.cancelRequestedAt || reservations.has(job.projectId) || dispatchClaims.get(job.projectId) !== claim || archived(next, job.projectId) || reviewPending(next, job.projectId, job.id, replacement?.jobId)) return false; jobContext(next, job); job.status = 'dispatching'; job.updatedAt = now(); return true; });
         if (!claimed) continue;
         if (closed || !contextSynced || reservations.has(pending.projectId) || state.jobs.find(job => job.id === pending.id)?.cancelRequestedAt || archived(state, pending.projectId)) continue;
+        if (replacement) await resolveContinuation(state, rule, { previousRuleId: replacement.ruleId, previousRunId: replacement.runId }, liveEngine, replacement);
         const run = await start(request);
         if (!run || !validId(run.id) || run.projectId !== pending.projectId || run.dispatchKey && run.dispatchKey !== pending.dispatchKey) throw Error('派工返回的运行编号或项目归属无效，请重新读取后台记录。');
         await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); job.runId = run.id; job.nativeStatus = run.status; if (job.cancelRequestedAt) cancellationCard(next, job, '已关联运行记录，正在核对取消结果。'); else if (run.status === 'complete' || run.status === 'cancelled') terminalJob(next, job, run); else if (['waiting-review', 'failed', 'interrupted', 'paused'].includes(run.status)) addDecision(next, job, run.status === 'waiting-review' ? 'review' : 'failure', '检查这次执行结果', run.error || `后台状态：${run.status}`); else job.status = 'running'; job.updatedAt = now(); });
@@ -385,7 +393,20 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
       }); tick(); return structuredClone(result);
     },
     async setEnabled({ id, enabled }) { if (typeof enabled !== 'boolean') throw Error('启用状态无效。'); await ready; await writes; const original = state.rules.find(rule => rule.id === id); if (!original) throw Error('规则不存在。'); readinessEpochs.set(id, (readinessEpochs.get(id) || 0) + 1); const checked = enabled ? await checkReadiness(original, original.trigger === 'reference-imported') : undefined; await mutate(next => { const rule = next.rules.find(rule => rule.id === id); if (!rule) throw Error('规则不存在。'); if (checked) verifyReadiness(next, rule, checked); rule.enabled = enabled; rule.updatedAt = now(); rule.lastTriggeredAt = now(); if (!enabled) for (const job of next.jobs.filter(job => job.ruleId === id && job.status === 'queued')) { job.status = 'cancelled'; job.updatedAt = now(); } }); tick(); },
-    async trigger({ ruleId }) { await ready; await writes; const original = state.rules.find(rule => rule.id === ruleId); if (!original) throw Error('规则不存在。'); const checked = await checkReadiness(original, false); let result; await mutate(next => { const rule = next.rules.find(rule => rule.id === ruleId); if (!rule) throw Error('规则不存在。'); verifyReadiness(next, rule, checked); result = next.jobs.find(job => job.ruleId === rule.id && ['queued', 'dispatching', 'running', 'decision'].includes(job.status)) || enqueue(next, rule, { id: randomUUID(), workspaceId: rule.workspaceId, projectId: rule.projectId, trigger: 'manual', sourceId: rule.id, createdAt: now() }); }); tick(); return structuredClone(result); },
+    async trigger({ ruleId, continuation }) {
+      await ready; await writes; const original = state.rules.find(rule => rule.id === ruleId); if (!original) throw Error('规则不存在。');
+      const prior = state.jobs.find(job => job.ruleId === ruleId && ['queued', 'dispatching', 'running', 'decision'].includes(job.status));
+      if (prior && continuation !== undefined) { try { sameContinuation(prior, continuation); } catch (error) { throw Error(`接续制作未提交：${error.message}`); } return structuredClone(prior); }
+      const checked = await checkReadiness(original, false); let result;
+      await mutate(async next => {
+        const rule = next.rules.find(rule => rule.id === ruleId); if (!rule) throw Error('规则不存在。'); verifyReadiness(next, rule, checked);
+        result = next.jobs.find(job => job.ruleId === rule.id && ['queued', 'dispatching', 'running', 'decision'].includes(job.status));
+        if (result) { if (continuation !== undefined) try { sameContinuation(result, continuation); } catch (error) { throw Error(`接续制作未提交：${error.message}`); } return false; }
+        let replacement;
+        if (continuation !== undefined) try { replacement = await resolveContinuation(next, rule, continuation, liveEngine); } catch (error) { throw Error(`接续制作未提交：${error.message}`); }
+        result = enqueue(next, rule, { id: randomUUID(), workspaceId: rule.workspaceId, projectId: rule.projectId, trigger: 'manual', sourceId: rule.id, createdAt: now() }, [], replacement);
+      }); tick(); return structuredClone(result);
+    },
     async referenceImported({ projectId, workspaceId, files }) { if (!validId(projectId) || !validId(workspaceId) || !Array.isArray(files) || files.some(file => !validId(file.id))) throw Error('参考资料事件无效。'); await mutate(next => { let changed = false; for (const rule of next.rules.filter(rule => rule.enabled && rule.trigger === 'reference-imported' && rule.projectId === projectId && rule.workspaceId === workspaceId)) { const previous = next.jobs.length, workflow = contextFor(next, rule).workflow; enqueue(next, rule, { id: hash(`import:${projectId}:${files.map(file => file.id).sort().join(',')}`), workspaceId, projectId, trigger: 'reference-imported', sourceId: projectId, attachmentIds: files.map(file => file.id), ...(files.some(file => !acceptedKind(file, workflow)) ? { inputIssue: '新导入资料含当前流程不能读取的类型，请调整规则或资料后重新触发。' } : {}), createdAt: now() }); if (next.jobs.length !== previous) changed = true; } return changed; }); tick(); },
     async cancelJob(id) { await ready.catch(() => undefined); await writes; if (issue) throw Error(issue); const job = state.jobs.find(job => job.id === id); if (!job) throw Error('任务不存在。'); if (['complete', 'cancelled'].includes(job.status) && !job.cancellationPending) return; await mutate(next => { const current = next.jobs.find(job => job.id === id); current.cancelRequestedAt ||= now(); return cancellationCard(next, current, '已请求取消，正在核对后台记录；已发生费用保留。'); }); await confirmCancellation(id, true); },
     async resolve({ id, action, note = '', remember = false }) {

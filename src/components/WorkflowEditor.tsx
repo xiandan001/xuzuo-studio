@@ -6,6 +6,8 @@ import { ArrowDown, ArrowRight, ArrowUp, Braces, Check, Layers3, ListOrdered, Pl
 import type { ModelConfiguration, WorkflowDraft, WorkflowStep, WorkflowStepKind } from '../configuration-types';
 import type { LivePreflightIssue } from '../live-types';
 import { Select } from './Select';
+import { ImageOutputControls } from './ImageOutputControls';
+import { effectiveImageOptions, imageFormatModelDisabled, imageOutputFields, imageOutputIssue } from '../lib/image-output-options';
 import type { PageProps, ProjectKind } from '../types';
 import { KIND_LABEL, parseOptionalBudget } from '../data';
 import { studioCredential, workflowStepSelection, workflowSelections, WORKFLOW_OUTPUT_MIN, WORKFLOW_OUTPUT_MAX } from '../lib/studio-run';
@@ -15,6 +17,15 @@ import { STEP_KINDS, isModelStep, kindLabel, StepIcon, categoryOptions, makeStep
 function availableModels(props: PageProps, kind: WorkflowStepKind): ModelConfiguration[] {
   if (!isModelStep(kind)) return [];
   return props.configuration.models.filter(model => model.enabled && model.capabilities.includes(kind) && props.configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled));
+}
+
+export function workflowImageIssue(step: WorkflowStep, modelId: string): string | undefined {
+  if (!['image-generation', 'image-editing'].includes(step.kind)) return undefined;
+  const issue = imageOutputIssue(effectiveImageOptions(step, modelId, step.kind), modelId, step.kind, step.imageBackground);
+  if (issue) return issue;
+  if (step.imageOutputFormat === 'svg' && (step.count ?? 1) !== 1) return '单次SVG步骤仅支持1张，请将数量改为1；多张请安排独立生成步骤。';
+  if (step.imageOutputFormat === 'gif' && step.imageSize !== undefined && step.imageSize !== 'auto') return 'GIF帧尺寸请选择自动，由模型确定每帧尺寸。';
+  return undefined;
 }
 
 export function blankWorkflow(props: PageProps, outputKind: ProjectKind = 'ppt'): WorkflowDraft {
@@ -56,6 +67,7 @@ function StepSettings({ props, step, index, firstEnabledIndex, priorContentSteps
   const connection = props.configuration.connections.find(item => item.id === model?.connectionId);
   const credentials = props.configuration.credentials.filter(item => item.enabled && item.connectionId === model?.connectionId);
   const templates = props.prompts.filter(template => template.category === 'general' || (step.kind.startsWith('image') ? template.category === 'image' : step.kind === 'text' ? template.category !== 'image' : true));
+  const authorModels = [...new Map(props.configuration.models.filter(item => item.enabled && !item.demo && item.capabilities.includes('text') && props.configuration.connections.some(connection => connection.id === item.connectionId && connection.enabled && connection.providerId === 'openai')).map(item => [item.modelId, { modelId: item.modelId, name: item.name }])).values()];
   function changeKind(kind: WorkflowStepKind) {
     onChange(workflowStepSelection({ ...step, kind, name: step.name === kindLabel(step.kind) ? kindLabel(kind) : step.name, prompt: isModelStep(kind) ? step.prompt : '', promptTemplateId: undefined, budgetCents: step.budgetCents, contentSourceStepId: undefined, imageSize: kind === 'video-generation' ? '1280x720' : step.imageSize }, props.configuration));
   }
@@ -64,7 +76,7 @@ function StepSettings({ props, step, index, firstEnabledIndex, priorContentSteps
     <label className="wf-field"><span>步骤类型</span><Select className="field" aria-label="步骤类型" value={step.kind} onValueChange={value => changeKind(value as WorkflowStepKind)} options={STEP_KINDS} /></label>
     <label className="wf-field"><span>使用哪些内容</span><Select className="field" aria-label="步骤输入来源" value={step.inputSource} onValueChange={value => onChange({ inputSource: value as WorkflowStep['inputSource'] })} options={[{ value: 'project', label: '本次需求与项目资料' }, { value: 'previous', label: '上一步的有效结果', disabled: index === firstEnabledIndex }]} /><small>第一个启用步骤从本次需求开始。</small></label>
     {isModelStep(step.kind) ? <>
-      <RememberedDetails rememberKey={`workflow-step:${step.id}:connections`} className="wf-step-connections" defaultOpen={!model || !step.credentialId && !model.demo}><summary><span>{model && (step.credentialId || model.demo) ? `已带入：${model.name}` : '选择这一步的模型和 Key'}</span><small>展开调整</small></summary>      <label className="wf-field"><span>使用模型</span><Select className="field" aria-label="步骤模型" value={step.modelConfigId || ''} onValueChange={value => { const next = models.find(item => item.id === value); onChange({ modelConfigId: next?.id, credentialId: next && !next.demo ? studioCredential(props.configuration.credentials, next.connectionId, step.credentialId) : undefined }); }} options={[{ value: '', label: '请选择匹配能力的模型' }, ...models.map(item => ({ value: item.id, label: `${item.name}${item.demo ? ' · 仅模拟' : ''}` }))]} />{!models.length && <small className="wf-warning">没有可用模型。请先到“模型与连接”配置具备{kindLabel(step.kind)}能力的模型。</small>}</label>
+      <RememberedDetails rememberKey={`workflow-step:${step.id}:connections`} className="wf-step-connections" defaultOpen={!model || !step.credentialId && !model.demo}><summary><span>{model && (step.credentialId || model.demo) ? `已带入：${model.name}` : '选择这一步的模型和 Key'}</span><small>展开调整</small></summary>      <label className="wf-field"><span>使用模型</span><Select className="field" aria-label="步骤模型" value={step.modelConfigId || ''} onValueChange={value => { const next = models.find(item => item.id === value); onChange({ modelConfigId: next?.id, credentialId: next && !next.demo ? studioCredential(props.configuration.credentials, next.connectionId, step.credentialId) : undefined }); }} options={[{ value: '', label: '请选择匹配能力的模型' }, ...models.map(item => ({ value: item.id, label: `${item.name}${item.demo ? ' · 仅模拟' : ''}`, disabled: ['image-generation', 'image-editing'].includes(step.kind) && imageFormatModelDisabled(step.imageOutputFormat, item.modelId), description: ['image-generation', 'image-editing'].includes(step.kind) && imageFormatModelDisabled(step.imageOutputFormat, item.modelId) ? '当前 SVG/GIF 格式仅 GPT Image 2.6 可用' : undefined }))]} />{!models.length && <small className="wf-warning">没有可用模型。请先到“模型与连接”配置具备{kindLabel(step.kind)}能力的模型。</small>}</label>
       <label className="wf-field"><span>API 凭证</span><Select className="field" aria-label="步骤 API 凭证" value={step.credentialId || ''} disabled={!connection || !!connection.demo} onValueChange={value => onChange({ credentialId: value || undefined })} options={[{ value: '', label: '请选择 API Key' }, ...credentials.map(item => ({ value: item.id, label: `${item.name} · ••••${item.lastFour}` }))]} /><small>{connection?.demo ? '此模型仅支持模拟运行，不需要 API Key。' : '真实模式使用所选凭证，由桌面主进程发送请求；界面不会读取完整 Key。'}</small></label>
       </RememberedDetails>
       <label className="wf-field"><span>从提示词模板开始 <small>可选</small></span><Select className="field" aria-label="步骤提示词模板" value={step.promptTemplateId || ''} onValueChange={value => { const template = templates.find(item => item.id === value); onChange({ promptTemplateId: template?.id, ...(template ? { prompt: template.content } : {}) }); }} options={[{ value: '', label: '自己编写提示词' }, ...templates.map(template => ({ value: template.id, label: template.name }))]} /></label>
@@ -73,7 +85,15 @@ function StepSettings({ props, step, index, firstEnabledIndex, priorContentSteps
       <RememberedDetails rememberKey={`workflow-step:${step.id}:advanced`} className="wf-advanced-settings"><summary>高级参数 · 输出长度、尺寸与金额上限</summary>
       <WorkflowQualitySettings step={step} priorSteps={priorSteps} onChange={onChange} />
       {(step.kind === 'text' || step.kind === 'vision' || step.kind === 'video-understanding') && <label className="wf-field"><span>最大输出 Token 数</span><input className="field" aria-label="最大输出 Token 数" type="number" min={WORKFLOW_OUTPUT_MIN} max={WORKFLOW_OUTPUT_MAX} step="1" value={step.maxOutputTokens ?? 2048} onChange={event => { const value = Number(event.target.value); if (Number.isInteger(value)) onChange({ maxOutputTokens: value }); }} /><small>本工作流支持 16–16384 Token，具体型号可能有更低上限。</small></label>}
-      {(step.kind === 'image-generation' || step.kind === 'image-editing') && <div className="wf-image-parameters"><div className="wf-two-fields"><label className="wf-field"><span>图片尺寸</span><Select className="field" aria-label="工作流图片尺寸" value={step.imageSize || '1024x1024'} onValueChange={value => onChange({ imageSize: value })} options={['1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'].map(size => ({ value: size, label: size }))} /></label><label className="wf-field"><span>图片数量</span><Select className="field" aria-label="工作流图片数量" value={String(step.count || 1)} onValueChange={value => onChange({ count: Number(value) })} options={[1, 2, 4].map(count => ({ value: String(count), label: `${count} 张` }))} /></label></div><label className="wf-field"><span>背景</span><Select className="field" aria-label="工作流图片背景" value={step.imageBackground || 'auto'} onValueChange={value => onChange({ imageBackground: value as WorkflowStep['imageBackground'] })} options={[{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明背景' }, { value: 'transparent', label: '透明背景' }]} /><small>尺寸、数量和透明输出须由该模型实际支持，调用前会预检接口能力。</small></label></div>}
+      {(step.kind === 'image-generation' || step.kind === 'image-editing') && <div className="wf-image-parameters">
+        <div className="wf-two-fields"><label className="wf-field"><span>图片尺寸</span><Select className="field" aria-label="工作流图片尺寸" value={step.imageSize || (step.imageOutputFormat === 'gif' ? 'auto' : '1024x1024')} onValueChange={value => onChange({ imageSize: value })} options={['auto', '1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'].map(size => ({ value: size, label: size === 'auto' ? '自动' : size, disabled: step.imageOutputFormat === 'gif' && size !== 'auto' }))} /></label><label className="wf-field"><span>图片数量</span><Select className="field" aria-label="工作流图片数量" value={String(step.count || 1)} onValueChange={value => onChange({ count: Number(value) })} options={[1, 2, 4].map(count => ({ value: String(count), label: `${count} 张` }))} /></label></div>
+        {step.imageOutputFormat === 'gif' && <small>GIF帧尺寸由模型自动选择；数量表示动画份数。</small>}
+        {step.imageOutputFormat === 'svg' && <small>SVG每个生成步骤仅支持1张，多张请安排独立步骤。</small>}
+        <label className="wf-field"><span>背景</span><Select className="field" aria-label="工作流图片背景" value={step.imageBackground || 'auto'} onValueChange={value => onChange({ imageBackground: value as WorkflowStep['imageBackground'] })} options={[{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明背景' }, { value: 'transparent', label: '透明背景' }]} /><small>尺寸、数量和透明输出须由该模型实际支持，调用前会预检接口能力。</small></label>
+        <ImageOutputControls modelId={model?.modelId || ''} capability={step.kind} value={step} authorModels={authorModels} onChange={changes => onChange({ ...changes, ...(changes.imageOutputFormat === 'gif' ? { imageSize: 'auto' } : {}) })} />
+        {step.kind === 'image-editing' && <small>圈画需在图片工作台选择原图后操作；已保存标注会在运行前检查项目归属、透明像素与尺寸。</small>}
+        {workflowImageIssue(step, model?.modelId || '') && <small className="wf-warning">{workflowImageIssue(step, model?.modelId || '')}</small>}
+      </div>}
       {step.kind === 'video-generation' && <label className="wf-field"><span>视频尺寸</span><Select className="field" aria-label="工作流视频尺寸" value={['1280x720', '720x1280', '960x960'].includes(step.imageSize || '') ? step.imageSize! : '1280x720'} onValueChange={value => onChange({ imageSize: value })} options={['1280x720', '720x1280', '960x960'].map(size => ({ value: size, label: size }))} /><small>具体服务商、模型及异步接口是否适配，以运行预检为准。</small></label>}
       {step.kind === 'speech' && <label className="wf-field"><span>语音名称</span><input className="field" aria-label="工作流语音名称" maxLength={80} value={step.voice || 'alloy'} onChange={event => onChange({ voice: event.target.value })} placeholder="复制服务商支持的 voice 名称" /><small>填写所选语音模型支持的声音标识。</small></label>}
       <label className="wf-field"><span>本步骤金额上限（元，选填）</span><input className="field" aria-label="步骤金额上限" type="number" min="0" step="0.01" placeholder="选填，留空不设上限" value={step.budgetCents == null ? '' : step.budgetCents / 100} onChange={event => { try { const budgetCents = parseOptionalBudget(event.target.value); event.currentTarget.setCustomValidity(''); onChange({ budgetCents }); } catch (error) { event.currentTarget.setCustomValidity(error instanceof Error ? error.message : '请填写有效金额或留空。'); } }} /><small>留空不限制本步骤，填写 0 表示零上限；实际费用仍按每次调用累计。</small></label>
@@ -123,8 +143,18 @@ export function WorkflowEditor({ props, initial, workflowId, onClose, onSaved, l
     if (!enabled.length) { setError('至少需要一个启用的步骤。'); return; }
     const invalid = enabled.find(step => !step.name.trim() || (isModelStep(step.kind) && (!step.prompt.trim() || !availableModels(props, step.kind).some(model => model.id === step.modelConfigId) || !Number.isInteger(step.maxOutputTokens ?? 2048) || (step.maxOutputTokens ?? 2048) < WORKFLOW_OUTPUT_MIN || (step.maxOutputTokens ?? 2048) > WORKFLOW_OUTPUT_MAX)));
     if (invalid) { const field = !invalid.prompt.trim() ? 'prompt' : !availableModels(props, invalid.kind).some(model => model.id === invalid.modelConfigId) ? 'modelConfigId' : 'maxOutputTokens'; setSelectedId(invalid.id); setFocus({ stepId: invalid.id, field }); setError(`请检查“${invalid.name || '未命名步骤'}”的名称、提示词、模型和输出范围（16–16384）。`); return; }
+    for (const step of enabled) {
+      const imageIssue = workflowImageIssue(step, props.configuration.models.find(model => model.id === step.modelConfigId)?.modelId || '');
+      if (imageIssue) { setSelectedId(step.id); setFocus({ stepId: step.id, field: step.imageOutputFormat === 'svg' ? 'count' : 'imageSize' }); setError(`“${step.name}”：${imageIssue}`); return; }
+    }
+    const savedSteps = draft.steps.map(step => {
+      if (!step.enabled || !['image-generation', 'image-editing'].includes(step.kind)) return step;
+      const next = { ...step };
+      for (const field of imageOutputFields) delete next[field];
+      return { ...next, ...effectiveImageOptions(step, props.configuration.models.find(model => model.id === step.modelConfigId)?.modelId || '', step.kind) };
+    });
     const savedId = workflowId || newWorkflowId.current;
-    if (props.configuration.saveWorkflow({ ...draft, name: draft.name.trim(), description: draft.description.trim() }, savedId)) { onClose(); onSaved?.(savedId); }
+    if (props.configuration.saveWorkflow({ ...draft, steps: savedSteps, name: draft.name.trim(), description: draft.description.trim() }, savedId)) { onClose(); onSaved?.(savedId); }
   }
   const categoryChoices = categoryOptions(props.configuration.categories);
   return <WorkflowDialog title={workflowId ? '编辑工作流' : '创建自己的工作流'} subtitle={`保存到“${props.workspace.name}”，按你的习惯安排每一步。`} onClose={onClose} className="wf-editor-dialog" footer={<><span className="wf-footer-hint"><ShieldCheck size={14} />保存不调用模型；运行时自动检查设置并记录实际花费</span><button type="button" className="btn btn-secondary" onClick={onClose}>取消</button><button type="submit" form="wf-editor-form" className="btn btn-primary"><Check size={15} />{saveLabel || (onSaved ? '保存并继续预检' : '保存工作流')}</button></>}>

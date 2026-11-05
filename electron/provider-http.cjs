@@ -192,6 +192,18 @@ function normalizedUsage(data, context) {
   const raw = data?.usage || data?.usageMetadata || {};
   const usage = {};
   for (const [key, value] of Object.entries(tokenUsage(data, raw))) if (tokenCount(value) !== undefined) usage[key] = value;
+  if (['png', 'jpeg', 'webp', 'svg', 'gif'].includes(data?.output_format)) usage.imageOutputFormat = data.output_format;
+  if (data?.svg_usage && typeof data.svg_usage === 'object' && !Array.isArray(data.svg_usage)) {
+    const svg = {};
+    const model = data.svg_usage.model;
+    if (typeof model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/.test(model) && (!context.secret || !model.includes(context.secret))) svg.model = model;
+    for (const [source, target] of [['input_tokens', 'inputTokens'], ['output_tokens', 'outputTokens'], ['reasoning_tokens', 'reasoningTokens'], ['total_tokens', 'totalTokens']]) {
+      const value = tokenCount(data.svg_usage[source]);
+      if (value !== undefined) svg[target] = value;
+    }
+    usage.svgUsage = svg;
+    usage.imageOutputFormat = 'svg';
+  }
   const seconds = raw.seconds ?? data?.duration;
   if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) usage.seconds = seconds;
   if (Object.keys(usage).length) usage.usageSource = 'provider-reported';

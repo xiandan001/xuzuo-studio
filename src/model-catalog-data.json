@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-10-30",
+  "checkedAt": "2026-11-05",
   "models": [
     {
       "id": "openai-gpt-6-luna",
@@ -226,6 +226,130 @@
         "example": "示例：1,000 输入 + 1,000 输出 Token，基础费用约 $0.06；不含缓存写入、工具等附加费用。此算例输入未超过长上下文门槛。"
       },
       "releaseDate": "2026-09-03"
+    },
+    {
+      "id": "openai-gpt-image-2-6-flare",
+      "providerId": "openai",
+      "name": "GPT Image 2.6 Flare",
+      "modelId": "gpt-image-2.6-flare",
+      "capabilities": [
+        "image-generation",
+        "image-editing"
+      ],
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "region": "官方全球 API · USD",
+      "defaultBaseUrl": "https://api.openai.com/v1",
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "status": "current",
+      "description": "适合快速迭代；支持复杂度控制、标注精修，以及仅生成可用的SVG和动画GIF。",
+      "checkedAt": "2026-11-05",
+      "sources": [
+        {
+          "label": "模型与能力",
+          "url": "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare"
+        },
+        {
+          "label": "官方价格",
+          "url": "https://developers.openai.com/api/docs/pricing"
+        },
+        {
+          "label": "停用与迁移公告",
+          "url": "https://developers.openai.com/api/docs/deprecations"
+        },
+        {
+          "label": "图片接口与格式限制",
+          "url": "https://developers.openai.com/api/docs/guides/image-generation"
+        }
+      ],
+      "support": {
+        "ready": true,
+        "note": "图像操作始终使用Images接口，不支持Responses图像工具；SVG/GIF仅生成可用，预览及SVG作者选择取决于账户权限；未验证当前账户可用性。"
+      },
+      "pricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": "",
+        "referenceOnly": true,
+        "displayLines": [
+          "文字输入：$5 / 百万 Token。",
+          "参考图片输入：$8 / 百万 Token。",
+          "图片输出：$30 / 百万 Token；随实际输出 Token 计费。",
+          "不同尺寸、质量及参考图会改变费用，不能写成固定单张总价。",
+          "SVG另计作者模型Token；GIF按返回的总Token计费，不额外乘帧数。"
+        ],
+        "note": "文字输入、参考图输入和图片输出分别计费；不推定直接Images接口缓存优惠。SVG另计返回的作者模型Token，未知作者费率保留为不完整费用。",
+        "example": "仅输出部分的算例：1,000 图片输出 Token 约 $0.03；文字与参考图输入另计。这不是一张图片的固定费用。"
+      },
+      "releaseDate": "2026-11-04"
+    },
+    {
+      "id": "openai-gpt-image-2-6-sunburst",
+      "providerId": "openai",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelId": "gpt-image-2.6-sunburst",
+      "capabilities": [
+        "image-generation",
+        "image-editing"
+      ],
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "region": "官方全球 API · USD",
+      "defaultBaseUrl": "https://api.openai.com/v1",
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "status": "current",
+      "description": "适合精细视觉创作；支持复杂度控制、标注精修，以及仅生成可用的SVG和动画GIF。",
+      "checkedAt": "2026-11-05",
+      "sources": [
+        {
+          "label": "模型与能力",
+          "url": "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst"
+        },
+        {
+          "label": "官方价格",
+          "url": "https://developers.openai.com/api/docs/pricing"
+        },
+        {
+          "label": "停用与迁移公告",
+          "url": "https://developers.openai.com/api/docs/deprecations"
+        },
+        {
+          "label": "图片接口与格式限制",
+          "url": "https://developers.openai.com/api/docs/guides/image-generation"
+        }
+      ],
+      "support": {
+        "ready": true,
+        "note": "图像操作始终使用Images接口，不支持Responses图像工具；SVG/GIF仅生成可用，预览及SVG作者选择取决于账户权限；未验证当前账户可用性。"
+      },
+      "pricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": "",
+        "referenceOnly": true,
+        "displayLines": [
+          "文字输入：$5 / 百万 Token。",
+          "参考图片输入：$8 / 百万 Token。",
+          "图片输出：$30 / 百万 Token；随实际输出 Token 计费。",
+          "不同尺寸、质量及参考图会改变费用，不能写成固定单张总价。",
+          "SVG另计作者模型Token；GIF按返回的总Token计费，不额外乘帧数。"
+        ],
+        "note": "文字输入、参考图输入和图片输出分别计费；不推定直接Images接口缓存优惠。SVG另计返回的作者模型Token，未知作者费率保留为不完整费用。",
+        "example": "仅输出部分的算例：1,000 图片输出 Token 约 $0.03；文字与参考图输入另计。这不是一张图片的固定费用。"
+      },
+      "releaseDate": "2026-11-04"
     },
     {
       "id": "openai-gpt-image-2-5-flare",

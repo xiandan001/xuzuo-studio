@@ -3,6 +3,7 @@ import type { ImageUseTemplate, ImageUseTemplateDraft } from '../configuration-t
 export const IMAGE_PRESETS = ['宣传图', '人物图', '卡通图', '试衣图', '头像', '表情包', '透明 PNG'] as const;
 export type BuiltinImagePreset = typeof IMAGE_PRESETS[number];
 export const IMAGE_SIZES = [
+  { value: 'auto', label: '自动 · 由模型选择', description: 'GIF 使用自动帧尺寸' },
   { value: '1024x1024', label: '正方形 · 1:1', description: '1024 × 1024' },
   { value: '1536x1024', label: '横向 · 3:2', description: '1536 × 1024' },
   { value: '1024x1536', label: '竖向 · 2:3', description: '1024 × 1536' },

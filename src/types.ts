@@ -1,3 +1,4 @@
+import type { ImageOutputOptions } from './image-options-types';
 import type { DataManagementBridge } from './data-management-types';
 import type { DeliveryBridge, DeliveryReceipt, DeliverySelection } from './delivery-types';
 import type { BatchBridge } from './batch-types';
@@ -157,7 +158,7 @@ export interface PageProps {
   onCreateProject: (kind?: ProjectKind, options?: { onCreated?: (project: Project) => void; onCancelled?: (error?: string) => void; initial?: { name?: string; description?: string }; quick?: boolean }) => void;
   onUpdateProject: (id: string, changes: Partial<Project>) => void;
   onProjectDelivered?: (projectId: string, receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>;
-  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: { prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => void;
+  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: ImageOutputOptions & { prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => void;
   onExport: (projectId?: string, draft?: { title: string; text: string }) => void;
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }

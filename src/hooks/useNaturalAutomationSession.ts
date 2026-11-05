@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PageProps } from '../types';
-import type { AutomationRule } from '../automation-types';
+import type { AutomationContinuation, AutomationRule } from '../automation-types';
 import { compileNaturalAutomationPlan, naturalAutomationRequestIssues } from '../lib/natural-automation-plan';
 import { registerEditorSession } from '../lib/editor-session-guard';
 import { normalizedNaturalDraftPlan, useNaturalAutomationDraft } from './useNaturalAutomationDraft';
@@ -24,7 +24,7 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
   const mounted = useRef(true), latest = useRef({ props, store }); latest.current = { props, store };
   const creation = useNaturalAutomationCreation(props, store, setError, rule => { setSavedRule(rule); onSaved(); });
   const busy = creation.busy, saving = creation.isSaving;
-  const runFlight = useRef<{ scope: string; token: string; ruleId?: string; dispatched: boolean; repeat: boolean; promise: Promise<AutomationActionResult>; resolve: (result: AutomationActionResult) => void; timer?: ReturnType<typeof setTimeout> } | undefined>(undefined);
+  const runFlight = useRef<{ scope: string; token: string; ruleId?: string; dispatched: boolean; repeat: boolean; continuation?: AutomationContinuation; promise: Promise<AutomationActionResult>; resolve: (result: AutomationActionResult) => void; timer?: ReturnType<typeof setTimeout> } | undefined>(undefined);
   const [runBusy, setRunBusy] = useState(false), [runToken, setRunToken] = useState(''), [preparationRequest, setPreparationRequest] = useState(0);
   const planningSource = useNaturalAutomationPlanning(props, store, setError);
   const planning = { ...planningSource, start: (request?: Parameters<typeof planningSource.start>[0]) => {
@@ -76,9 +76,9 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
     if (flight.scope !== runScope()) { finishRun({ status: 'failed' }); return; }
     flight.dispatched = true;
     if (readiness.remaining) { readiness.reveal(); finishRun({ status: 'needs-input' }); return; }
-    void readiness.perform('run', { reuseCompleted: !flight.repeat }).then(result => { if (runFlight.current === flight) finishRun(result); });
+    void readiness.perform('run', { reuseCompleted: !flight.repeat, continuation: flight.continuation }).then(result => { if (runFlight.current === flight) finishRun(result); });
   }, [runToken, readiness.loadedRuleId, readiness.dispatchLoading, readiness.remaining, savedWorkflow?.id]);
-  function createAndRun(options: { repeat?: boolean } = {}): Promise<AutomationActionResult> {
+  function createAndRun(options: { repeat?: boolean; continuation?: AutomationContinuation } = {}): Promise<AutomationActionResult> {
     if (targetPurged) { setError('保存项目已永久删除，不能重新运行或查看旧作品；历史费用保留。'); return Promise.resolve({ status: 'failed' }); }
     if (runFlight.current) return runFlight.current.promise;
     if (planning.active || busy || readiness.busy) return Promise.resolve({ status: 'failed' });
@@ -86,7 +86,7 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
     const current = store.current.current;
     if (!current.ruleId && !current.workflowSaved && !existingFlow && (result.error || !project || project.kind !== current.plan?.outputKind || result.compiled?.missing.length || current.plan && naturalPreparationMissing(current.plan, current.preparationAnswers || {}).length)) { setPreparationRequest(value => value + 1); return Promise.resolve({ status: 'needs-input' }); }
     let resolve!: (result: AutomationActionResult) => void; const promise = new Promise<AutomationActionResult>(done => { resolve = done; });
-    const flight = { scope: runScope(), token: crypto.randomUUID(), ruleId: undefined as string | undefined, dispatched: false, repeat: !!options.repeat, promise, resolve, timer: undefined as ReturnType<typeof setTimeout> | undefined }; runFlight.current = flight; setRunBusy(true); setRunToken(flight.token);
+    const flight = { scope: runScope(), token: crypto.randomUUID(), ruleId: undefined as string | undefined, dispatched: false, repeat: !!options.repeat, continuation: options.continuation && { ...options.continuation }, promise, resolve, timer: undefined as ReturnType<typeof setTimeout> | undefined }; runFlight.current = flight; setRunBusy(true); setRunToken(flight.token);
     flight.timer = setTimeout(() => { if (runFlight.current === flight) { setError('运行设置还未读取完成，当前方案保留。请再次确认开始；不会自动运行。'); finishRun({ status: 'failed' }); } }, 20000);
     void ensureCreated().then(rule => {
       if (runFlight.current !== flight) return;

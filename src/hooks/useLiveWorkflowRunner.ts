@@ -12,6 +12,8 @@ import { createProjectFileCache } from '../lib/project-file-cache';
 import { mergeNativeSnapshot } from '../lib/native-snapshot';
 import { liveProjectStateSignature, liveProjectStatus, selectProjectStatusRun } from '../lib/project-status';
 import { isProductionRun } from '../lib/workflow-purpose';
+import { createLiveStartCoordinator } from '../lib/live-start';
+import { prepareLiveStartSource } from '../lib/live-start-source';
 
 type SimulationRunner = Pick<WorkflowRunner, 'runs' | 'start' | 'pause' | 'resume' | 'cancel' | 'retry' | 'manageRun' | 'simulationStorage'>;
 const unavailable = { available: false, reason: '真实执行仅在新版 Windows EXE 中可用；浏览器可编辑配置或主动选择模拟。' };
@@ -59,6 +61,7 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const artifactSignatures = useRef(new Map<string, string>());
   const optionsRef = useRef(options); optionsRef.current = options;
+  const alive = useRef(true); useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const purgedProjectSignature = options.projects.filter(project => project.purgedAt).map(project => project.id).sort().join('|');
   useEffect(() => {
     if (!purgedProjectSignature) return;
@@ -98,6 +101,12 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     }); return next.some((project, index) => project !== projects[index]) ? next : projects; });
   };
   const mergeRef = useRef(merge); mergeRef.current = merge;
+  const [starts] = useState(() => createLiveStartCoordinator({ storage: () => localStorage, bridge: () => window.desktop?.runtime, onRun: run => {
+    if (!alive.current) return;
+    if (!nativeSnapshot.current.runs.some(item => item.id === run.id)) mergeRef.current({ delta: true, runs: [run], ledger: [] });
+    const bridge = window.desktop?.runtime;
+    if (bridge) void (async () => { try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (alive.current && snapshot) mergeRef.current(snapshot); } catch { /* Acceptance is independent of a subsequent poll; regular polling will recover. */ } })();
+  } }));
   useEffect(() => window.desktop?.runtime?.onProjectFilesChanged?.(projectId => { inventoryCache.invalidate(projectId); thumbnailCache.clear(); setInventoryRevision(value => value + 1); }), [inventoryCache, thumbnailCache]);
   const listProjectArtifacts = useCallback(async (projectId: string, input?: { refresh?: boolean }) => {
     const current = optionsRef.current;
@@ -159,6 +168,10 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     if (!project || workflow.workspaceId !== current.workspaceId) throw new Error('请选择当前工作区的项目和流程。');
     return { workflow: withCreationFoundation(workflow), project, connections: current.configuration.connections, models: current.configuration.models, input, variables, attachmentIds: [...new Set([...attachmentIds, ...(project.referenceFiles || []).filter(file => ['text', 'office'].includes(file.kind)).map(file => file.id)])], acknowledgePaidCalls: true, acknowledgeUnknownCost, ...(replaceWaitingReviewRunId ? { replaceWaitingReviewRunId } : {}) };
   };
+  async function prepareStart(input: LiveStartRequest): Promise<LiveStartRequest> {
+    const bridge = window.desktop?.runtime;
+    return prepareLiveStartSource(input, async id => { const old = bridge?.runDetail ? await bridge.runDetail(id) : liveRunsRef.current.find(run => run.id === id); if (!old) throw new Error('上一轮任务暂不能可靠读取，原记录与费用保留。'); return old; }, listProjectArtifacts);
+  }
   const liveControl = async (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue', stepId?: string, stepBudgetCents?: number | null) => {
     const bridge = window.desktop?.runtime;
     const current = optionsRef.current;
@@ -191,12 +204,16 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
       return bridge.preflight(request(workflow, projectId, input, variables, attachmentIds));
     },
     async startLive(workflow, projectId, input, variables, attachmentIds, acknowledgeUnknownCost, replaceWaitingReviewRunId) {
-      const bridge = window.desktop?.runtime;
-      if (!bridge || !runtimeStatus.available) { options.notify(unavailable.reason, 'error'); return false; }
-      if (options.isOtherTaskRunning(projectId) || simulation.runs.some(run => run.projectId === projectId && activeRun(run))) { options.notify('项目已有运行任务，请先完成或取消。', 'info'); return false; }
-      try { await bridge.start(request(workflow, projectId, input, variables, attachmentIds, acknowledgeUnknownCost, replaceWaitingReviewRunId)); const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot) mergeRef.current(snapshot); options.notify('已开始真实工作流，可以切换页面，结果和用量会保存。'); return true; }
-      catch (error) { options.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '真实流程未能开始。', 'error'); return false; }
+      const current = optionsRef.current, scope = current.workspaceId;
+      if (!window.desktop?.runtime || !runtimeStatus.available) return { status: 'rejected', code: 'RUNTIME_UNAVAILABLE', error: unavailable.reason };
+      if (current.isOtherTaskRunning(projectId) || simulation.runs.some(run => run.projectId === projectId && activeRun(run))) return { status: 'rejected', code: 'PROJECT_BUSY', error: '项目已有运行任务，请先完成或取消。' };
+      try {
+        const result = await starts.start(request(workflow, projectId, input, variables, attachmentIds, acknowledgeUnknownCost, replaceWaitingReviewRunId), prepareStart, () => alive.current && optionsRef.current.workspaceId === scope && optionsRef.current.projects.some(project => project.id === projectId && !project.trashedAt && !project.purgedAt));
+        if (result.status === 'started' && alive.current && optionsRef.current.workspaceId === scope) current.notify(result.recovered ? '已读取原任务，没有重复生成；结果与费用保留。' : '已开始真实工作流，可以切换页面，结果和用量会保存。');
+        return result;
+      } catch (error) { return { status: 'rejected', code: 'START_INPUT', error: error instanceof Error ? error.message : '真实流程未能开始。' }; }
     },
+    readStartResult: projectId => starts.read(projectId),
     pause(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'pause'); else simulation.pause(id); },
     resume(id, stepBudgetCents) { const run = liveRunsRef.current.find(item => item.id === id); if (run) void liveControl(id, ['failed', 'interrupted'].includes(run.status) ? 'continue' : 'resume', undefined, stepBudgetCents); else simulation.resume(id, stepBudgetCents); },
     cancel(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'cancel'); else simulation.cancel(id); },

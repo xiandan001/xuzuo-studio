@@ -2,9 +2,10 @@ import { RememberedDetails } from './RememberedDetails';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Braces, CheckCircle2, FileText, LoaderCircle, Play, RotateCcw, ShieldCheck, Upload, AlertCircle, Paperclip, Globe2, X } from 'lucide-react';
 import type { WorkflowDefinition } from '../configuration-types';
-import type { LivePreflight, LivePreflightIssue } from '../live-types';
+import type { LivePreflight, LivePreflightIssue, LiveStartResult } from '../live-types';
 import { Select } from './Select';
 import { StudioConnectionFields } from './StudioConnectionFields';
+import { StudioStartStatus } from './StudioStartStatus';
 import type { PageProps } from '../types';
 import { KIND_LABEL, money } from '../data';
 import { extractVariables, resolvePrompt } from '../lib/prompt-variables';
@@ -30,6 +31,9 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   const [paidAcknowledged, setPaidAcknowledged] = useState(false);
   const [busy, setBusy] = useState<'preflight' | 'import' | 'start' | null>(null);
   const [error, setError] = useState('');
+  const [startResult, setStartResult] = useState<LiveStartResult>();
+  const [readingStart, setReadingStart] = useState(false), [readTick, setReadTick] = useState(0), [showSettings, setShowSettings] = useState(false);
+  const readPending = useRef(false), readCount = useRef(0), notified = useRef(false);
   const startPending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -43,10 +47,11 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   const missingVariables = resolvePrompt(promptContent, values).missing;
   const complete = missingVariables.length === 0 && !!input.trim() && !!projectId;
   const requiredMessage = !projectId ? '请选择关联项目。' : !input.trim() ? '请填写本次创作需求。' : missingVariables.length ? `请填写本次变量：${missingVariables.join('、')}。` : '';
-  const requestSignature = JSON.stringify({ mode, confirmBeforeRun, project: projects.find(project => project.id === projectId), projectId, input, values, files: attachments.map(file => file.id), workflow: executionWorkflow, models: props.configuration.models, connections: props.configuration.connections, credentials: props.configuration.credentials, replaceWaitingReviewRunId: initial?.replaceWaitingReviewRunId });
+  const selectedProject = projects.find(project => project.id === projectId);
+  const requestSignature = JSON.stringify({ mode, confirmBeforeRun, project: selectedProject && { id: selectedProject.id, workspaceId: selectedProject.workspaceId, kind: selectedProject.kind, name: selectedProject.name, description: selectedProject.description, budgetCents: selectedProject.budgetCents, referenceFiles: selectedProject.referenceFiles }, projectId, input, values, files: attachments.map(file => file.id), workflow: executionWorkflow, models: props.configuration.models, connections: props.configuration.connections, credentials: props.configuration.credentials.map(({ id, connectionId, enabled }) => ({ id, connectionId, enabled })), replaceWaitingReviewRunId: initial?.replaceWaitingReviewRunId });
   const signatureRef = useRef(requestSignature); signatureRef.current = requestSignature;
   const inspectedSignature = useRef('');
-  useEffect(() => { inspectedSignature.current = ''; setPreflight(null); setPreflightSignature(''); setPaidAcknowledged(false); setError(''); }, [requestSignature, mode]);
+  useEffect(() => { if (startPending.current || startResult?.status === 'unknown') return; inspectedSignature.current = ''; setPreflight(null); setPreflightSignature(''); setPaidAcknowledged(false); setError(''); setStartResult(undefined); }, [requestSignature, mode]);
   const canStartLive = props.workflowRunner.runtimeStatus.available && currentPreflightAccepted(preflight, preflightSignature, requestSignature, !confirmBeforeRun || paidAcknowledged || modelSteps.length === 0);
   const runContext = (issue?: LivePreflightIssue): RunContext => ({ projectId, input, attachmentIds: attachments.map(file => file.id), attachments: attachments.map(({ id, name, mimeType, bytes }) => ({ id, name, mimeType, bytes })), variables: values, mode, focusStepId: issue?.stepId, focusField: issue?.field, replaceWaitingReviewRunId: initial?.replaceWaitingReviewRunId });
   function locateIssue(issue: LivePreflightIssue) {
@@ -79,15 +84,43 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   async function start(): Promise<boolean> {
     if (!complete || busy || startPending.current) return false;
     if (mode === 'simulation') { const started = props.workflowRunner.start(executionWorkflow, projectId, input.trim(), values); if (started) { onClose(); onStarted(); } return started; }
-    if (!canStartLive) return false;
-    startPending.current = true; setBusy('start'); setError('');
+    if (startResult?.status === 'unknown') { void readStart(); return false; }
+    if (!props.workflowRunner.runtimeStatus.available) { setError('后台暂未连接，请稍后重试；原图片和输入都保留。'); return false; }
+    if (confirmBeforeRun && !paidAcknowledged && modelSteps.length > 0) return false;
+    const signature = signatureRef.current;
+    startPending.current = true; setBusy('start'); setError(''); setStartResult(undefined); readCount.current = 0;
     try {
-      const started = await props.workflowRunner.startLive(executionWorkflow, projectId, input.trim(), values, attachments.map(file => file.id), !confirmBeforeRun || paidAcknowledged && Boolean(preflight?.unknownCost), initial?.replaceWaitingReviewRunId);
-      if (mounted.current) { if (started) { onClose(); onStarted(); } else setError('启动结果尚未确认，请查看任务记录或调用设置。本次不会自动重发。'); }
-      return started;
+      let checked = preflight;
+      if (!canStartLive) {
+        setBusy('preflight'); checked = await props.workflowRunner.preflight(executionWorkflow, projectId, input.trim(), values, attachments.map(file => file.id));
+        if (!mounted.current || signatureRef.current !== signature) return false;
+        setPreflight(checked); setPreflightSignature(signature);
+        if (!checked.ok) { setShowSettings(true); return false; }
+        setBusy('start');
+      }
+      return acceptStart(await props.workflowRunner.startLive(executionWorkflow, projectId, input.trim(), values, attachments.map(file => file.id), !confirmBeforeRun || paidAcknowledged && Boolean(checked?.unknownCost), initial?.replaceWaitingReviewRunId));
     } catch (cause) { if (mounted.current) setError(workflowPublicError(cause, '未能开始运行，请检查运行记录后重试，避免重复提交。')); return false; }
     finally { startPending.current = false; if (mounted.current) setBusy(null); }
   }
+  function acceptStart(result: LiveStartResult): boolean {
+    if (!mounted.current) return result.status === 'started';
+    setStartResult(result);
+    if (result.status === 'started') { if (!notified.current) { notified.current = true; onClose(); onStarted(); } return true; }
+    setError(result.error); return false;
+  }
+  async function readStart(automaticRead = false) {
+    if (readPending.current || startPending.current) return;
+    if (automaticRead) readCount.current++;
+    readPending.current = true; setReadingStart(true);
+    try { acceptStart(await props.workflowRunner.readStartResult(projectId)); }
+    catch (cause) { if (mounted.current) setError(workflowPublicError(cause, '暂时无法读取任务状态，原图与费用记录保留。')); }
+    finally { readPending.current = false; if (mounted.current) { setReadingStart(false); setReadTick(value => value + 1); } }
+  }
+  useEffect(() => {
+    if (startResult?.status !== 'unknown' || readingStart || readCount.current >= 3) return;
+    const timer = window.setTimeout(() => { void readStart(true); }, readCount.current ? 1500 : 250);
+    return () => window.clearTimeout(timer);
+  }, [startResult?.status, readingStart, readTick]);
   useEffect(() => {
     if (mode !== 'live' || !complete || busy || !props.workflowRunner.runtimeStatus.available || inspectedSignature.current === requestSignature) return;
     const timer = window.setTimeout(() => { if (signatureRef.current !== requestSignature) return; inspectedSignature.current = requestSignature; void inspect(); }, autoStart && !confirmBeforeRun ? 0 : 300);
@@ -96,7 +129,10 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, complete, busy, requestSignature, props.workflowRunner.runtimeStatus.available]);
   const automatic = useAutomaticStudioRun({ enabled: studio && autoStart && !confirmBeforeRun && mode === 'live', ready: canStartLive && !busy, blocked: !complete || !props.workflowRunner.runtimeStatus.available || Boolean(preflight && !preflight.ok), error, onStart: start });
-  if (automatic) return <WorkflowDialog title="正在开始创作" subtitle={projects.find(project => project.id === projectId)?.name || executionWorkflow.name} busy={busy === 'start'} onClose={onClose} className="studio-direct-dialog" footer={<button className="btn btn-secondary" disabled={busy === 'start'} onClick={onClose}>取消</button>}><div className="studio-direct-progress" role="status"><LoaderCircle size={28} className="spin" /><strong>{busy === 'start' ? '正在开始制作…' : '正在检查模型、Key 和输入…'}</strong><p>设置完整后直接执行，花费随实际调用保存。</p></div></WorkflowDialog>;
+  if (studio && autoStart && !confirmBeforeRun && mode === 'live' && !showSettings && complete && preflight?.ok !== false) {
+    const phase = readingStart ? 'recovering' : startResult?.status === 'unknown' ? 'unknown' : busy === 'start' ? 'starting' : error ? 'rejected' : busy === 'preflight' || !preflight ? 'checking' : automatic ? 'starting' : 'ready';
+    return <StudioStartStatus phase={phase} projectName={selectedProject?.name || executionWorkflow.name} operation={modelSteps[0]?.kind === 'image-editing' ? '精修' : '制作'} message={error && !readingStart ? error : undefined} onClose={onClose} onRetry={() => { void start(); }} onRead={() => { void readStart(); }} onConfigure={() => { setShowSettings(true); inspectedSignature.current = ''; setPreflight(null); setPreflightSignature(''); setError(''); }} onTasks={() => { onClose(); props.navigate('activity', projectId); }} />;
+  }
   const footer = <>
     {mode === 'live' && confirmBeforeRun && preflight && <CallConfirmation result={preflight} paidAcknowledged={paidAcknowledged} onPaid={setPaidAcknowledged} disabled={!!busy} />}
     <span className="wf-footer-hint"><ShieldCheck size={14} />{mode === 'live' ? confirmBeforeRun ? '已开启逐次确认：勾选本次调用后点击开始' : '点击开始直接调用模型，实际花费自动记录' : '模拟体验不会调用模型或扣费'}</span>
@@ -106,7 +142,7 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
     <button className="btn btn-primary" disabled={!complete || !!busy || (mode === 'live' && !canStartLive)} onClick={() => { void start(); }}>{busy === 'start' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}{mode === 'live' ? modelSteps.length ? confirmBeforeRun ? '确认并开始' : '开始制作' : '开始本地处理' : '开始模拟'}</button>
   </>;
   const modes = <div className="segmented wf-mode-select"><button disabled={!!busy || !props.workflowRunner.runtimeStatus.available} className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>真实运行</button><button disabled={!!busy} className={mode === 'simulation' ? 'active' : ''} onClick={() => setMode('simulation')}>模拟体验</button></div>;
-  return <WorkflowDialog title={studio ? confirmBeforeRun ? '确认本次创作' : '补全调用设置' : '运行工作流'} subtitle={studio ? projects.find(project => project.id === projectId)?.name || executionWorkflow.name : executionWorkflow.name} busy={busy === 'start' || busy === 'import'} onClose={onClose} className={studio ? 'wf-run-dialog studio-run-dialog' : 'wf-run-dialog'} footer={footer}>
+  return <WorkflowDialog title={studio ? showSettings ? '调整调用设置' : confirmBeforeRun ? '确认本次创作' : '补全调用设置' : '运行工作流'} subtitle={studio ? projects.find(project => project.id === projectId)?.name || executionWorkflow.name : executionWorkflow.name} busy={busy === 'start' || busy === 'import'} onClose={onClose} className={studio ? 'wf-run-dialog studio-run-dialog' : 'wf-run-dialog'} footer={footer}>
     <div className="wf-run-dialog-body"><section className="wf-run-inputs">{requiredMessage && <div className="wf-run-required" role="status"><span>{requiredMessage}</span><button type="button" onClick={() => locateIssue({ message: requiredMessage, field: !projectId ? 'project' : !input.trim() ? 'input' : 'variables' })}>前往填写</button></div>}
       {!studio && modes}
       <div className={`wf-simulation-notice ${mode === 'live' ? 'wf-live-notice' : ''}`}><Globe2 size={18} /><p><b>{mode === 'live' ? confirmBeforeRun ? '已开启生成前逐次确认' : '补全设置后开始制作' : '正在体验模拟流程'}</b><span>{mode === 'live' ? '自动检查不收费；点击开始会发送描述与参考文件，实际花费自动保存。' : '仅展示执行与费用记录方式，不读取 Key。'}</span></p></div>

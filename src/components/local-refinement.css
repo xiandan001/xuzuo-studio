@@ -16,3 +16,8 @@
 .local-refinement .local-refinement-status{margin:9px 0 12px;color:var(--ui-fg-secondary);font-size:13px;line-height:1.75}
 .local-refinement-status>button{margin-left:8px;color:var(--ui-accent);font-weight:600;white-space:nowrap}
 .local-refinement-reread{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}.local-refinement-reread>small{color:var(--ui-fg-secondary);font-size:12px;line-height:1.6}
+.local-refinement.is-compact { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.local-refinement.is-compact > p { margin: 0 0 8px; font-size: 12px; color: var(--ui-fg-secondary); }
+.local-refinement.is-compact .local-refinement-actions { align-items: stretch; flex-direction: column; }
+.local-refinement.is-compact .local-refinement-actions > .btn { width: 100%; justify-content: center; }
+.local-refinement.is-compact .local-refinement-status { margin: 6px 0 9px; }

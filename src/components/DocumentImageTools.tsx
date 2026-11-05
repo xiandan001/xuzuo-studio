@@ -85,7 +85,7 @@ export function DocumentImageTools({ props, target, images, preview, disabled, b
     setPending(true); setError(''); setResult(undefined); setWorkflowId(id); setConfirmed(false); setReadFailed(false);
     try {
       const started = await props.workflowRunner.startLive(workflow, projectId, JSON.stringify(context), {}, [reference.id], true, waiting?.id);
-      if (mounted.current && currentScope.current === identity && operation.current === request && !started) { setPending(false); setError('图片精修未开始，请检查模型和凭证或查看提示。'); }
+      if (mounted.current && currentScope.current === identity && operation.current === request && started.status !== 'started') { setPending(false); setError(started.error); }
     } catch (cause) { if (mounted.current && currentScope.current === identity && operation.current === request) { setPending(false); setError(workflowPublicError(cause, '图片精修未开始，原图保留。')); } }
     finally { if (startRequest.current === request) starting.current = false; }
   }

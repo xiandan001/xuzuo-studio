@@ -11,7 +11,7 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const TEXT_PREVIEW_BYTES = 1024 * 1024;
 const TYPES = {
   '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.csv': 'text/csv', '.tsv': 'text/tab-separated-values',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.gif': 'image/gif',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.mp4': 'video/mp4',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -215,6 +215,8 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       if (input.text !== undefined && typeof input.text !== 'string') throw new Error('产物文本格式无效。');
       if (input.buffer !== undefined && !(input.buffer instanceof Uint8Array)) throw new Error('产物二进制格式无效。');
       const buffer = input.text !== undefined ? Buffer.from(input.text, 'utf8') : Buffer.from(input.buffer);
+      if (input.mimeType === 'image/svg+xml') require('./image-output-formats.cjs').validateSvg(buffer);
+      if (input.mimeType === 'image/gif') require('./image-output-formats.cjs').validateGif(buffer);
       if (buffer.length > MAX_FILE_BYTES) throw new Error('单个产物最大支持 100 MB，请缩小内容或拆分文件。');
       const provenance = assetProvenance(input.provenance);
       const entries = await loadManifest();
@@ -308,13 +310,13 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
 
   async function preview(id) {
     const artifact = (await list([id]))[0];
-    const imageSupported = ['image/png', 'image/jpeg', 'image/webp'].includes(artifact.mimeType);
+    const imageSupported = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/gif'].includes(artifact.mimeType);
     if (!imageSupported && artifact.kind !== 'text') return { artifact, supported: false, reason: artifact.kind === 'office' || artifact.mimeType === 'application/pdf' ? '暂不支持 Office/PDF 的内置渲染或文本提取，请保存后在本机查看。' : '此类音视频请保存后使用本机播放器查看，当前不执行文字提取。' };
     if (artifact.kind === 'text' && artifact.bytes > TEXT_PREVIEW_BYTES) return { artifact, supported: false, reason: '文字超过 1 MB，请保存后在本机编辑器查看。' };
     if (imageSupported && artifact.bytes > 20 * 1024 * 1024) return { artifact, supported: false, reason: '图像超过 20 MB，请保存后使用本机图像查看器检查。' };
     const result = await read(id);
     const { buffer } = result;
-    if (['image/png', 'image/jpeg', 'image/webp'].includes(result.mimeType)) return { artifact, supported: true, dataUrl: `data:${result.mimeType};base64,${buffer.toString('base64')}` };
+    if (imageSupported) { if (result.mimeType === 'image/svg+xml') require('./image-output-formats.cjs').validateSvg(buffer); if (result.mimeType === 'image/gif') require('./image-output-formats.cjs').validateGif(buffer); return { artifact, supported: true, dataUrl: `data:${result.mimeType};base64,${buffer.toString('base64')}` }; }
     if (result.kind === 'text') {
       if (buffer.length > TEXT_PREVIEW_BYTES) return { artifact, supported: false, reason: '文字超过 1 MB，请保存后在本机编辑器查看。' };
       try { return { artifact, supported: true, text: new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^\uFEFF/, '') }; }

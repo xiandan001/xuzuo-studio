@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "verifiedAt": "2026-10-30",
+  "verifiedAt": "2026-11-05",
   "rules": [
     {
       "id": "openai-gpt-6-luna",
@@ -192,6 +192,96 @@
         "vision"
       ],
       "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-image-2-6-flare",
+      "version": "2026-11-05.1",
+      "modelId": "gpt-image-2.6-flare",
+      "providerId": "openai",
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-11-05",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": ""
+      },
+      "currency": "USD",
+      "scheme": "direct-image-tokens",
+      "rates": {
+        "inputText": "5",
+        "inputImage": "8",
+        "outputImage": "30"
+      },
+      "basis": "官方直接 Images 接口：文字输入$5、图片输入$8、图片输出$30/百万Token，不推定缓存优惠。SVG另计作者模型Token，GIF使用实际总Token、不乘帧数。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+        "https://developers.openai.com/api/reference/resources/images/methods/generate"
+      ],
+      "operations": [
+        "image-generation",
+        "image-editing"
+      ],
+      "validFrom": "2026-11-04",
+      "svgAuthorBilling": true
+    },
+    {
+      "id": "openai-gpt-image-2-6-sunburst",
+      "version": "2026-11-05.1",
+      "modelId": "gpt-image-2.6-sunburst",
+      "providerId": "openai",
+      "protocols": [
+        "image",
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-11-05",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "",
+        "output": ""
+      },
+      "currency": "USD",
+      "scheme": "direct-image-tokens",
+      "rates": {
+        "inputText": "5",
+        "inputImage": "8",
+        "outputImage": "30"
+      },
+      "basis": "官方直接 Images 接口：文字输入$5、图片输入$8、图片输出$30/百万Token，不推定缓存优惠。SVG另计作者模型Token，GIF使用实际总Token、不乘帧数。",
+      "sources": [
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
+        "https://developers.openai.com/api/reference/resources/images/methods/generate"
+      ],
+      "operations": [
+        "image-generation",
+        "image-editing"
+      ],
+      "validFrom": "2026-11-04",
+      "svgAuthorBilling": true
     },
     {
       "id": "openai-gpt-image-2-5-flare",

@@ -83,8 +83,10 @@ describe('项目移动只迁移对应自动化资料并保留冻结流程', () =
     f.runs[0].status = 'complete'; f.changed(); await f.center.resolve({ id: card.id, action: 'continue' }); expect((await f.read()).jobs[0].status).toBe('complete'); expect(f.controls).toHaveLength(0); expect(f.calls).toHaveLength(1);
   });
   it('验收续跑和正常完成清旧error，但决策详情与费用仍保留', async () => {
-    const f = await setup({ initialStatus: 'waiting-review' }), rule = await f.add(); await f.center.trigger({ ruleId: rule.id }); await f.settle(); const card = (await f.read()).decisions[0]; expect((await f.read()).jobs[0].error).toBeTruthy();
-    await f.center.resolve({ id: card.id, action: 'approve' }); expect((await f.read()).jobs[0].error).toBeUndefined(); f.runs[0].status = 'complete'; f.changed(); await f.settle(); const ended = await f.read(); expect(ended.jobs[0].status).toBe('complete'); expect(ended.jobs[0].error).toBeUndefined(); expect(ended.decisions[0].detail).toBe(card.detail); expect((await f.raw()).context.projects[0].costCents).toBe(17);
+    const f = await setup({ initialStatus: 'waiting-review' }), rule = await f.add(); await f.center.trigger({ ruleId: rule.id });
+    const waiting = await until(async () => { await f.center.tick(); return f.read(); }, value => value.jobs[0]?.status === 'decision' && value.jobs[0]?.nativeStatus === 'waiting-review' && Boolean(value.jobs[0]?.error));
+    const card = waiting.decisions.find(item => item.kind === 'review' && !item.resolvedAt); expect(card).toBeTruthy();
+    await f.center.resolve({ id: card.id, action: 'approve' }); expect((await f.read()).jobs[0].error).toBeUndefined(); f.runs[0].status = 'complete'; f.changed(); const ended = await until(async () => { await f.center.tick(); return f.read(); }, value => value.jobs[0]?.status === 'complete'); expect(ended.jobs[0].error).toBeUndefined(); expect(ended.decisions[0].detail).toBe(card.detail); expect((await f.raw()).context.projects[0].costCents).toBe(17);
   });
   it('scoped上下文保存保留别区，all-project输入按ID去重且同ID新owner覆盖旧owner', async () => {
     const f = await setup(), context = structuredClone(f.context); context.projects[1].workspaceId = 'target'; await f.center.syncContext(context); const other = await f.add({ workspaceId: 'target', projectId: 'project-2', workflowId: 'target-flow', enabled: true, name: 'Other workspace' });

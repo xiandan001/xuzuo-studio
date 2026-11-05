@@ -103,7 +103,7 @@ describe('图片工作台可见交互', () => {
     vi.stubGlobal('localStorage', { getItem: (key: string) => key.startsWith('xuzuo-studio-credential-v1:') ? null : JSON.stringify({ preset: snapshot.id, presetSnapshot: snapshot, prompt: '项目已修改的内容', generationModelId: 'generation-model' }) });
     const html = renderToStaticMarkup(<ImageStudio {...props()} />);
     expect(html).toContain('已存商品用途（已删除或停用）'); expect(html).toContain('项目已修改的内容');
-    expect(html).toContain('当前项目的描述、设置和参考图仍保留');
+    expect(html).toContain('仍保留本项目的描述与参考图');
     expect(html).not.toContain('value="原用途示例"'); expect(preview).not.toHaveBeenCalled();
   });
 });

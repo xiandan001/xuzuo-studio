@@ -8,9 +8,14 @@ export interface ModelUsage {
   inputTextTokens?: number; inputImageTokens?: number; cachedInputTokens?: number; uncachedInputTokens?: number;
   cacheWriteInputTokens?: number; cacheWrite5mTokens?: number; cacheWrite1hTokens?: number; cacheWrite30mTokens?: number; cacheWrite12hTokens?: number;
   cachedInputTextTokens?: number; cachedInputImageTokens?: number; outputImageTokens?: number; outputTextTokens?: number; reasoningTokens?: number;
+  imageOutputFormat?: 'png' | 'jpeg' | 'webp' | 'svg' | 'gif';
+  svgUsage?: { model?: string; inputTokens?: number; outputTokens?: number; reasoningTokens?: number; totalTokens?: number };
   usageSource?: string;
 }
 export type CostState = 'simulation' | 'calculated' | 'manual' | 'unknown' | 'not-incurred';
+export type LiveStartResult = { status: 'started'; runId: string; recovered?: boolean } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
+export type LiveCheckedStartResult = { status: 'started'; run: WorkflowRun; recovered?: boolean } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
+export interface LiveStartLookup { projectId: string; workspaceId: string; dispatchKey: string; }
 export interface LiveStartRequest {
   purpose?: 'automation-plan';
   workflow: WorkflowDefinition;
@@ -24,6 +29,8 @@ export interface LiveStartRequest {
   acknowledgePaidCalls: boolean;
   acknowledgeUnknownCost: boolean;
   replaceWaitingReviewRunId?: string;
+  replaceWaitingReviewAttemptId?: string;
+  refinementFork?: { reviewAttemptId: string; sourceArtifactId: string };
 }
 export interface LivePreflightStep { id: string; name: string; kind: string; modelName?: string; domain?: string; credentialName?: string; estimatedCents?: number; costNote?: string; }
 export interface LivePreflightIssue { message: string; stepId?: string; field?: 'modelConfigId' | 'credentialId' | 'prompt' | 'maxOutputTokens' | 'count' | 'imageSize' | 'inputSource' | 'budgetCents' | 'connection' | 'input' | 'variables' | 'attachments' | 'project'; }
@@ -32,6 +39,9 @@ export interface LiveSnapshot { delta?: boolean; runs: WorkflowRun[]; ledger: Le
 export interface ArtifactPreview { mimeType: string; dataUrl?: string; text?: string; documentSource?: boolean; sourceRevision?: number; thumbnail?: boolean; width?: number; height?: number; originalWidth?: number; originalHeight?: number; transparency?: 'present' | 'unknown'; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
+  saveImageMarkup?: (input: { projectId: string; sourceArtifactId: string; dataUrl: string }) => Promise<ArtifactMetadata>;
+  startChecked?: (input: LiveStartRequest) => Promise<LiveCheckedStartResult>;
+  lookupStart?: (input: LiveStartLookup) => Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }>;
   thumbnailArtifact?: (id: string) => Promise<ArtifactPreview>;
   onProjectFilesChanged?: (listener: (projectId: string) => void) => () => void;
   listProjectArtifacts?: (projectId: string) => Promise<ArtifactMetadata[]>;

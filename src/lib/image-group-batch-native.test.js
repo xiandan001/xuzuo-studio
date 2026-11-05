@@ -12,7 +12,7 @@ async function until(read, predicate) { const deadline = Date.now() + 12000; whi
 async function fixture(onExecute) {
   await fs.mkdir(ownedRoot, { recursive: true }); const directory = await fs.mkdtemp(path.join(ownedRoot, 'image-group-native-')), workspaceStorage = createWorkspaceStorage({ directory }), artifactStore = createArtifactStore({ directory: path.join(directory, 'artifacts'), workspaceStorage, loadModule: dependencies }); workspaceStorage.setArtifactMigrator((id, target) => artifactStore.migrateProject(id, target));
   const workspace = path.join(directory, 'workspace'); await fs.mkdir(workspace); await workspaceStorage.bindRoot({ workspaceId: 'group-workspace', name: '独立分组', directory: workspace }); const calls = [];
-  const engineOptions = { directory, artifactStore, credentials: { list: async () => [{ id: 'key', connectionId: 'connection', enabled: true, name: '无真实Key的元数据' }] }, modelRuntime: { supports: () => true, execute: async input => { calls.push(input); expect(input.options.count).toBe(1); const result = await onExecute?.(input, calls); const count = result?.images ?? 1; const artifacts = []; for (let i = 0; i < count; i++) artifacts.push(await artifactStore.write({ projectId: input.projectId, runId: input.runId, name: `实图-${calls.length}-${i}.png`, mimeType: 'image/png', buffer: PNG })); return { artifacts, usage: { images: 1 } }; } } };
+  const engineOptions = { directory, artifactStore, credentials: { list: async () => [{ id: 'key', connectionId: 'connection', enabled: true, name: '无真实Key的元数据' }] }, modelRuntime: { supports: () => true, execute: async input => { calls.push(input); expect(input.options.count).toBe(1); const result = await onExecute?.(input, calls); const count = result?.images ?? 1; const artifacts = []; for (let i = 0; i < count; i++) artifacts.push(await artifactStore.write({ projectId: input.projectId, runId: input.runId, name: `实图-${calls.length}-${i}.${result?.extension || 'png'}`, mimeType: result?.mimeType || 'image/png', buffer: result?.buffer || PNG })); return { artifacts, usage: { images: 1 } }; } } };
   const engine = createLiveWorkflowEngine(engineOptions), batch = createBatchProduction({ directory, workspaceStorage, artifactStore, liveEngine: engine }), f = { directory, workspaceStorage, artifactStore, engine, engineOptions, batch, calls }; running.push(f); return f;
 }
 function input(counts = [2, 3]) {
@@ -20,6 +20,21 @@ function input(counts = [2, 3]) {
 }
 const uniqueImages = item => [...new Map(item.artifacts.filter(file => file.kind === 'image').map(file => [file.id, file])).values()];
 describe('独立图片分组复用真实批量队列', () => {
+  it.each([
+    ['svg', 'image/svg+xml', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="red" d="M0 0h16v16H0z"/></svg>')],
+    ['gif', 'image/gif', Buffer.from('47494638396101000100800000ff00000000ff21f90400140000002c000000000100010000020244010021f90400140000002c00000000010001000002024c01003b', 'hex')],
+  ])('%s分组三张完成真实生成到交付步骤，保留3个原始ID/字节且导出不新增调用或费用', async (extension, mimeType, buffer) => {
+    const f = await fixture(async () => ({ extension, mimeType, buffer })), request = input([3]);
+    request.request.models[0].modelId = 'gpt-image-2.6-flare'; request.request.workflow.steps[0].imageOutputFormat = extension;
+    const created = await f.batch.create(request); expect(f.calls).toHaveLength(0);
+    await f.batch.control({ id: created.id, action: 'start' }); const done = await until(() => f.batch.get({ id: created.id }), value => value.status === 'complete'), item = done.items[0];
+    const detail = await f.engine.runDetail(item.runId), producers = detail.attempts.filter(attempt => attempt.stepId.startsWith('group-image-')), exported = detail.attempts.find(attempt => attempt.stepId === 'group-export');
+    expect(producers).toHaveLength(3); expect(exported.status).toBe('complete');
+    const sourceIds = producers.flatMap(attempt => attempt.artifacts.filter(file => file.kind === 'image').map(file => file.id)), finalImages = exported.artifacts.filter(file => file.kind === 'image');
+    expect(finalImages.map(file => file.id)).toEqual(sourceIds); expect(new Set(sourceIds).size).toBe(3);
+    for (const file of finalImages) { expect(file.mimeType).toBe(mimeType); expect((await f.artifactStore.read(file.id)).buffer).toEqual(buffer); }
+    expect(f.calls).toHaveLength(3); expect((await f.engine.snapshot()).ledger).toHaveLength(3); expect(uniqueImages(item).map(file => file.id)).toEqual(sourceIds);
+  });
   it('2+3组需求生成两个项目/五次单张请求/五张真实图，创建本身不请求且费用分开', async () => {
     const f = await fixture(), request = input(), before = structuredClone(request.request.workflow), created = await f.batch.create(request); expect(f.calls).toHaveLength(0); expect(created.kind).toBe('image-groups'); expect(created.items.map(item => item.imageCount)).toEqual([2, 3]); expect(created.items[0].project.description).toBe('独立蓝色产品需求'); expect(created.items[1].project.description).toBe('独立红色产品需求');
     await f.batch.control({ id: created.id, action: 'start' }); const done = await until(() => f.batch.get({ id: created.id }), value => value.status === 'complete'); expect(f.calls).toHaveLength(5); expect(done.items.map(item => uniqueImages(item).length)).toEqual([2, 3]); expect(done.items.map(item => item.costCents)).toEqual([200, 300]); expect(new Set(done.items.map(item => item.project.directory)).size).toBe(2); expect(request.request.workflow).toEqual(before);

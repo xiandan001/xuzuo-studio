@@ -1,14 +1,11 @@
 const { ModelRuntimeError, endpoint, failure, checkedUrl, ensureActive, progress, request: httpRequest, jsonRequest, readLimited, normalizedUsage } = require('./provider-http.cjs');
-const { combinedText, IMAGE_TYPES } = require('./provider-text.cjs');
+const { combinedText } = require('./provider-text.cjs');
+const { imageType } = require('./image-output-formats.cjs');
+const { imageOptionsError, imageOutputFields } = require('./image-output-options.cjs');
 
 const MAX_MEDIA_BYTES = 32 * 1024 * 1024;
 
-function imageType(bytes) {
-  if (bytes.length >= 45 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString('ascii', 12, 16) === 'IHDR' && bytes.readUInt32BE(16) > 0 && bytes.readUInt32BE(20) > 0 && bytes.toString('ascii', bytes.length - 8, bytes.length - 4) === 'IEND') return { mimeType: 'image/png', extension: 'png' };
-  if (bytes.length >= 8 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 && bytes[bytes.length - 2] === 255 && bytes[bytes.length - 1] === 217) return { mimeType: 'image/jpeg', extension: 'jpg' };
-  if (bytes.length >= 20 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' && bytes.readUInt32LE(4) + 8 === bytes.length) return { mimeType: 'image/webp', extension: 'webp' };
-  throw failure('INVALID_IMAGE', '供应商返回的内容不是可识别的 PNG、JPEG 或 WebP 图片。');
-}
+const RASTER_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 function decodeImage(value, context) {
   if (typeof value !== 'string' || value.length > Math.ceil(MAX_MEDIA_BYTES * 4 / 3) + 100 || !/^[A-Za-z0-9+/\r\n]+={0,2}$/.test(value)) throw failure('INVALID_IMAGE', '供应商返回的图片编码无效或文件过大。', context);
@@ -21,16 +18,24 @@ async function imageBytes(item, context, fetchImpl) {
   if (typeof item?.b64_json === 'string') return decodeImage(item.b64_json, context);
   if (typeof item?.url !== 'string') throw failure('INVALID_IMAGE', '供应商没有返回图片数据或下载地址。', context);
   const url = checkedUrl(item.url);
-  const response = await httpRequest(fetchImpl, url.toString(), { method: 'GET', headers: { accept: 'image/png,image/jpeg,image/webp' } }, context, false);
+  const response = await httpRequest(fetchImpl, url.toString(), { method: 'GET', headers: { accept: 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml' } }, context, false);
   return readLimited(response, MAX_MEDIA_BYTES, context);
 }
 
 function mediaFields(request, files, context) {
-  const images = files.filter(file => IMAGE_TYPES.has(file.mimeType));
+  const invalid = imageOptionsError(request.model.modelId, request.kind, request.options);
+  if (invalid) throw failure('INVALID_OPTIONS', invalid, context);
+  if (request.kind === 'image-editing' && files.some(file => ['image/gif', 'image/svg+xml'].includes(file.mimeType))) throw failure('INVALID_IMAGE_INPUT', '图片编辑只支持PNG、JPEG或WebP参考图片，请先转换SVG或GIF。', context);
+  const images = files.filter(file => RASTER_TYPES.has(file.mimeType));
+  if (request.kind === 'image-editing') for (const image of images) {
+    let actual;
+    try { actual = imageType(image.buffer); } catch (error) { throw failure('INVALID_IMAGE_INPUT', error.message, context); }
+    if (!RASTER_TYPES.has(actual.mimeType) || actual.mimeType !== image.mimeType) throw failure('INVALID_IMAGE_INPUT', '参考图实际格式与登记类型不一致，请重新导入PNG、JPEG或WebP。', context);
+  }
   const prompt = combinedText(request, files);
   if (!prompt) throw failure('EMPTY_INPUT', '图片步骤需要填写画面描述或修改要求。', context);
   const count = request.options.count || 1;
-  const fields = { model: request.model.modelId, prompt, n: count, output_format: 'png' };
+  const fields = { model: request.model.modelId, prompt, n: count, ...imageOutputFields(request.options) };
   if (request.options.size) fields.size = request.options.size;
   if (request.options.background) fields.background = request.options.background;
   if (request.kind === 'image-editing' && !images.length) throw failure('MISSING_IMAGE', '图片编辑步骤需要至少一张本机参考图片。', context);
@@ -53,7 +58,8 @@ function completeImageUsage(usage, request) {
   if (completed) usage.usageSource = 'provider-reported+request-shape';
 }
 
-async function executeImages(request, files, context, fetchImpl, saveArtifact) {
+async function executeImages(request, files, context, fetchImpl, saveArtifact, markup) {
+  if (request.options.markupArtifactId && !markup) throw failure('INVALID_MARKUP', '尚未加载所选PNG标注层，未发送图片编辑请求。', context);
   const { fields, images } = mediaFields(request, files, context);
   const headers = { authorization: `Bearer ${context.secret}` };
   let body;
@@ -62,18 +68,25 @@ async function executeImages(request, files, context, fetchImpl, saveArtifact) {
     route = 'images/edits'; body = new FormData();
     for (const [key, value] of Object.entries(fields)) body.append(key, String(value));
     for (const image of images) body.append('image[]', new Blob([image.buffer], { type: image.mimeType }), image.name);
+    if (markup) body.append('markup', new Blob([markup.buffer], { type: markup.mimeType }), markup.name);
   } else { route = 'images/generations'; headers['content-type'] = 'application/json'; body = JSON.stringify(fields); }
   const data = await jsonRequest(fetchImpl, endpoint(request.connection.baseUrl, route), { method: 'POST', headers, body }, context);
   const usage = normalizedUsage(data, context);
+  usage.imageOutputFormat = fields.output_format;
   completeImageUsage(usage, request);
   if (!Array.isArray(data.data) || !data.data.length || data.data.length > 4) throw failure('EMPTY_OUTPUT', '图片接口没有返回有效图片列表。', context, { usage });
   const artifacts = [];
+  const animationNotes = [];
   usage.images = data.data.length;
   try {
     for (let index = 0; index < data.data.length; index++) {
       ensureActive(context);
       const bytes = await imageBytes(data.data[index], context, fetchImpl);
-      const type = imageType(bytes);
+      let type;
+      try { type = imageType(bytes); } catch (error) { throw failure('INVALID_IMAGE', error.message, context); }
+      const expected = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', gif: 'image/gif' }[fields.output_format];
+      if (type.mimeType !== expected) throw failure('IMAGE_FORMAT_MISMATCH', '供应商返回的实际图片格式与请求不一致，未伪装为所选格式保存；请核对本次用量。', context);
+      if (fields.output_format === 'gif' && type.frames !== (fields.frame_count ?? 9)) animationNotes.push(`第${index + 1}份GIF请求${fields.frame_count ?? 9}帧，返回${type.frames}帧；已保留实际动画，未自动重发。`);
       progress(context, 'saving', `正在保存第 ${index + 1} 张真实图片。`);
       artifacts.push(await saveArtifact({ name: `image-${index + 1}.${type.extension}`, mimeType: type.mimeType, buffer: bytes }));
     }
@@ -87,7 +100,7 @@ async function executeImages(request, files, context, fetchImpl, saveArtifact) {
   }
   const requested = request.options.count || 1;
   const text = artifacts.length < requested ? `请求 ${requested} 张，实际保存 ${artifacts.length} 张。数量不足，需人工决定是否补做；补做另计费用。` : artifacts.length > requested ? `请求 ${requested} 张，实际保存 ${artifacts.length} 张。返回数量与请求不同，请人工核对成品与费用。` : `已生成并保存 ${artifacts.length} 张图片。`;
-  return { text, artifacts, usage };
+  return { text: [text, ...animationNotes].join('\n'), artifacts, usage };
 }
 
 function audioType(response, bytes, context) {

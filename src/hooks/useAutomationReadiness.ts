@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PageProps } from '../types';
-import type { AutomationJob, AutomationRule } from '../automation-types';
+import type { AutomationContinuation, AutomationJob, AutomationRule } from '../automation-types';
 import type { WorkflowDefinition } from '../configuration-types';
 import type { NaturalAutomationBindings } from '../lib/natural-automation-plan';
 import { naturalBoundWorkflow, naturalEffectiveBindings, naturalQuestionAnswer, naturalRuleInput } from '../lib/natural-automation-composer-state';
@@ -64,7 +64,7 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
     const unsubscribe = window.desktop?.automation?.onChanged?.(() => { void readDispatch(); });
     return () => { dispatchGeneration.current++; unsubscribe?.(); };
   }, [rule?.id, props.workspaceId]);
-  async function perform(action: 'save' | 'run' | 'enable' | 'pause', options: { reuseCompleted?: boolean } = {}): Promise<AutomationActionResult> {
+  async function perform(action: 'save' | 'run' | 'enable' | 'pause', options: { reuseCompleted?: boolean; continuation?: AutomationContinuation } = {}): Promise<AutomationActionResult> {
     if (pending.current) return { status: 'failed' };
     const source = current.current, bridge = window.desktop?.automation;
     if (!source.rule || !source.workflow || !bridge || !project || loadedId !== source.rule.id) { setErrors(['请先创建自动化，并等待当前运行设置读取完成。']); return { status: 'needs-input' }; }

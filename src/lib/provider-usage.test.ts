@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
-type Usage = Record<string, number | string>;
+type Usage = Record<string, number | string | Record<string, number | string>>;
 interface Context { signal: AbortSignal; secret: string; requestStarted: boolean; providerRequestId?: string; }
 const require = createRequire(import.meta.url);
 const { normalizedUsage } = require('../../electron/provider-http.cjs') as { normalizedUsage: (data: unknown, context: Context) => Usage };
@@ -19,6 +19,23 @@ async function imageResult(usage: object, kind = 'image-generation', saveFails =
 }
 
 describe('供应商计费用量明细归一化', () => {
+  it('不在SVG作者元数据保存当前凭证回显，仍保留用量并允许合法作者核算', () => {
+    const current = context();
+    for (const model of [current.secret, 'gpt-' + current.secret, current.secret + '-author']) {
+      const result = normalizedUsage({ usage: { input_tokens: 30, output_tokens: 196 }, svg_usage: { model, input_tokens: 100, output_tokens: 200, reasoning_tokens: 150, total_tokens: 300 } }, current);
+      expect(result).toMatchObject({ inputTokens: 30, outputTokens: 196, imageOutputFormat: 'svg', svgUsage: { inputTokens: 100, outputTokens: 200, reasoningTokens: 150, totalTokens: 300 } });
+      expect(result.svgUsage).not.toHaveProperty('model'); expect(JSON.stringify(result)).not.toContain(current.secret);
+    }
+    expect(normalizedUsage({ svg_usage: { model: 'gpt-6.1-sol', input_tokens: 100, output_tokens: 200 } }, current)).toMatchObject({ svgUsage: { model: 'gpt-6.1-sol', inputTokens: 100, outputTokens: 200 } });
+  });
+  it('SVG作者用量单独保留，推理不加总且不保存作者响应中的额外数据', () => {
+    const result = normalizedUsage({ usage: { input_tokens: 30, output_tokens: 196 }, output_format: 'svg', svg_usage: { model: 'gpt-6.1-sol', input_tokens: 100, output_tokens: 200, reasoning_tokens: 150, total_tokens: 300, prompt: 'must not retain', secret: 'must not retain' } }, context());
+    expect(result).toMatchObject({ inputTokens: 30, outputTokens: 196, imageOutputFormat: 'svg', svgUsage: { model: 'gpt-6.1-sol', inputTokens: 100, outputTokens: 200, reasoningTokens: 150, totalTokens: 300 } });
+    expect(JSON.stringify(result)).not.toContain('must not retain');
+    expect(normalizedUsage({ svg_usage: { model: 'invalid author id', input_tokens: -1, output_tokens: 1.5, total_tokens: Number.MAX_SAFE_INTEGER + 1 } }, context())).toMatchObject({ imageOutputFormat: 'svg', svgUsage: {} });
+    expect(normalizedUsage({ output_format: 'gif', usage: { input_tokens: 1, output_tokens: 2 } }, context())).toMatchObject({ imageOutputFormat: 'gif', inputTokens: 1, outputTokens: 2 });
+    expect(normalizedUsage({ output_format: 'unsupported-format' }, context())).not.toHaveProperty('imageOutputFormat');
+  });
   it('保留 Images 的文字和图片拆分，不把细项再次加入总量，也不保存原始响应', () => {
     const usage = normalize({ input_tokens: 70, output_tokens: 200, total_tokens: 270, input_tokens_details: { text_tokens: 30, image_tokens: 40, cached_tokens: 10, cached_tokens_details: { text_tokens: 3, image_tokens: 7 } }, output_tokens_details: { text_tokens: 2, image_tokens: 198 }, prompt: 'must not retain', api_key: 'must not retain' });
     expect(usage).toMatchObject({ inputTokens: 70, outputTokens: 200, totalTokens: 270, inputTextTokens: 30, inputImageTokens: 40, outputTextTokens: 2, outputImageTokens: 198, cachedInputTokens: 10, cachedInputTextTokens: 3, cachedInputImageTokens: 7, usageSource: 'provider-reported' });

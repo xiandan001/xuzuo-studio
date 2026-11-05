@@ -14,6 +14,7 @@ const { createModelRuntime } = require('./model-runtime.cjs');
 const { createLiveWorkflowEngine } = require('./live-workflow-engine.cjs');
 const { createAutomationCenter } = require('./automation-center.cjs');
 const { createAutomationPlanning } = require('./automation-planning.cjs');
+const { startChecked, lookupStart } = require('./live-start.cjs');
 const { createCustomerQuoteExporter } = require('./customer-quote-export.cjs');
 const { probeConnection } = require('./connection-probe.cjs');
 const { extractReferenceText } = require('./reference-text.cjs');
@@ -101,6 +102,7 @@ function registerRuntime(credentials) {
   automaticBilling.start();
   const backupManager = createProjectBackup({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, batchProduction: () => batches, automationProvider: () => automationCenter, receiptProvider: () => modelRuntime });
   const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, inspectImage: async buffer => {
+    const special = require('./image-output-formats.cjs').imageType(buffer); if (['svg', 'gif'].includes(special.extension)) return { ...require('./image-output-formats.cjs').rasterDimensions(buffer), transparency: 'unknown' };
     const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('实际图像无法解码，请检查源文件。');
     const { width, height } = image.getSize();
     if (width * height > 16777216) return { width, height, transparency: 'unknown' };
@@ -144,9 +146,9 @@ function registerRuntime(credentials) {
   const automationPlanning = createAutomationPlanning({ directory: app.getPath('userData'), liveEngine, automationCenter, credentials, assertAdmission: project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }) });
   const handle = (name, action) => ipcMain.handle(`runtime:${name}`, (event, input) => {
     if (!trustedSender(event)) throw new Error('此页面无权执行本机模型任务。');
-    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
-    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'run-detail', 'recalculate-costs'].includes(name)) await projectPurge.ready; return action(input); });
-    if (!['status', 'snapshot', 'poll-snapshot'].includes(name)) trackRuntimeTask(task, name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name));
+    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
+    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs'].includes(name)) await projectPurge.ready; return action(input); });
+    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name));
     return task;
   });
   const officePreview = registerOfficePreviewHandlers({ handle, dialog, getWindow: () => mainWindow, artifactStore, directory: path.join(app.getPath('userData'), 'office-preview-v1'), withProjectWrite, shell, trackWrite: task => trackRuntimeTask(task, true) });
@@ -215,6 +217,7 @@ function registerRuntime(credentials) {
     return writeDialogFile(result, file.buffer);
   });
   handle('status', () => ({ available: true }));
+  handle('save-image-markup', input => withProjectWrite(input?.projectId, () => require('./image-markup.cjs').saveImageMarkup(artifactStore, input)));
   handle('customer-quote-export', input => withProjectWrite(input?.projectId, () => quoteExporter.export(input)));
   handle('automation-snapshot', workspaceId => automationCenter.snapshot(workspaceId));
   handle('automation-planning-start', input => automationPlanning.start(input));
@@ -232,6 +235,8 @@ function registerRuntime(credentials) {
   handle('automation-resolve', input => automationCenter.resolve(input));
   handle('preflight', async input => { await assertProjectReady(input); return liveEngine.preflight(input); });
   handle('start', input => withProjectWrite(input?.project?.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }));
+  handle('start-checked', input => startChecked(liveEngine, async request => { await projectPurge.ready; return withProjectWrite(request?.project?.id, async () => { await assertProjectReady(request); return liveEngine.start(request); }); }, input));
+  handle('lookup-start', input => lookupStart(liveEngine, input));
   handle('snapshot', () => liveEngine.snapshot());
   handle('poll-snapshot', afterRevision => liveEngine.snapshot(afterRevision, { summaryOnly: true, delta: true }));
   handle('run-detail', id => liveEngine.runDetail(id));

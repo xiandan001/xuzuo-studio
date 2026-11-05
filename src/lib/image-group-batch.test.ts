@@ -2,12 +2,46 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type { StudioConfiguration } from '../configuration-types';
 import type { Project } from '../types';
-import { createImageGroupBatch, imageGroupRowIssue, initialImageGroupDraft, readImageGroupDraft, IMAGE_GROUP_IMAGE_LIMIT, IMAGE_GROUP_LIMIT, IMAGE_GROUP_TOTAL_LIMIT } from './image-group-batch';
+import { createImageGroupBatch, imageGroupRowIssue, imageGroupSettingsKey, initialImageGroupDraft, readImageGroupDraft, IMAGE_GROUP_IMAGE_LIMIT, IMAGE_GROUP_LIMIT, IMAGE_GROUP_TOTAL_LIMIT } from './image-group-batch';
 const require = createRequire(import.meta.url), backend = require('../../electron/image-group-batch.cjs');
 const project = { id: 'project', workspaceId: 'workspace', name: '产品图片', accent: 'blue', kind: 'image', description: 'PRIVATE-PROMPT-MUST-NOT-COPY', budgetCents: 0, referenceFiles: [{ id: 'private-reference' }] } as Project;
 const model = { id: 'image', connectionId: 'connection', enabled: true, capabilities: ['image-generation'], name: '生成模型' } as StudioConfiguration['models'][number];
 const props = { workspaceId: 'workspace', configuration: { models: [model], credentials: [{ id: 'key', connectionId: 'connection', enabled: true }], connections: [{ id: 'connection', enabled: true }] } as unknown as StudioConfiguration };
 describe('图片工作台独立分组配置', () => {
+  it('SVG三张展开为三个单张步骤，共用格式和作者参数，不继承圈画或参考', () => {
+    const modern = { ...model, modelId: 'gpt-image-2.6-sunburst' }, context = { ...props, configuration: { ...props.configuration, models: [modern] } };
+    const draft = initialImageGroupDraft(project); draft.groups = [{ ...draft.groups[0], brief: '三幅独立矢量图', count: '3' }];
+    const request = createImageGroupBatch(draft, { model: modern, credentialId: 'key', size: '1024x1024', background: 'auto', imageOptions: { imageOutputFormat: 'svg', imageQuality: 'high', imageComplexity: 'low', imageSvgModel: 'gpt-6.1-sol', imageSvgReasoningEffort: 'medium', imageMarkupId: 'private-markup' } }, context);
+    const item = { id: 'first-group', imageCount: 3, project: { name: '矢量组' } }, expanded = backend.imageGroupRequest({ kind: 'image-groups', request: request.request, items: [item] }, item, request.request);
+    const producers = expanded.workflow.steps.filter((step: { kind: string }) => step.kind === 'image-generation');
+    expect(producers).toHaveLength(3);
+    for (const step of producers) expect(step).toMatchObject({ count: 1, imageOutputFormat: 'svg', imageQuality: 'high', imageComplexity: 'low', imageSvgModel: 'gpt-6.1-sol', imageSvgReasoningEffort: 'medium' });
+    expect(expanded.attachmentIds).toEqual([]); expect(JSON.stringify(expanded)).not.toContain('private-markup'); expect(JSON.stringify(expanded)).not.toContain('private-reference');
+  });
+  it('GIF分组使用自动尺寸/背景与规范化帧时长，不回落PNG也不带入圈画', () => {
+    const modern = { ...model, modelId: 'gpt-image-2.6-flare' }, context = { ...props, configuration: { ...props.configuration, models: [modern] } }, draft = initialImageGroupDraft(project);
+    draft.groups = [{ ...draft.groups[0], brief: '两份动画', count: '2' }];
+    const request = createImageGroupBatch(draft, { model: modern, credentialId: 'key', size: '1536x1024', background: 'transparent', imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 2, imageFrameDurationMs: 205, imageMarkupId: 'private-markup' } }, context);
+    expect(request.request.workflow.steps[0]).toMatchObject({ imageOutputFormat: 'gif', imageSize: 'auto', imageBackground: 'auto', imageFrameCount: 2, imageFrameDurationMs: 210, count: 1 });
+    expect(request.request.workflow.steps[0].imageMarkupId).toBeUndefined(); expect(request.request.attachmentIds).toEqual([]);
+  });
+  it('默认PNG保持原四段设置键，默认参数和无关标注不解锁已提交批次', () => {
+    const settings = { model: { ...model, modelId: 'gpt-image-2.6-sunburst' }, credentialId: 'key', size: '1024x1024', background: 'auto' as const };
+    const legacy = 'image|key|1024x1024|auto';
+    expect(imageGroupSettingsKey(settings)).toBe(legacy);
+    expect(imageGroupSettingsKey({ ...settings, imageOptions: { imageOutputFormat: 'png', imageQuality: 'auto', imageComplexity: 'high', imageMarkupId: 'private' } })).toBe(legacy);
+    expect(imageGroupSettingsKey({ ...settings, imageOptions: { imageQuality: 'high' } })).not.toBe(legacy);
+    expect(imageGroupSettingsKey({ ...settings, imageOptions: { imageOutputFormat: 'svg' } })).not.toBe(legacy);
+    const gif = { ...settings, imageOptions: { imageOutputFormat: 'gif' as const, imageFrameCount: 2, imageFrameDurationMs: 205 } };
+    expect(imageGroupSettingsKey(gif)).toBe(imageGroupSettingsKey({ ...gif, size: '1792x1024', background: 'transparent', imageOptions: { imageFrameDurationMs: 210, imageFrameCount: 2, imageOutputFormat: 'gif' } }));
+    expect(imageGroupSettingsKey(gif)).not.toBe(imageGroupSettingsKey({ ...gif, imageOptions: { ...gif.imageOptions, imageFrameCount: 3 } }));
+  });
+  it('2.5的SVG/GIF和非法GIF帧数在创建批次之前明确拒绝', () => {
+    const old = { ...model, modelId: 'gpt-image-2.5-flare' }, context = { ...props, configuration: { ...props.configuration, models: [old] } }, draft = initialImageGroupDraft(project); draft.groups = [{ ...draft.groups[0], brief: '独立描述' }];
+    for (const imageOutputFormat of ['svg', 'gif'] as const) expect(() => createImageGroupBatch(draft, { model: old, credentialId: 'key', size: '1024x1024', background: 'auto', imageOptions: { imageOutputFormat } }, context)).toThrow('仅支持 GPT Image 2.6');
+    const modern = { ...old, modelId: 'gpt-image-2.6-flare' };
+    expect(() => createImageGroupBatch(draft, { model: modern, credentialId: 'key', size: 'auto', background: 'auto', imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 17 } }, { ...context, configuration: { ...context.configuration, models: [modern] } })).toThrow('2–16');
+  });
   it('独立描述/2+3数量和生成账号/规格进入真实batch请求，没有参考图或编辑能力', () => {
     const draft = initialImageGroupDraft(project); draft.groups[0].brief = '蓝色产品'; draft.groups[0].count = '2'; draft.groups[1] = { ...draft.groups[1], brief: '红色产品', count: '3' }; const before = structuredClone(draft);
     const request = createImageGroupBatch(draft, { model, credentialId: 'key', size: '1536x1024', background: 'opaque' }, props);

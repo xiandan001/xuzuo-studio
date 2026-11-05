@@ -40,8 +40,9 @@ function createOfficeExporter({ writeArtifact, readArtifact, loadModule = requir
       if (!Array.isArray(assets) || assets.length > 20) throw new Error('图像导出最多支持 20 份产物。');
       const ids = [...new Set(assets.map(asset => typeof asset === 'string' ? asset : asset?.id))];
       const sources = await Promise.all(ids.map(id => readArtifact(id)));
-      const images = sources.filter(source => ['image/png', 'image/jpeg', 'image/webp'].includes(source.mimeType));
+      const images = sources.filter(source => ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/gif'].includes(source.mimeType));
       if (!images.length) throw new Error('还没有真实图像产物，不能导出图像成品。');
+      for (const image of images) if (['image/svg+xml', 'image/gif'].includes(image.mimeType) && require('./image-output-formats.cjs').imageType(image.buffer).mimeType !== image.mimeType) throw new Error('图像成品的实际格式与登记类型不一致，原始文件和费用保持不变。');
       const note = await writeArtifact({ name: `${content.title}-内容说明.md`, mimeType: 'text/markdown', text: `# ${content.title}\n\n${content.raw || '图像由工作流生成，请人工检查内容、文字与边缘。'}\n\n## 图像文件\n${images.map(image => `- ${image.name}`).join('\n')}\n\n以上为实际图像文件，不是 Office 文件；未执行人物一致性、文字或透明边缘的自动验收。\n`, runId: input.runId, projectId: input.projectId });
       return [...images.map(({ buffer: _buffer, ...metadata }) => metadata), note];
     }

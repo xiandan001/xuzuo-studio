@@ -4,7 +4,13 @@ import type { WorkflowRunner } from '../configuration-types';
 import type { ArtifactMetadata } from '../live-types';
 import { StudioDrawer } from './StudioDrawer';
 
-const imageUrl = (value?: string) => value && /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(value) ? value : undefined;
+const imageUrl = (value?: string) => value && /^data:image\/(?:png|jpeg|webp|gif|svg\+xml);base64,/.test(value) ? value : undefined;
+async function staticThumbnail(url: string): Promise<string> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(Error('图片缩略图无法读取。')); image.src = url; });
+  const ratio = Math.min(1, 320 / image.naturalWidth, 320 / image.naturalHeight), canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio)); canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const context = canvas.getContext('2d'); if (!context) throw Error('无法创建图片缩略图。'); context.drawImage(image, 0, 0, canvas.width, canvas.height); image.src = ''; return canvas.toDataURL('image/png');
+}
 
 function useImagePreview(artifactId: string | undefined, runner: WorkflowRunner, enabled = true, thumbnail = false) {
   const runnerRef = useRef(runner); runnerRef.current = runner;
@@ -15,9 +21,11 @@ function useImagePreview(artifactId: string | undefined, runner: WorkflowRunner,
     setPreview({ id: artifactId, loading: true, error: false });
     const currentRunner = runnerRef.current;
     const read = thumbnail && currentRunner.thumbnailArtifact ? currentRunner.thumbnailArtifact : currentRunner.previewArtifact;
-    void read(artifactId).then(result => {
+    void read(artifactId).catch(error => thumbnail ? currentRunner.previewArtifact(artifactId) : Promise.reject(error)).then(async result => {
       if (!current) return;
-      const url = imageUrl(result.dataUrl);
+      let url = imageUrl(result.dataUrl);
+      if (thumbnail && url && /^data:image\/(?:gif|svg\+xml);/.test(url)) url = await staticThumbnail(url);
+      if (!current) return;
       setPreview({ id: artifactId, url, loading: false, error: !url });
     }).catch(() => { if (current) setPreview({ id: artifactId, loading: false, error: true }); });
     return () => { current = false; };

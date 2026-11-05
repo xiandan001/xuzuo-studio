@@ -18,6 +18,7 @@ import { APP_NAVIGATION, appViewLabel, navigationTaskSummary } from './lib/navig
 import './focused-shell.css';
 import { creationPrompt } from './lib/creation-quality';
 import { CREATION_PROFILES } from './lib/creation-profiles';
+import { pickImageOutputOptions } from './lib/image-output-options';
 import { quickImageWorkflowBudget, quickImageWorkflowSteps, quickImageWorkflowTail, quickWorkflowTail } from './lib/quick-workflow';
 import { illustratedDocumentSteps } from './lib/document-illustrations';
 import { assetApplicationTarget, assertAssetImage } from './lib/asset-application';
@@ -474,7 +475,7 @@ export default function App() {
     const prompt = creationPrompt(project.kind, corePrompt, action === 'AI 复核' ? 'vision' : kind, { imageSize: parameters?.imageSize, imageBackground: parameters?.imageBackground, hasReferences: Boolean(parameters?.attachmentIds?.length) });
     const previousLimit = existing?.steps[0]?.maxOutputTokens;
     const maxOutputTokens = kind === 'text' && project.kind !== 'image' && action !== 'AI 复核' ? previousLimit && previousLimit !== 4096 ? previousLimit : CREATION_PROFILES[project.kind].outputTokens : previousLimit || 4096;
-    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, count, imageSize: parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
+    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, ...pickImageOutputOptions(parameters), count, imageSize: parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
     const tail = quickWorkflowTail(project.kind, kind, action, parameters?.documentImages ? undefined : quickImageWorkflowTail(existing?.steps));
     let steps: WorkflowStep[];
     try { steps = quickImageWorkflowSteps(firstStep, tail); }

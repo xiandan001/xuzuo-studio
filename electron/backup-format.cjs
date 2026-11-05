@@ -82,7 +82,7 @@ function createIdMap(value) {
   }
   walk(value); return { ...map };
 }
-const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'imageSourceStepId', 'creationKey', 'replaceWaitingReviewRunId', 'repairStepId', 'ruleId', 'eventId', 'jobId', 'decisionId', 'sourceWorkflowId', 'sourceId']);
+const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'imageSourceStepId', 'imageMarkupId', 'creationKey', 'replaceWaitingReviewRunId', 'repairStepId', 'ruleId', 'eventId', 'jobId', 'decisionId', 'sourceWorkflowId', 'sourceId']);
 const ID_ARRAYS = new Set(['sourceArtifactIds', 'attachmentIds', 'artifactIds', 'documentImageStepIds', 'contentSourceStepIds', 'pendingCostEntryIds', 'legacyCostEntryIds', 'ruleChain']);
 const PATH_FIELDS = new Set(['path', 'directory', 'storageDirectory']);
 function relocatedPath(value, paths, fileNames) {

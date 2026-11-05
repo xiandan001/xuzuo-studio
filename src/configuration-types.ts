@@ -1,3 +1,4 @@
+import type { ImageOutputOptions } from './image-options-types';
 import type { LedgerEntry, ProjectKind } from './types';
 import type { ArtifactMetadata, CostState, LivePreflight, LiveRuntimeStatus, ModelUsage } from './live-types';
 import type { BillingRequestSnapshot, CostCalculation } from './billing-types';
@@ -20,7 +21,7 @@ export interface CredentialsBridge {
   setEnabled: (input: { id: string; enabled: boolean }) => Promise<CredentialMetadata>;
 }
 export type WorkflowStepKind = ModelCapability | 'manual-review' | 'export';
-export interface WorkflowStep { imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
+export interface WorkflowStep extends ImageOutputOptions { imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
 export interface WorkflowDefinition { goalBrief?: import('./lib/automation-recipes').GoalBrief; foundationVersion?: string; id: string; workspaceId: string; name: string; description: string; outputKind: ProjectKind; businessCategoryId?: string; steps: WorkflowStep[]; updatedAt: string; }
 export type WorkflowDraft = Omit<WorkflowDefinition, 'id' | 'workspaceId' | 'updatedAt'>;
 export interface StudioAction { id: string; workspaceId: string; name: string; description: string; studio: 'documents' | 'images'; outputKind: ProjectKind; workflowId: string; enabled: boolean; }
@@ -72,7 +73,8 @@ export interface WorkflowRunner {
   reconcileCost: (entryId: string, costCents: number) => Promise<void>;
   runtimeStatus: LiveRuntimeStatus;
   preflight: (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>, attachmentIds: string[]) => Promise<LivePreflight>;
-  startLive: (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>, attachmentIds: string[], acknowledgeUnknownCost: boolean, replaceWaitingReviewRunId?: string) => Promise<boolean>;
+  startLive: (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>, attachmentIds: string[], acknowledgeUnknownCost: boolean, replaceWaitingReviewRunId?: string) => Promise<import('./live-types').LiveStartResult>;
+  readStartResult: (projectId: string) => Promise<import('./live-types').LiveStartResult>;
   importFiles: (projectId?: string) => Promise<ArtifactMetadata[]>;
   manageRun?: (id: string, action: 'hide' | 'trash' | 'restore') => Promise<void>;
   previewArtifact: (id: string) => Promise<import('./live-types').ArtifactPreview>;

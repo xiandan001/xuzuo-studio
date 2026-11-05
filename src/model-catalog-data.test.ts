@@ -6,7 +6,7 @@ import type { ModelCatalogEntry } from './model-catalog';
 import type { ModelConnection } from './configuration-types';
 
 const entries = snapshot.models as unknown as ModelCatalogEntry[];
-const cutoff = '2026-10-30';
+const cutoff = '2026-11-05';
 const model = (providerId: string, modelId: string, currency?: string) => {
   const entry = entries.find(item => item.providerId === providerId && item.modelId === modelId && (!currency || item.pricing.currency === currency));
   if (!entry) throw new Error(`目录缺少 ${providerId}/${modelId}/${currency || ''}`);
@@ -25,7 +25,7 @@ describe('官方模型目录数据快照', () => {
     expect(new Set(entries.map(item => item.id)).size).toBe(entries.length);
     expect(new Set(entries.map(item => item.providerId))).toEqual(new Set(['openai', 'anthropic', 'google', 'deepseek', 'aliyun', 'volcengine', 'tencent', 'zhipu', 'moonshot', 'minimax', 'siliconflow']));
     for (const entry of entries) {
-      expect(entry.checkedAt).toBe(cutoff);
+      expect(entry.checkedAt).toBe(/^gpt-image-2\.6-(sunburst|flare)$/.test(entry.modelId) ? cutoff : '2026-10-30');
       expect(entry.modelId.trim()).toBe(entry.modelId);
       expect(entry.name).not.toBe(''); expect(entry.region).not.toBe('');
       expect(['current', 'preview', 'older']).toContain(entry.status);
@@ -49,6 +49,22 @@ describe('官方模型目录数据快照', () => {
       expect(entry.defaultBaseUrl).not.toMatch(/[{}]/);
       expect(catalogConnectionMatches(entry, connection(entry))).toBe(true);
     }
+  });
+
+  it('新增2.6精确别名与发布日期，使用Images协议且不承诺账户已开通或固定SVG/GIF价格', () => {
+    for (const flavor of ['sunburst', 'flare']) {
+      const entry = model('openai', `gpt-image-2.6-${flavor}`);
+      expect(entry.releaseDate).toBe('2026-11-04');
+      expect(entry.protocols).toEqual(['image', 'openai-responses', 'openai-chat']);
+      expect(entry.support.note).toContain('图像操作始终使用Images接口');
+      expect(catalogConnectionMatches(entry, { ...connection(entry), protocol: 'openai-responses' })).toBe(true);
+      expect(entry.capabilities).toEqual(['image-generation', 'image-editing']);
+      expect(entry.support.note).toContain('未验证当前账户');
+      expect(entry.pricing.displayLines.join(' ')).toContain('SVG另计作者模型Token');
+      expect(entry.pricing.note).toContain('不推定');
+    }
+    expect(entries.some(entry => entry.modelId === 'gpt-image-2.6')).toBe(false);
+    expect(model('openai', 'gpt-image-2.5-flare').checkedAt).toBe('2026-10-30');
   });
 
   it('MiniMax中国站与国际站按同一模型分成不同条目，货币、来源与允许主机不混用', () => {

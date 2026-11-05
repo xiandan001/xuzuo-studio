@@ -1,0 +1,45 @@
+.sw-panel[data-ai-panel] .sw-panel-content { display: flex; padding: 0; overflow: hidden; }
+.sw-panel[data-ai-panel] .sw-panel-content > div:first-child { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.studio-ai-composer { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.studio-ai-modebar { flex-shrink: 0; padding: 12px 15px 0; }
+.studio-ai-modebar .sw-ai-mode,.studio-ai-modebar .ig-mode-tabs { margin: 0; padding: 4px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-subtle); }
+.studio-ai-modebar button { min-height: 36px; padding: 7px 6px; font-size: 14px; }
+.studio-ai-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 14px; scrollbar-width: thin; overscroll-behavior: contain; }
+.studio-ai-scroll > label,.studio-ai-scroll .ig-label-row { margin-bottom: 8px; font-size: 14px; }
+.studio-ai-scroll .ig-label-row { margin-top: 0; min-height: 25px; }
+.studio-ai-scroll .ig-label-row > label { margin: 0; }
+.studio-ai-scroll textarea.ig-prompt,.studio-ai-scroll > label > textarea,.studio-ai-scroll > textarea { min-height: 128px; max-height: 260px; font-size: 15px; line-height: 1.7; }
+.studio-ai-prompt-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.studio-ai-prompt-head > label { margin: 0; font-size: 14px; }
+.studio-ai-prompt-head > button { display: inline-flex; align-items: center; gap: 5px; min-height: 27px; color: var(--ui-accent); font-size: 12px; }
+.studio-ai-scroll > .sw-scope-label { margin: 0 0 12px; padding: 7px 10px; font-size: 12px; line-height: 1.5; }
+.studio-ai-model-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 7px; min-width: 0; }
+.studio-ai-model-row > span { flex-shrink: 0; color: var(--ui-fg-secondary); font-size: 12px; }
+.studio-ai-model-row > .custom-select { flex: 1; min-width: 0; }
+.studio-ai-model-row .select-trigger { min-height: 36px; font-size: 14px; padding: 7px 9px; }
+.studio-ai-model-row .select-value { display: block; white-space: nowrap; text-overflow: ellipsis; overflow-wrap: normal; }
+.studio-ai-settings { margin: 8px 0 0; min-width: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); }
+.studio-ai-settings > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 9px 11px; color: var(--ui-fg); cursor: pointer; list-style: none; font-size: 14px; font-weight: 550; }
+.studio-ai-settings > summary::-webkit-details-marker { display: none; }
+.studio-ai-settings > summary > span { flex-shrink: 0; }
+.studio-ai-settings > summary > small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 12px; color: var(--ui-fg-secondary); font-weight: 400; }
+.studio-ai-settings > summary > svg { margin-left: auto; flex-shrink: 0; color: var(--ui-fg-muted); transition: transform 120ms ease; }
+.studio-ai-settings[open] > summary { background: var(--ui-surface-subtle); border-radius: 9px 9px 0 0; border-bottom: 1px solid var(--ui-border); }
+.studio-ai-settings[open] > summary > svg { transform: rotate(180deg); }
+.studio-ai-settings-body { display: grid; gap: 10px; padding: 12px; min-width: 0; }
+.studio-ai-settings-body > label,.studio-ai-settings-body > p { margin: 0; }
+.studio-ai-settings-body p,.studio-ai-settings-body small { font-size: 12px; line-height: 1.65; }
+.studio-ai-settings-body .ig-purpose-tools { margin: 0; }
+.studio-ai-attachments { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.studio-ai-attachments > button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 7px; color: var(--ui-fg-secondary); background: var(--ui-surface); font-size: 12px; min-height: 32px; }
+.studio-ai-attachments > button:hover { color: var(--ui-accent); background: var(--ui-focus-soft); border-color: var(--ui-accent); }
+.studio-ai-attachments > small { font-size: 12px; color: var(--ui-fg-secondary); }
+.studio-ai-footer { flex-shrink: 0; padding: 12px 15px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); box-shadow: 0 -5px 16px rgb(0 0 0 / 3%); }
+.studio-ai-footer > .btn,.studio-ai-footer .ig-primary-action > .btn { width: 100%; min-height: 43px; justify-content: center; }
+.studio-ai-footer .ig-primary-action { margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
+.studio-ai-footer .studio-ai-fee-note,.studio-ai-footer > p { margin: 7px 0 0; font-size: 12px; line-height: 1.5; color: var(--ui-fg-secondary); }
+.studio-ai-footer .studio-action-status { margin-top: 8px; font-size: 12px; }
+.studio-ai-footer .studio-action-status p { margin: 5px 0 0; font-size: 12px; line-height: 1.6; }
+.studio-ai-scroll .ed-prompt-actions { justify-content: flex-end; margin: 0 0 8px; }
+.studio-ai-scroll .ed-prompt-actions > button { min-height: 28px; font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .studio-ai-settings > summary > svg { transition: none; } }

@@ -22,6 +22,16 @@ describe('备份只映射实体编号和明确引用', () => {
 
 
 describe('文档多图工作流来源重绑', () => {
+  it('标注PNG在配置、运行快照和批次中的标量引用随真实产物ID重绑，不改提示词、变量或费用快照', () => {
+    const value = { artifacts: [{ id: 'markup-image', projectId: 'project-one' }], configuration: { workflows: [{ id: 'workflow-one', steps: [{ id: 'step-one', imageMarkupId: 'markup-image', prompt: 'markup-image', imageSvgModel: 'gpt-6.1-sol' }] }] }, run: { snapshot: { steps: [{ imageMarkupId: 'markup-image' }] } }, batch: { workflow: { steps: [{ imageMarkupId: 'markup-image' }] } }, variables: { imageMarkupId: 'markup-image' }, billingRuleSnapshot: { imageMarkupId: 'markup-image' } };
+    const ids = createIdMap(value), restored = remap(value, ids);
+    expect(restored.artifacts[0].id).toBe(ids['markup-image']);
+    expect(restored.configuration.workflows[0].steps[0]).toMatchObject({ imageMarkupId: ids['markup-image'], prompt: 'markup-image', imageSvgModel: 'gpt-6.1-sol' });
+    expect(restored.run.snapshot.steps[0].imageMarkupId).toBe(ids['markup-image']);
+    expect(restored.batch.workflow.steps[0].imageMarkupId).toBe(ids['markup-image']);
+    expect(restored.variables).toEqual(value.variables); expect(restored.billingRuleSnapshot).toEqual(value.billingRuleSnapshot);
+    expect(value.configuration.workflows[0].steps[0].imageMarkupId).toBe('markup-image');
+  });
   it('逐张图片交付来源数组随备份编号映射，普通提示词和变量保持原值', () => {
     const ids = { first: 'restored-first', second: 'restored-second' };
     const original = { contentSourceStepIds: ['first', 'second'], prompt: 'first', variables: { contentSourceStepIds: ['first'] } };

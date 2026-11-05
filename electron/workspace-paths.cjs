@@ -77,7 +77,16 @@ async function atomicJson(fs, filename, value) {
   try { await checkedFile(fs, filename); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const temporary = `${filename}.${randomUUID()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
-  try { await fs.rename(temporary, filename); }
+  try {
+    const delays = process.platform === 'win32' ? [25, 60, 120] : [];
+    for (let attempt = 0; ; attempt++) {
+      try { await fs.rename(temporary, filename); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY'].includes(error.code) || attempt >= delays.length) throw error;
+        await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+      }
+    }
+  }
   catch (error) { try { await fs.unlink(temporary); } catch { /* Only this new temporary is removed. */ } throw error; }
 }
 module.exports = { key, inside, safeFolder, checkedDirectory, checkedFile, copyVerifiedFile, copyProjectTree, verifyProjectTree, atomicJson };

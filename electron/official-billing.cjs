@@ -1,4 +1,5 @@
 const registry = require('./billing-rules.json');
+const { freezeSvgAuthorRules, addSvgComponents } = require('./svg-billing.cjs');
 const clone = value => JSON.parse(JSON.stringify(value));
 const unknown = reason => ({ costCents: 0, costState: 'unknown', reason });
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -54,7 +55,7 @@ function resolveOfficialBillingRule(context = {}, pricing) {
   if (!validTime(startedAt)) return null;
   if (!ruleCoversTime(rule, startedAt)) return null;
   const operation = context.operation || 'text';
-  return { version: 1, ruleId: rule.id, ruleVersion: rule.version, modelId: rule.modelId, operation, startedAt, rule: clone(rule) };
+  return { version: 1, ruleId: rule.id, ruleVersion: rule.version, modelId: rule.modelId, operation, startedAt, rule: clone(rule), ...(rule.svgAuthorBilling ? { svgAuthorRules: freezeSvgAuthorRules(registry.rules, startedAt) } : {}) };
 }
 
 function validatedFx(fx, pricing, date) {
@@ -187,7 +188,10 @@ function calculateOfficialCost(pricing, usage = {}, context = {}) {
     if (!Array.isArray(snapshot.rule.operations) || !snapshot.rule.operations.includes(snapshot.operation)) throw new Error('此模型操作的模态计费尚未核实，不能使用文字单价代替。');
     const tokenKeys = ['inputTokens', 'outputTokens', 'inputTextTokens', 'inputImageTokens', 'cachedInputTokens', 'cachedInputTextTokens', 'cachedInputImageTokens', 'cacheWriteInputTokens', 'cacheWrite5mTokens', 'cacheWrite1hTokens', 'cacheWrite30mTokens', 'cacheWrite12hTokens', 'outputImageTokens', 'outputTextTokens', 'reasoningTokens', 'uncachedInputTokens'];
     if (tokenKeys.some(key => usage[key] !== undefined && !count(usage[key]))) throw new Error('供应商返回的Token计费用量无效。');
-    if (snapshot.rule.scheme === 'direct-image-tokens') imageComponents(bill, usage, snapshot.operation, snapshot.rule.rates);
+    if (snapshot.rule.scheme === 'direct-image-tokens') {
+      imageComponents(bill, usage, snapshot.operation, snapshot.rule.rates);
+      addSvgComponents(bill, snapshot, usage, { selectedRates, tokenComponents });
+    }
     else {
       const selected = selectedRates(snapshot.rule, usage, snapshot.startedAt);
       snapshot.rule.basis += selected.basis;
@@ -214,6 +218,7 @@ function calculateManualCost(pricing, usage = {}, context = {}) {
       if (!price) throw new Error('单价尚未填写。');
       bill.add('quantity', '数量/时长', quantity, format(price), pricing.unit);
     }
+    if (usage.imageOutputFormat === 'svg' || usage.svgUsage !== undefined) throw new Error('已按手动单价保留可核算部分；SVG作者模型另行计费，完整费用尚未核实。');
     return bill.finish('按供应商返回用量与用户填写的单价核算，实际账单仍需核对。');
   } catch (error) { return bill.finish(error.message, false); }
 }

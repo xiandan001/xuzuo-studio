@@ -32,7 +32,7 @@ export interface ModelCatalogEntry {
   };
 }
 
-export const MODEL_CATALOG_DATE = '2026-10-30';
+export const MODEL_CATALOG_DATE = '2026-11-05';
 export const MODEL_CATALOG = snapshot.models as ModelCatalogEntry[];
 const PROVIDER_SEARCH_NAMES: Record<string, string> = { openai: 'OpenAI GPT ChatGPT', anthropic: 'Claude 克劳德', google: 'Google Gemini 谷歌', deepseek: 'DeepSeek 深度求索', aliyun: '阿里 百炼 通义 千问 Qwen', volcengine: '火山 方舟 字节 豆包 Seedream 即梦', tencent: '腾讯 混元 TokenHub Hy', zhipu: '智谱 GLM 清言', moonshot: 'Kimi Moonshot 月之暗面', minimax: 'MiniMax 海螺 稀宇', siliconflow: '硅基流动 托管' };
 

@@ -4,6 +4,7 @@ import type { PageProps } from '../types';
 import type { WorkflowDefinition, WorkflowStep } from '../configuration-types';
 import { blankWorkflow, exampleWorkflow, switchNewWorkflowOutput, WorkflowEditor } from '../pages/Workflows';
 import { StudioConnectionFields } from './StudioConnectionFields';
+import { workflowImageIssue } from './WorkflowEditor';
 
 const props = {
   workspaceId: 'workspace', workspace: { id: 'workspace', name: '隔离测试工作区' }, prompts: [],
@@ -11,6 +12,30 @@ const props = {
 } as unknown as PageProps;
 const step = (id: string, name: string): WorkflowStep => ({ id, name, kind: 'text', prompt: '只处理已提供内容', inputSource: id === 'first' ? 'project' : 'previous', enabled: true, maxOutputTokens: 2048 });
 describe('工作流配置和错误修复视图', () => {
+  it('图片步骤复用高级格式控件，SVG多张显示错误但不改原数量', () => {
+    const imageProps = { ...props, configuration: { ...props.configuration, models: props.configuration.models.map(model => model.id === 'image-model' ? { ...model, modelId: 'gpt-image-2.6-sunburst' } : model) } };
+    const image: WorkflowStep = { ...step('first', 'SVG制作'), kind: 'image-generation', modelConfigId: 'image-model', credentialId: 'key-one', count: 2, imageOutputFormat: 'svg', imageQuality: 'max', imageComplexity: 'high' };
+    const html = renderToStaticMarkup(<WorkflowEditor props={imageProps} initial={{ name: 'SVG流程', description: '', outputKind: 'image', steps: [image] }} onClose={() => undefined} />);
+    expect(html).toContain('图片输出格式'); expect(html).toContain('SVG 矢量图'); expect(html).toContain('SVG 作者模型'); expect(html).toContain('图片渲染质量'); expect(html).toContain('图片规划复杂度');
+    expect(html).toContain('单次SVG步骤仅支持1张'); expect(image.count).toBe(2);
+    expect(workflowImageIssue(image, 'gpt-image-2.6-sunburst')).toContain('数量改为1');
+    expect(workflowImageIssue({ ...image, count: 1 }, 'gpt-image-2.6-sunburst')).toBeUndefined();
+  });
+  it('2.5精修说明SVG/GIF不可用，圈画入口禁用并解释须回图片工作台选择原图', () => {
+    const imageProps = { ...props, configuration: { ...props.configuration, models: props.configuration.models.map(model => model.id === 'image-model' ? { ...model, modelId: 'gpt-image-2.5-flare', capabilities: ['image-editing' as const] } : model) } };
+    const image: WorkflowStep = { ...step('first', '精修'), kind: 'image-editing', modelConfigId: 'image-model', credentialId: 'key-one' };
+    const html = renderToStaticMarkup(<WorkflowEditor props={imageProps} initial={{ name: '精修流程', description: '', outputKind: 'image', steps: [image] }} onClose={() => undefined} />);
+    expect(html).toContain('SVG、GIF 仅 GPT Image 2.6 可用'); expect(html).toContain('圈画需在图片工作台选择原图后操作'); expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?圈画修改位置/);
+  });
+  it('GIF显示帧数、时长及自动尺寸约束，保留数量并拒绝其他型号', () => {
+    const image: WorkflowStep = { ...step('first', '动图'), kind: 'image-generation', modelConfigId: 'image-model', credentialId: 'key-one', imageOutputFormat: 'gif', imageFrameCount: 9, imageFrameDurationMs: 205, imageSize: 'auto', count: 4 };
+    const imageProps = { ...props, configuration: { ...props.configuration, models: props.configuration.models.map(model => model.id === 'image-model' ? { ...model, modelId: 'gpt-image-2.6-flare' } : model) } };
+    const html = renderToStaticMarkup(<WorkflowEditor props={imageProps} initial={{ name: 'GIF流程', description: '', outputKind: 'image', steps: [image] }} onClose={() => undefined} />);
+    expect(html).toContain('GIF动画帧数'); expect(html).toContain('GIF每帧时长'); expect(html).toContain('数量表示动画份数');
+    expect(workflowImageIssue(image, 'gpt-image-2.6-flare')).toBeUndefined(); expect(image.count).toBe(4);
+    expect(workflowImageIssue(image, 'gpt-image-2.5-flare')).toContain('仅支持 GPT Image 2.6');
+    expect(workflowImageIssue({ ...image, imageSize: '1024x1024' }, 'gpt-image-2.6-flare')).toContain('帧尺寸请选择自动');
+  });
   it('第三步错误可直接打开第三步，最大输出范围与执行端一致', () => {
     const initial = { name: '三步测试', description: '', outputKind: 'word' as const, steps: [step('first', '第一步'), step('second', '第二步'), step('third', '第三步')] };
     const html = renderToStaticMarkup(<WorkflowEditor props={props} initial={initial} initialStepId="third" initialField="maxOutputTokens" onClose={() => undefined} />);

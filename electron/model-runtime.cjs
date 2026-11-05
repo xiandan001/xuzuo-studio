@@ -3,6 +3,8 @@ const { executeText } = require('./provider-text.cjs');
 const { executeImages, executeAudio } = require('./provider-media.cjs');
 const { executeVideo, VIDEO_TIMEOUT_MS } = require('./provider-video.cjs');
 const { createModelReceipts } = require('./model-receipts.cjs');
+const { imageOptionsError } = require('./image-output-options.cjs');
+const { imageType, validateMarkup } = require('./image-output-formats.cjs');
 
 const TEXT_PROTOCOLS = new Set(['openai-chat', 'openai-responses', 'anthropic', 'gemini']);
 const IMAGE_PROTOCOLS = new Set(['image', 'openai-chat', 'openai-responses']);
@@ -35,6 +37,8 @@ function validateRequest(request) {
   if (options.count > 1 && !['image-generation', 'image-editing'].includes(request.kind)) throw failure('INVALID_OPTIONS', '多份输出仅用于图片步骤，其他步骤请分别执行。');
   if (options.size !== undefined && (typeof options.size !== 'string' || !/^(auto|\d{2,5}x\d{2,5})$/.test(options.size))) throw failure('INVALID_OPTIONS', '图片尺寸需要为 auto 或 宽x高。');
   if (options.background !== undefined && !['auto', 'opaque', 'transparent'].includes(options.background)) throw failure('INVALID_OPTIONS', '图片背景配置无效。');
+  const imageError = imageOptionsError(request.model.modelId, request.kind, options);
+  if (imageError) throw failure('INVALID_OPTIONS', imageError);
   if (options.voice !== undefined && (typeof options.voice !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(options.voice))) throw failure('INVALID_OPTIONS', '语音名称格式无效。');
   if (options.existingTaskId !== undefined && (request.kind !== 'video-generation' || request.connection.protocol !== 'video' || request.connection.providerId !== 'siliconflow' || typeof options.existingTaskId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(options.existingTaskId))) throw failure('INVALID_OPTIONS', '恢复任务编号仅用于硅基流动视频状态查询。');
   return { ...request, prompt: request.prompt || '', input: request.input || '', attachments: request.attachments || [], options };
@@ -46,6 +50,7 @@ async function loadAttachments(request, artifactStore, context) {
   for (const metadata of request.attachments) {
     ensureActive(context);
     if (!metadata || typeof metadata.id !== 'string' || !metadata.id) throw failure('INVALID_ATTACHMENTS', '附件引用无效，请重新选择本机文件。', context);
+    if (metadata.id === request.options.markupArtifactId) continue;
     const file = await artifactStore.read(metadata.id);
     const buffer = Buffer.from(file.buffer);
     total += buffer.length;
@@ -54,6 +59,28 @@ async function loadAttachments(request, artifactStore, context) {
     files.push({ ...file, buffer, mimeType: file.mimeType.split(';')[0].toLowerCase(), name: typeof file.name === 'string' ? file.name : 'attachment' });
   }
   return files;
+}
+
+async function loadImageMarkup(request, files, artifactStore, context) {
+  if (request.kind !== 'image-editing') return undefined;
+  if (files.some(file => ['image/gif', 'image/svg+xml'].includes(file.mimeType))) throw failure('INVALID_IMAGE_INPUT', '图片编辑只支持PNG、JPEG或WebP参考图片，请先转换SVG或GIF。', context);
+  for (const file of files.filter(item => item.mimeType.startsWith('image/'))) {
+    let actual;
+    try { actual = imageType(file.buffer); } catch (error) { throw failure('INVALID_IMAGE_INPUT', error.message, context); }
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(actual.mimeType) || actual.mimeType !== file.mimeType) throw failure('INVALID_IMAGE_INPUT', '参考图实际格式与登记类型不一致，图片编辑仅接受真实PNG、JPEG或WebP。', context);
+  }
+  if (!request.options.markupArtifactId) return undefined;
+  const source = files.find(file => ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType));
+  if (!source || source.projectId !== request.projectId) throw failure('INVALID_MARKUP', '标注精修需要本项目的第一张PNG、JPEG或WebP原图。', context);
+  let markup;
+  try { markup = await artifactStore.read(request.options.markupArtifactId); } catch { throw failure('INVALID_MARKUP', '找不到所选标注图，请重新选择本项目的PNG标注图。', context); }
+  ensureActive(context);
+  if (markup.projectId !== request.projectId) throw failure('INVALID_MARKUP', '标注图必须属于当前项目，不能使用其他项目文件。', context);
+  const buffer = Buffer.from(markup.buffer);
+  if (!buffer.length || buffer.length > MAX_ATTACHMENT_BYTES) throw failure('INVALID_MARKUP', 'PNG标注图为空或超过32MB。', context);
+  markup = { ...markup, buffer, mimeType: typeof markup.mimeType === 'string' ? markup.mimeType.split(';')[0].toLowerCase() : '', name: typeof markup.name === 'string' ? markup.name : 'markup.png' };
+  try { await validateMarkup(markup, source); } catch (error) { throw failure('INVALID_MARKUP', error.message, context); }
+  return markup;
 }
 
 function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch, directory, getAvailableRuns }) {
@@ -65,6 +92,7 @@ function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch,
     try {
       ensureActive(context);
       const files = request.kind === 'video-generation' && request.options.existingTaskId ? [] : await loadAttachments(request, artifactStore, context);
+      const markup = await loadImageMarkup(request, files, artifactStore, context);
       const saveArtifact = async value => { ensureActive(context); return artifactStore.write({ runId: request.runId, projectId: request.projectId, ...value }); };
       return await credentialStore.withSecret(request.credentialId, request.connection.id, async secret => {
         context.secret = secret;
@@ -78,7 +106,7 @@ function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch,
             progress(context, 'saving', '正在保存真实模型文字结果。');
             result.artifacts = [await saveArtifact({ name: 'result.txt', mimeType: 'text/plain', text: result.text })];
           } else if (request.kind === 'video-generation') result = await executeVideo(request, files, context, fetchImpl, saveArtifact);
-          else if (['image-generation', 'image-editing'].includes(request.kind)) result = await executeImages(request, files, context, fetchImpl, saveArtifact);
+          else if (['image-generation', 'image-editing'].includes(request.kind)) result = await executeImages(request, files, context, fetchImpl, saveArtifact, markup);
           else result = await executeAudio(request, files, context, fetchImpl, saveArtifact);
           return { ...result, providerRequestId: context.providerRequestId };
         } catch (error) {

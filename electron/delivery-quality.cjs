@@ -29,6 +29,8 @@ function editorDeliveryChecks(document, options = {}) {
 }
 function imageDeliveryChecks(input) {
     const known = Number.isSafeInteger(input.width) && input.width > 0 && Number.isSafeInteger(input.height) && input.height > 0;
+    if (input.mimeType === 'image/svg+xml')
+        return [check('file', '真实SVG文件可用', input.artifactAvailable ? 'passed' : 'unknown', '仅接受已校验的静态矢量文件。'), check('dimensions', '矢量画布可用', known ? 'passed' : 'unknown', known ? `画布 ${input.width} × ${input.height}，SVG可缩放，不按参考位图像素判定。` : '请等待矢量图载入。'), check('visual', '路径、文字与图形已检查', 'manual', '检查字体、轮廓、色彩和编辑软件中的实际效果。'), check('rights', '使用范围已核对', 'manual', '核对商标、字体及素材是否适合本次用途。')];
     const expected = input.expectedSize?.match(/^(\d+)x(\d+)$/);
     const matches = input.expectedSize === 'auto' || !!expected && input.width === Number(expected[1]) && input.height === Number(expected[2]);
     const checks = [check('file', '真实图片文件可用', input.artifactAvailable ? 'passed' : 'unknown', input.artifactAvailable ? '验收针对当前选中的实际产物。' : '先生成或选择实际图片。'), check('dimensions', '实际尺寸符合交付目标', !known || !expected && input.expectedSize !== 'auto' ? 'unknown' : matches ? 'passed' : 'failed', !known ? '图片尚未完成读取，实际像素未确认。' : `实际 ${input.width} × ${input.height}${expected ? `，目标 ${expected[1]} × ${expected[2]}` : input.expectedSize === 'auto' ? '，本次使用自动尺寸' : '，此产物的生成目标未记录，不能自动判断尺寸是否合格'}。`)];
@@ -38,7 +40,7 @@ function imageDeliveryChecks(input) {
         checks.push(check('format', '透明素材为 PNG 文件', input.mimeType === 'image/png' ? 'passed' : input.mimeType ? 'failed' : 'unknown', input.mimeType ? `实际文件类型：${input.mimeType}。` : '文件类型尚未确认。'));
     if (input.requiresTransparency)
         checks.push(check('alpha', '透明 PNG 含真实透明像素', input.transparency === 'present' ? 'passed' : input.transparency === 'opaque' ? 'failed' : 'unknown', input.transparency === 'present' ? '已读取到 Alpha 透明像素；边缘质量仍需目视检查。' : input.transparency === 'opaque' ? '像素中未发现透明区域，棋盘格或白底不等于透明。' : '尚不能可靠检查透明通道，未自动判定通过。'));
-    return [...checks, check('visual', '主体、文字和参考一致性已检查', 'manual', '核对错别字、人物肢体、商品结构、包装/标志、画面构图及参考图要求。'), check('edges', '画质、裁切与边缘已检查', 'manual', '按交付尺寸检查清晰度、安全边距、杂色、透明边缘和背景衔接。'), check('rights', '素材来源与使用范围已核对', 'manual', '确认人物、商标、参考素材及模型输出适合本次使用场景。')];
+    return [...checks, ...(input.mimeType === 'image/gif' ? [check('animation', '动画播放与循环已检查', 'manual', '播放完整动画，确认动作、速度、循环接缝和文字，不仅检查第一帧。')] : []), check('visual', '主体、文字和参考一致性已检查', 'manual', '核对错别字、人物肢体、商品结构、包装/标志、画面构图及参考图要求。'), check('edges', '画质、裁切与边缘已检查', 'manual', '按交付尺寸检查清晰度、安全边距、杂色、透明边缘和背景衔接。'), check('rights', '素材来源与使用范围已核对', 'manual', '确认人物、商标、参考素材及模型输出适合本次使用场景。')];
 }
 function deliveryFingerprint(value) {
     let first = 2166136261, second = 5381;
