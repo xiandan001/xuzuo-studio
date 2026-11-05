@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveProjectStateSignature, liveProjectStatus, projectCardStatusLabel, selectProjectStatusRun } from './project-status';
+import { liveProjectStateSignature, liveProjectStatus, projectCardStatusLabel, projectVersionLabel, selectProjectStatusRun } from './project-status';
 import { applyLiveProjectState } from '../hooks/useLiveWorkflowRunner';
 import type { WorkflowRun } from '../configuration-types';
 import type { Project } from '../types';
@@ -10,6 +10,11 @@ const image: ArtifactMetadata = { id: 'image', projectId: 'p', runId: 'r', name:
 const run = { id: 'r', projectId: 'p', mode: 'live', status: 'waiting-review', stepIndex: 1, updatedAt: '2026-11-02T00:00:00Z', attempts: [{ status: 'complete', artifacts: [image] }] } as unknown as WorkflowRun;
 
 describe('generated output and confirmed delivery are separate project states', () => {
+  it('labels the initial project state without inventing an editor revision and retains tracked positive values', () => {
+    expect(projectVersionLabel(0)).toBe('初版');
+    expect(projectVersionLabel(1)).toBe('v1');
+    expect(projectVersionLabel(7)).toBe('v7');
+  });
   it('shows generated only for the matching real product type, retaining manual checks', () => {
     expect(projectCardStatusLabel(project, [run])).toBe('已生成');
     expect(liveProjectStatus(project, run)).toBe('review');

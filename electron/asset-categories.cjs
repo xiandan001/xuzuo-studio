@@ -103,7 +103,7 @@ function createAssetCategories({ workspaceStorage, assetLibrary, builtinAssets, 
       const target = selectedId === '' ? undefined : selectedId;
       if (target !== undefined && !state.categories.some(item => item.id === target)) throw new Error('目标分类不属于当前工作区，请重新选择。');
       if (builtin) await builtinAssets.validateId(id);
-      else if (!(await assetLibrary.list({ workspaceId })).some(item => item.id === id && item.workspaceId === workspaceId)) throw new Error('找不到当前工作区的这份素材。');
+      else if (!(await assetLibrary.list({ workspaceId, availabilityIds: [] })).some(item => item.id === id && item.workspaceId === workspaceId)) throw new Error('找不到当前工作区的这份素材。');
       const field = builtin ? 'builtinAssignments' : 'assignments';
       if ((Object.hasOwn(state[field], id) ? state[field][id] : undefined) === target) return;
       const assignments = { ...state[field] };

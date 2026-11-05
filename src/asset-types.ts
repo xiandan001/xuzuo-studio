@@ -18,7 +18,8 @@ export interface AssetLibraryBridge {
   attachBuiltin?: (input: { workspaceId: string; id: string; projectId: string }) => Promise<ArtifactMetadata>;
   saveBuiltin?: (input: { id: string; format?: 'png' | 'bundle' }) => Promise<{ saved: boolean }>;
   openBuiltinLink?: (input: { id: string; kind: 'source' | 'license' }) => Promise<void>;
-  list: (input: { workspaceId: string }) => Promise<StudioAsset[]>;
+  list: (input: { workspaceId: string; availabilityIds?: string[] }) => Promise<StudioAsset[]>;
+  probe?: (input: { workspaceId: string; ids: string[] }) => Promise<{ id: string; unavailable: boolean }[]>;
   import: (input: { workspaceId: string }) => Promise<StudioAsset[]>;
   update: (input: { workspaceId: string; id: string; favorite?: boolean; archived?: boolean }) => Promise<StudioAsset>;
   preview: (input: { workspaceId: string; id: string }) => Promise<ArtifactPreview>;

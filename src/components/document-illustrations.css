@@ -2,6 +2,9 @@
 .document-illustration-modes{display:flex;flex-wrap:wrap;gap:5px;padding:3px;background:var(--ui-surface-subtle);border-radius:8px}
 .document-illustration-modes>button{display:flex;align-items:center;justify-content:center;flex:1 1 auto;gap:6px;min-height:36px;padding:6px 9px;border-radius:6px;font-size:14px;color:var(--ui-fg-secondary)}
 .document-illustration-modes>button[aria-pressed=true]{color:var(--ui-accent);background:var(--ui-surface-active);font-weight:650}
+.document-illustration-library{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.document-illustration-library>button{min-height:40px;font-size:14px}
+.document-illustration-library>span{font-size:14px;line-height:1.6;color:var(--ui-fg-secondary)}
 .document-illustration-options p{font-size:13px;line-height:1.7;color:var(--ui-fg-secondary);margin:0}
 .document-illustration-options label{display:flex;flex-direction:column;gap:7px;font-size:14px;font-weight:600;min-width:0}
 .document-illustration-fields{display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:9px}

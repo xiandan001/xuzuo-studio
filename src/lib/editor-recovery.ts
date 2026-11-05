@@ -1,13 +1,18 @@
 import type { EditorDocument, EditorKind } from '../editor-types';
+import { normalizeWordTable } from './word-table';
 
 export interface RecoveryDraft { document: EditorDocument; sourceArtifactIds: string[]; baseRevision: number; previousDrafts?: RecoveryDraft[]; }
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 export const recoveryKey = (projectId: string) => `xuzuo.editor-recovery.${projectId}`;
 export const conflictKey = (projectId: string) => `xuzuo.editor-conflict-recovery.${projectId}`;
+function validNativeTable(value: unknown): boolean {
+  try { normalizeWordTable(value); return true; }
+  catch { return false; }
+}
 function validDraft(value: unknown, kind: EditorKind): value is RecoveryDraft {
   const draft = value as RecoveryDraft | undefined;
   const items = kind === 'word' ? draft?.document.kind === 'word' ? draft.document.blocks : undefined : draft?.document.kind === 'ppt' ? draft.document.slides : undefined;
-  return !!draft && draft.document.schemaVersion === 1 && draft.document.kind === kind && typeof draft.document.title === 'string' && Array.isArray(draft.sourceArtifactIds) && draft.sourceArtifactIds.every(id => typeof id === 'string') && Number.isSafeInteger(draft.baseRevision) && draft.baseRevision >= 0 && Array.isArray(items) && items.length > 0 && items.every(item => item && typeof item.id === 'string' && Number.isInteger(item.fontSize) && ['left', 'center', 'right'].includes(item.align) && ('type' in item ? typeof item.text === 'string' && ['paragraph', 'heading', 'bullet', 'image'].includes(item.type) && typeof item.bold === 'boolean' && typeof item.italic === 'boolean' : typeof item.title === 'string' && typeof item.body === 'string' && typeof item.notes === 'string' && ['title-body', 'two-columns', 'image-right', 'image-full'].includes(item.layout))) && (draft.document.kind !== 'ppt' || ['paper', 'violet', 'forest', 'night'].includes(draft.document.theme));
+  return !!draft && draft.document.schemaVersion === 1 && draft.document.kind === kind && typeof draft.document.title === 'string' && Array.isArray(draft.sourceArtifactIds) && draft.sourceArtifactIds.every(id => typeof id === 'string') && Number.isSafeInteger(draft.baseRevision) && draft.baseRevision >= 0 && Array.isArray(items) && items.length > 0 && items.every(item => item && typeof item.id === 'string' && Number.isInteger(item.fontSize) && ['left', 'center', 'right'].includes(item.align) && ('type' in item ? typeof item.text === 'string' && ['paragraph', 'heading', 'bullet', 'image', 'table'].includes(item.type) && typeof item.bold === 'boolean' && typeof item.italic === 'boolean' && (item.type !== 'table' || item.text === '' && validNativeTable(item.table)) : typeof item.title === 'string' && typeof item.body === 'string' && typeof item.notes === 'string' && ['title-body', 'two-columns', 'image-right', 'image-full'].includes(item.layout))) && (draft.document.kind !== 'ppt' || ['paper', 'violet', 'forest', 'night'].includes(draft.document.theme));
 }
 export function parseEditorRecovery(raw: string | null, kind: EditorKind): RecoveryDraft | undefined {
   try {

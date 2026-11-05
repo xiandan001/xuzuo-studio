@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('desktop', {
   onClosingStatus: listener => { closingListeners.add(listener); if (lastClosingStatus) listener(lastClosingStatus); return () => closingListeners.delete(listener); },
   assets: {
     search: input => ipcRenderer.invoke('runtime:asset-search', input),
+    probe: input => ipcRenderer.invoke('runtime:asset-probe', input),
     categories: input => ipcRenderer.invoke('runtime:asset-categories', input),
     saveCategory: input => ipcRenderer.invoke('runtime:asset-category-save', input),
     removeCategory: input => ipcRenderer.invoke('runtime:asset-category-remove', input),

@@ -192,13 +192,14 @@ function registerRuntime(credentials) {
   handle('asset-category-assign', input => assetCategories.assign(input));
   handle('asset-list', async input => { const [items, categories] = await Promise.all([assets.list(input), assetCategories.list(input)]); return items.map(item => ({ ...item, ...(categories.assignments[item.id] ? { categoryId: categories.assignments[item.id] } : {}) })); });
   handle('asset-search', input => assets.search(input));
+  handle('asset-probe', input => assets.probe(input));
   handle('asset-import', async input => {
     await workspaceStorage.validateWorkspace(input?.workspaceId);
     const result = await dialog.showOpenDialog(mainWindow, { title: '添加到当前工作区素材库', properties: ['openFile', 'multiSelections'], filters: [{ name: '素材文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'pdf', 'pptx', 'xlsx', 'docx', 'txt', 'md', 'json', 'csv', 'tsv', 'mp3', 'wav', 'm4a', 'mp4'] }] });
     return result.canceled ? [] : assets.importPaths({ workspaceId: input.workspaceId, paths: result.filePaths });
   });
   handle('asset-update', input => assets.update(input));
-  handle('asset-thumbnail', async input => thumbnails.get(await assets.thumbnailSource(input)));
+  handle('asset-thumbnail', input => thumbnails.getFrom(() => assets.thumbnailSource(input)));
   handle('asset-attach', input => withProjectWrite(input?.projectId, () => assets.attach(input)));
   handle('asset-preview', async input => {
     const file = await assets.read(input);
@@ -354,7 +355,7 @@ function registerRuntime(credentials) {
     if (location && files.length) await automationCenter.referenceImported({ projectId, workspaceId: location.workspaceId, files });
     return files;
   }));
-  handle('thumbnail-artifact', async id => thumbnails.get(await artifactStore.thumbnailSource(id)));
+  handle('thumbnail-artifact', id => thumbnails.getFrom(() => artifactStore.thumbnailSource(id)));
   handle('preview-artifact', async id => { const [artifact] = await artifactStore.list([id]); if (artifact.kind === 'office') { const file = await artifactStore.read(id), structured = await documentArtifactPreview(artifact).catch(() => undefined); return { mimeType: file.mimeType, artifact, ...(structured || { text: await extractReferenceText(file) }), supported: true }; } const preview = await artifactStore.preview(id); return { mimeType: preview.artifact?.mimeType || preview.mimeType, ...preview }; });
   handle('trash-artifact', async id => {
     if (movingArtifacts.has(id)) throw new Error('这个文件正在处理，请稍后再试。');

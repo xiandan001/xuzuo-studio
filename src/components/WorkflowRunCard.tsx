@@ -1,6 +1,7 @@
 import { RememberedDetails } from './RememberedDetails';
 import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 import { runDetailKey } from '../lib/run-details';
+import { isLocalExportRun } from '../lib/workflow-purpose';
 import { TaskRunActions } from './TaskRunActions';
 import { useEffect, useState } from 'react';
 import { ArrowRight, Check, CheckCircle2, CirclePause, LoaderCircle, Pencil, Play, RotateCcw, ShieldCheck, Square, AlertCircle } from 'lucide-react';
@@ -43,6 +44,7 @@ export function WorkflowRunCard({ props, run: summary }: { props: PageProps; run
   const [continueBudgetError, setContinueBudgetError] = useState('');
   const terminal = ['complete', 'cancelled', 'interrupted', 'failed'].includes(run.status);
   const live = run.mode === 'live';
+  const localExport = isLocalExportRun(run);
   const labels: Record<WorkflowRun['status'], string> = live ? { running: '正在执行', paused: '已暂停', 'waiting-review': '等待人工检查', complete: '已完成', cancelled: '已取消', interrupted: '已中断', failed: '执行失败' } : RUN_LABELS;
   const runLabel = run.status === 'cancelled' && run.supersededByRunId ? '已由后续创作替代' : run.retryStepOnly && run.status === 'complete' ? '单步重试完成' : labels[run.status];
   const cost = summarizeCosts(runCostRecords(run, props.ledger));
@@ -66,7 +68,7 @@ export function WorkflowRunCard({ props, run: summary }: { props: PageProps; run
     }
     setConfirmation(null);
   }
-  return <section className={`panel wf-run-card ${live ? 'wf-real-run' : ''}`}><header><span className={`wf-run-state-icon ${run.status}`}>{run.status === 'running' ? <LoaderCircle size={20} className="spin" /> : run.status === 'complete' ? <CheckCircle2 size={20} /> : run.status === 'waiting-review' ? <ShieldCheck size={20} /> : run.status === 'failed' ? <AlertCircle size={20} /> : <CirclePause size={20} />}</span><div><h3>{run.workflowName}<span className={`wf-run-mode ${live ? 'live' : ''}`}>{live ? '真实' : '模拟'}</span></h3><p>{project?.name || '关联项目'}<i />{Number.isNaN(Date.parse(run.createdAt)) ? run.createdAt : new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</p></div><span className={`wf-run-badge ${run.status}`}>{runLabel}</span><strong>{live ? '调用费用 ' : '模拟费用 '}<CostTotal summary={cost} /></strong></header>
+  return <section className={`panel wf-run-card ${live ? 'wf-real-run' : ''}`}><header><span className={`wf-run-state-icon ${run.status}`}>{run.status === 'running' ? <LoaderCircle size={20} className="spin" /> : run.status === 'complete' ? <CheckCircle2 size={20} /> : run.status === 'waiting-review' ? <ShieldCheck size={20} /> : run.status === 'failed' ? <AlertCircle size={20} /> : <CirclePause size={20} />}</span><div><h3>{run.workflowName}<span className={`wf-run-mode ${live ? 'live' : ''}`}>{localExport ? '本地导出' : live ? '真实' : '模拟'}</span></h3><p>{project?.name || '关联项目'}<i />{Number.isNaN(Date.parse(run.createdAt)) ? run.createdAt : new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</p></div><span className={`wf-run-badge ${run.status}`}>{runLabel}</span><strong>{localExport ? '未调用模型 ' : live ? '调用费用 ' : '模拟费用 '}<CostTotal summary={cost} /></strong></header>
     {run.error && <div className="wf-run-error" role="status"><AlertCircle size={15} /><span>{run.error}</span></div>}{run.pauseRequested && <div className="wf-retry-notice"><CirclePause size={13} /><span>已请求暂停，将在当前请求结束后停止后续步骤；已经发出的请求仍可能收费。</span></div>}
     <button className="btn btn-ghost" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{detailsOpen ? '收起步骤与结果' : '查看步骤与结果'}</button>{detailError && <p className="form-error" role="alert">{detailError}</p>}{detailsOpen && run.contentTruncated && <p role="status">正在按需读取完整执行详情…</p>}{detailsOpen && !run.contentTruncated && <div className="wf-run-steps">{run.snapshot.steps.map((step, index) => {
       const attempts = run.attempts.filter(attempt => attempt.stepId === step.id); const last = attempts.at(-1); const current = index === run.stepIndex;

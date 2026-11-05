@@ -2,19 +2,25 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAppearance } from './useAppearance';
 import { useRememberedBoolean } from './useRememberedBoolean';
 import { useRememberedString } from './useRememberedString';
-import { readDisclosure } from '../lib/disclosure-state';
+import { migrateStudioPreferences, readStudioLayout, studioPreferenceKey } from '../lib/studio-layout-state';
+import type { StudioIdentity } from '../lib/studio-layout-state';
 import { STUDIO_TOOLS } from '../lib/studio-commands';
 import type { StudioTool } from '../lib/studio-commands';
 
-export function useStudioLayout(scope = 'documents') {
+export function useStudioLayout(scope: string, identity: StudioIdentity) {
   const { layout } = useAppearance();
   const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && (window.matchMedia?.('(max-width: 1280px)').matches || false));
-  const [initial] = useState(() => ({ left: readDisclosure(`${scope}:files-visible`, !narrow), right: readDisclosure(`${scope}:tools-visible`, layout === 'professional') }));
-  const [leftOpen, setLeftOpen] = useRememberedBoolean(`studio:${scope}:navigation`, initial.left);
-  const [rightOpen, setRightOpen] = useRememberedBoolean(`studio:${scope}:panel-open`, initial.right);
-  const [focus, setFocus] = useRememberedBoolean(`studio:${scope}:focus`, false);
-  const [storedTool, setStoredTool] = useRememberedString(`studio:${scope}:tool`, 'ai');
+  const [defaults] = useState(() => ({ leftOpen: !narrow, rightOpen: layout === 'professional' }));
+  const initial = readStudioLayout(scope, identity, defaults);
+  const key = (name: string) => studioPreferenceKey(scope, identity, name);
+  const [leftOpen, setLeftOpen] = useRememberedBoolean(key('navigation'), initial.leftOpen);
+  const [rightOpen, setRightOpen] = useRememberedBoolean(key('panel-open'), initial.rightOpen);
+  const [focus, setFocus] = useRememberedBoolean(key('focus'), initial.focus);
+  const [storedTool, setStoredTool] = useRememberedString(key('tool'), initial.tool);
   const tool: StudioTool = STUDIO_TOOLS.includes(storedTool as StudioTool) ? storedTool as StudioTool : 'ai';
+  const { workspaceId, projectId } = identity;
+  const rememberKey = useCallback((legacyKey: string) => studioPreferenceKey(scope, { workspaceId, projectId }, `section:${legacyKey}`), [scope, workspaceId, projectId]);
+  useEffect(() => { migrateStudioPreferences(scope, { workspaceId, projectId }, defaults); }, [scope, workspaceId, projectId, defaults]);
   const openPanel = useCallback((next: StudioTool) => { setStoredTool(next); setRightOpen(true); setFocus(false); }, [setStoredTool, setRightOpen, setFocus]);
   const togglePanel = useCallback((next: StudioTool) => { if (next === tool && rightOpen && !focus) setRightOpen(false); else openPanel(next); }, [tool, rightOpen, focus, openPanel, setRightOpen]);
   useEffect(() => {
@@ -24,5 +30,5 @@ export function useStudioLayout(scope = 'documents') {
     change(); media.addEventListener('change', change);
     return () => media.removeEventListener('change', change);
   }, []);
-  return { tool, leftOpen, rightOpen, focus, narrow, openPanel, togglePanel, closePanel: () => setRightOpen(false), toggleLeft: () => setLeftOpen(value => !value), toggleFocus: () => setFocus(value => !value) };
+  return { tool, leftOpen, rightOpen, focus, narrow, rememberKey, openPanel, togglePanel, closePanel: () => setRightOpen(false), toggleLeft: () => setLeftOpen(value => !value), toggleFocus: () => setFocus(value => !value) };
 }

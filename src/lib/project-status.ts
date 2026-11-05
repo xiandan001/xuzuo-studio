@@ -3,6 +3,10 @@ import type { WorkflowRun } from '../configuration-types';
 import type { Project } from '../types';
 import { explicitTimestamp } from './studio-time';
 
+export function projectVersionLabel(version: number): string {
+  return version > 0 ? `v${version}` : '初版';
+}
+
 export function liveProjectStateSignature(run: WorkflowRun): string {
   return `${run.id}:${run.status}:${run.stepIndex}:${run.attempts.length}`;
 }

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PageProps, Project } from '../types';
 import { ImageStudio } from './ImageStudio';
 const captured = vi.hoisted(() => ({ focus: false }));
-vi.mock('../hooks/useStudioLayout', () => ({ useStudioLayout: () => ({ tool: 'ai', leftOpen: false, rightOpen: false, focus: captured.focus, narrow: false, toggleLeft: vi.fn(), toggleFocus: vi.fn(), openPanel: vi.fn(), togglePanel: vi.fn(), closePanel: vi.fn() }) }));
+vi.mock('../hooks/useStudioLayout', () => ({ useStudioLayout: () => ({ tool: 'ai', leftOpen: false, rightOpen: false, focus: captured.focus, narrow: false, rememberKey: (key: string) => key, toggleLeft: vi.fn(), toggleFocus: vi.fn(), openPanel: vi.fn(), togglePanel: vi.fn(), closePanel: vi.fn() }) }));
 afterEach(() => { vi.unstubAllGlobals(); captured.focus = false; });
 describe('统一图片工作台折叠与专注保留草稿', () => {
   it('左右关闭及专注时仍保留同一份创作输入，固定工具可达，不调用模型或预览', () => {

@@ -2,15 +2,32 @@ import { useEffect, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Project, Workspace } from '../types';
 import type { ProjectFolderSelection } from '../workspace-types';
+import { captureProjectQuoteMoves, recoverProjectQuoteMoves } from '../lib/project-quote-move';
+import type { ProjectQuoteMoveSnapshot } from '../lib/project-quote-move';
 type Options = { workspaces: Workspace[]; projects: Project[]; setWorkspaces: Dispatch<SetStateAction<Workspace[]>>; setProjects: Dispatch<SetStateAction<Project[]>>; notify: (message: string, type?: 'success' | 'info' | 'error') => void };
 const publicError = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '本地工作区操作未完成。';
 export function useWorkspaceFiles(options: Options) {
   const current = useRef(options); current.current = options;
+  const lastRecoveryError = useRef('');
+  const recovery = useRef<{ captured?: ProjectQuoteMoveSnapshot; error?: unknown } | undefined>(undefined);
+  if (!recovery.current) {
+    try { recovery.current = { captured: captureProjectQuoteMoves(localStorage) }; }
+    catch (error) { recovery.current = { error }; }
+  }
   const refresh = async () => {
     const bridge = window.desktop?.workspaceFiles; if (!bridge) return;
     const locations = await bridge.list();
+    let recoveryError = recovery.current?.error;
+    if (recovery.current?.captured) {
+      try { recoverProjectQuoteMoves(localStorage, recovery.current.captured, locations.projects); recovery.current.captured = undefined; }
+      catch (error) { recoveryError = error; }
+    }
     current.current.setWorkspaces(items => items.map(item => { const location = locations.workspaces.find(entry => entry.workspaceId === item.id); return location && location.directory !== item.directory ? { ...item, directory: location.directory } : item; }));
     current.current.setProjects(items => items.map(item => { if (item.purgedAt) return item; const location = locations.projects.find(entry => entry.projectId === item.id); return location && (location.directory !== item.directory || location.workspaceId !== item.workspaceId) ? { ...item, directory: location.directory, workspaceId: location.workspaceId, businessCategoryId: location.workspaceId === item.workspaceId ? item.businessCategoryId : undefined } : item; }));
+    if (recoveryError) {
+      const message = publicError(recoveryError);
+      if (lastRecoveryError.current !== message) { lastRecoveryError.current = message; current.current.notify(message, 'error'); }
+    } else lastRecoveryError.current = '';
     return locations;
   };
   useEffect(() => { void refresh().catch(error => current.current.notify(publicError(error), 'error')); }, []);

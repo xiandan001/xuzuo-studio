@@ -6,9 +6,23 @@ const { checkedDirectory, checkedFile } = require('./workspace-paths.cjs');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const MAX_THUMB_BYTES = 1024 * 1024;
 function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault, maxEntries = 120, maxBytes = 24 * 1024 * 1024 }) {
-  const fs = fileSystem, root = path.resolve(directory), pending = new Map(), memory = new Map();
-  let memoryBytes = 0, queue = Promise.resolve();
+  const fs = fileSystem, root = path.resolve(directory), pending = new Map(), memory = new Map(), loaders = new Set(), waitingLoaders = [];
+  let memoryBytes = 0, queue = Promise.resolve(), activeLoaders = 0, dirty = false, unprunedWrites = 0, lastWrittenKey;
   const serial = action => { const task = queue.then(action); queue = task.catch(() => undefined); return task; };
+  async function loaderSlot(action) {
+    if (activeLoaders === 2) await new Promise(resolve => waitingLoaders.push(resolve)); else activeLoaders++;
+    try { return await action(); }
+    finally { const next = waitingLoaders.shift(); if (next) next(); else activeLoaders--; }
+  }
+  async function cleanup(keep, force = false) {
+    if (!dirty && !force) return;
+    try { await fs.lstat(root); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; dirty = false; unprunedWrites = 0; return; }
+    await prune(keep); dirty = false; unprunedWrites = 0;
+  }
+  async function cleanupIfIdle() {
+    if (!pending.size && !loaders.size && dirty) await serial(() => cleanup(lastWrittenKey));
+  }
   function retain(key, result, bytes) {
     if (memory.has(key)) { memoryBytes -= memory.get(key).bytes; memory.delete(key); }
     if (bytes <= MAX_THUMB_BYTES) { memory.set(key, { result, bytes }); memoryBytes += bytes; }
@@ -36,15 +50,32 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     try { await fs.writeFile(temporary, bytes, { flag: 'wx' }); await fs.rename(temporary, filename); }
     finally { await fs.unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   }
+  async function directoryIdentity() {
+    await checkedDirectory(fs, root); const stat = await fs.lstat(root);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('缩略图缓存目录已变化，未执行清理。');
+    return `${stat.dev}:${stat.ino}`;
+  }
+  async function cachedLeaf(filename) {
+    const stat = await fs.lstat(filename);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 100 * 1024 * 1024) throw new Error('缩略图缓存包含链接或无效文件，未执行清理。');
+    return stat;
+  }
+  async function cacheEntries() {
+    const identity = await directoryIdentity(), names = (await fs.readdir(root)).filter(name => /^[a-f0-9]{64}\.png$/.test(name));
+    const entries = new Array(names.length); let next = 0;
+    const tasks = await Promise.allSettled(Array.from({ length: Math.min(8, names.length) }, async () => {
+      while (next < names.length) {
+        const index = next++, name = names[index], filename = path.join(root, name), stat = await cachedLeaf(filename); let metadataBytes = 0;
+        try { metadataBytes = (await cachedLeaf(filename.slice(0, -4) + '.json')).size; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        entries[index] = { name, filename, bytes: stat.size + metadataBytes, at: stat.mtimeMs };
+      }
+    }));
+    const failed = tasks.find(task => task.status === 'rejected'); if (failed) throw failed.reason;
+    if (identity !== await directoryIdentity()) throw new Error('缩略图缓存目录已变化，未执行清理。');
+    return entries;
+  }
   async function prune(keep) {
-    const entries = [];
-    for (const name of await fs.readdir(root)) {
-      if (!/^[a-f0-9]{64}\.png$/.test(name)) continue;
-      const filename = path.join(root, name); await checkedFile(fs, filename);
-      const stat = await fs.lstat(filename), meta = filename.slice(0, -4) + '.json'; let metadataBytes = 0;
-      try { metadataBytes = (await checkedFile(fs, meta)).size; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      entries.push({ name, filename, bytes: stat.size + metadataBytes, at: stat.mtimeMs });
-    }
+    const entries = await cacheEntries();
     entries.sort((a, b) => a.at - b.at); let bytes = entries.reduce((total, entry) => total + entry.bytes, 0), count = entries.length;
     for (const entry of entries) {
       if (count <= maxEntries && bytes <= maxBytes) break;
@@ -66,19 +97,32 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     if (buffer.length > MAX_THUMB_BYTES) throw new Error('缩略图超过允许大小，原文件未修改。');
     const pixels = thumbnail.toBitmap(); let transparency = 'unknown'; for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] < 255) { transparency = 'present'; break; }
     const meta = { version: 1, key, width, height, originalWidth: size.width, originalHeight: size.height, transparency, sha256: hash(buffer) };
-    await checkedDirectory(fs, root, true); await atomic(path.join(root, key + '.png'), buffer); await atomic(path.join(root, key + '.json'), Buffer.from(JSON.stringify(meta) + '\n'));
-    await prune(key);
+    if (unprunedWrites >= 7) await cleanup(lastWrittenKey);
+    // Count attempts so a failed metadata commit cannot allow an eighth extra PNG.
+    await checkedDirectory(fs, root, true); dirty = true; unprunedWrites++;
+    await atomic(path.join(root, key + '.png'), buffer); await atomic(path.join(root, key + '.json'), Buffer.from(JSON.stringify(meta) + '\n')); lastWrittenKey = key;
+    if (unprunedWrites >= 7 || pending.size <= 1 && loaders.size <= 1) await cleanup(key);
     const result = { mimeType: 'image/png', dataUrl: 'data:image/png;base64,' + buffer.toString('base64'), width, height, originalWidth: size.width, originalHeight: size.height, transparency, thumbnail: true };
     return retain(key, result, result.dataUrl.length * 2 + 256);
   }
+  function get(source) {
+    if (!source || source.artifact?.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.artifact.mimeType) || typeof source.key !== 'string' || typeof source.read !== 'function') return Promise.reject(new Error('请选择可预览的受管图片。'));
+    const key = hash(source.key); if (pending.has(key)) return pending.get(key);
+    const task = serial(() => generate(source, key)).then(result => ({ ...result, artifact: source.artifact })).finally(async () => { pending.delete(key); await cleanupIfIdle(); }); pending.set(key, task); return task;
+  }
   return {
-    get(source) {
-      if (!source || source.artifact?.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.artifact.mimeType) || typeof source.key !== 'string' || typeof source.read !== 'function') return Promise.reject(new Error('请选择可预览的受管图片。'));
-      const key = hash(source.key); if (pending.has(key)) return pending.get(key);
-      const task = serial(() => generate(source, key)).then(result => ({ ...result, artifact: source.artifact })).finally(() => pending.delete(key)); pending.set(key, task); return task;
+    get,
+    getFrom(loadSource) {
+      if (typeof loadSource !== 'function') return Promise.reject(new Error('缩略图来源读取无效。'));
+      let task;
+      task = loaderSlot(async () => get(await loadSource())).finally(async () => { loaders.delete(task); await cleanupIfIdle(); });
+      loaders.add(task); return task;
     },
     clear() { memory.clear(); memoryBytes = 0; },
-    drain: () => queue,
+    async drain() {
+      while (pending.size || loaders.size) await Promise.allSettled([...pending.values(), ...loaders]);
+      await serial(() => cleanup(undefined, true));
+    },
   };
 }
 module.exports = { createImageThumbnails };

@@ -7,6 +7,7 @@ async function buildSpreadsheetWorkbook(input, loadModule = require) {
   workbook.creator = '序作工作台'; workbook.title = document.title; workbook.calcProperties.fullCalcOnLoad = true;
   for (const source of document.sheets) {
     const sheet = workbook.addWorksheet(source.name);
+    let lastPrintedRow = 0, lastPrintedColumn = 0;
     sheet.views = source.view?.header === false ? [{ state: 'normal' }] : [{ state: 'frozen', ySplit: 1 }];
     for (let column = 1; column <= source.columnCount; column++) {
       const label = sheet.getColumn(column).letter, pixels = source.columnWidths?.[label];
@@ -23,9 +24,18 @@ async function buildSpreadsheetWorkbook(input, loadModule = require) {
           if (result.status !== 'calculated') target.note = `${result.message || '本地尚未计算完成'}。未写入结果缓存，请在 Excel/WPS 中重算核对。`;
         }
       } else target.value = value.value;
+      if (target.value !== null && target.value !== undefined && target.value !== '') {
+        lastPrintedRow = Math.max(lastPrintedRow, target.row);
+        lastPrintedColumn = Math.max(lastPrintedColumn, target.col);
+      }
       target.font = { name: 'Microsoft YaHei', size: 11, bold: value.bold || false };
       target.alignment = { vertical: 'middle', horizontal: value.align || (typeof value.value === 'number' || value.formula ? 'right' : 'left'), wrapText: true };
       target.numFmt = FORMATS[value.format || 'general'];
+    }
+    if (lastPrintedRow && lastPrintedColumn) {
+      const width = sheet.columns.slice(0, lastPrintedColumn).reduce((sum, column) => sum + (column.width || 18), 0);
+      // Very wide tables need A3 to avoid shrinking the default 11-point text below readable business sizes.
+      sheet.pageSetup = { ...sheet.pageSetup, paperSize: width > 160 ? 8 : 9, orientation: width > 85 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printArea: `A1:${sheet.getColumn(lastPrintedColumn).letter}${lastPrintedRow}`, ...(source.view?.header !== false ? { printTitlesRow: '1:1' } : {}) };
     }
     if (source.view?.filter?.text.trim()) {
       const column = sheet.getColumn(source.view.filter.column).letter, query = source.view.filter.text.trim().toLocaleLowerCase();

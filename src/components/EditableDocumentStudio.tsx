@@ -25,7 +25,7 @@ import { VersionTimeline } from './VersionTimeline';
 import { documentStudioFormKey, readDocumentStudioForm } from '../lib/document-studio-state';
 import { workflowPublicError } from '../lib/studio-run';
 import { latestStudioBinding, readStudioCredentialPreference, saveStudioCredentialPreference, studioCredentialChoice, studioProjectCredential, studioProjectModel } from '../lib/studio-project-bindings';
-import { DOCUMENT_IMAGE_LIMIT, documentImageModels, validDocumentImageCount } from '../lib/document-illustrations';
+import { DOCUMENT_IMAGE_LIMIT, DOCUMENT_REFERENCE_IMAGE_LIMIT, documentImageModels, validDocumentImageCount } from '../lib/document-illustrations';
 import type { DocumentImageMode } from '../lib/document-illustrations';
 import { replaceDocumentImage, selectedDocumentImage } from '../lib/document-image-edit';
 import type { DocumentImageTarget } from '../lib/document-image-edit';
@@ -60,9 +60,10 @@ const OfficeFilePreview = lazy(() => import('./OfficeFilePreview').then(module =
 
 function selectedContentId(document: EditorDocument) { return document.kind === 'word' ? document.blocks[0]?.id || '' : document.slides[0]?.id || ''; }
 interface DocumentHistorySnapshot { document: EditorDocument; sourceArtifactIds: string[]; selectedId: string; }
+interface IllustrationPickerContext { projectId: string; workspaceId: string; epoch: number; }
 export function EditableDocumentStudio(props: PageProps) {
   const project = props.activeProject;
-  const layout = useStudioLayout('documents');
+  const layout = useStudioLayout('documents', { workspaceId: project.workspaceId, projectId: project.id });
   const [initialForm] = useState(() => readDocumentStudioForm(localStorage.getItem(documentStudioFormKey(project.id)), project.description));
   const [formProjectId, setFormProjectId] = useState(project.id);
   const kind: EditorKind = project.kind === 'word' ? 'word' : 'ppt';
@@ -85,6 +86,8 @@ export function EditableDocumentStudio(props: PageProps) {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [materialPicker, setMaterialPicker] = useState<{ projectId: string; workspaceId: string; selectedId: string; epoch: number; imageId?: string; replace?: DocumentImageTarget }>();
+  const [illustrationPicker, setIllustrationPicker] = useState<IllustrationPickerContext>();
+  const illustrationRequest = useRef<IllustrationPickerContext | undefined>(undefined);
   const [recoveryNotice, setRecoveryNotice] = useState('');
   const workbench = useRef<HTMLDivElement>(null);
   const [brief, setBrief] = useState(initialForm.brief);
@@ -140,6 +143,8 @@ export function EditableDocumentStudio(props: PageProps) {
   const pictureCredential = studioProjectCredential(pictureCredentials, pictureModel, imageCredentialId, inheritedPicture);
   const availableImages = images.filter(image => image.projectId === project.id && !image.trashedAt && !image.unavailable && !props.workflowRunner.trashedArtifacts?.some(item => item.id === image.id) && ['image/png', 'image/jpeg', 'image/webp'].includes(image.mimeType));
   const chosenImages = imageIds.filter(id => availableImages.some(image => image.id === id));
+  const illustrationState = useRef({ projectId: project.id, workspaceId: props.workspaceId, selectedIds: chosenImages, blocked: !ready || !!busy || !!loadingSource });
+  illustrationState.current = { projectId: project.id, workspaceId: props.workspaceId, selectedIds: chosenImages, blocked: !ready || !!busy || !!loadingSource };
   const illustrationIssue = imageMode === 'generate' ? !validDocumentImageCount(imageCount) ? `配图数量请填写 1–${DOCUMENT_IMAGE_LIMIT} 的整数。` : !pictureModel ? '请选择图片生成模型。' : !pictureCredential ? '请为配图模型选择启用的 Key。' : '' : imageMode === 'references' && !chosenImages.length ? '请选择至少一张项目图片。' : '';
   const selectedPicture = selectedDocumentImage(document, selectedId);
   const { previews, previewErrors, rememberPreview, retryPreviews } = useDocumentImagePreviews({ scope: props.workspaceId + '/' + project.id, document, selectedId, selectedImageId: selectedPicture?.imageId, allowedIds: availableImages.map(image => image.id), enabled: ready, root: workbench, read: id => (props.workflowRunner.thumbnailArtifact || props.workflowRunner.previewArtifact)(id) });
@@ -179,6 +184,7 @@ export function EditableDocumentStudio(props: PageProps) {
 
   useEffect(() => {
     const projectId = project.id; let disposed = false; loadEpoch.current++; sourceRequest.current++; manualEdits.current = 0; autoSourceAttempt.current = '';
+    illustrationRequest.current = undefined; setIllustrationPicker(undefined);
     setReady(false); setError(''); setRecoveryNotice(''); setBusy('load'); setDirty(false); setRecord(null); setLocalExport(undefined); setImages([]); setHistory([]); setShowImageTools(false); setConflictDraft(undefined); setAssetRecoveryResolved(false); setSelectedRecovery('0'); setLoadingSource('');
     edits.reset(); scopedEdits.reset(); setRecoveryVersion(undefined);
     const fallback = emptyEditorDocument(kind, project.name); setDocument(fallback); setSelectedId(selectedContentId(fallback)); setSourceArtifactIds([]);
@@ -204,7 +210,7 @@ export function EditableDocumentStudio(props: PageProps) {
       }
       finally { if (!disposed) setBusy(''); }
     })();
-    return () => { disposed = true; loadEpoch.current++; };
+    return () => { disposed = true; loadEpoch.current++; illustrationRequest.current = undefined; };
   // Persisted source loads on project changes; the separate generated-source effect protects manual edits.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, kind, bridge, props.workspace.directory, reload]);
@@ -270,6 +276,24 @@ export function EditableDocumentStudio(props: PageProps) {
     void props.workflowRunner.listProjectArtifacts(project.id).then(files => { if (!disposed) setImages(previous => [...new Map([...previous, ...files.filter(file => file.kind === 'image' && !file.trashedAt)].map(file => [file.id, file])).values()]); }).catch(() => { /* Existing known images remain selectable when the inventory is unavailable. */ });
     return () => { disposed = true; };
   }, [project.id, project.referenceFiles]);
+  function closeIllustrationPicker() { illustrationRequest.current = undefined; setIllustrationPicker(undefined); }
+  function openIllustrationLibrary() {
+    const active = illustrationState.current;
+    if (active.blocked || active.selectedIds.length >= DOCUMENT_REFERENCE_IMAGE_LIMIT) return;
+    const context = { projectId: project.id, workspaceId: props.workspaceId, epoch: loadEpoch.current };
+    illustrationRequest.current = context; setIllustrationPicker(context);
+  }
+  function useIllustrationMaterial(file: ArtifactMetadata) {
+    const context = illustrationRequest.current, active = illustrationState.current;
+    if (!context || context !== illustrationPicker || context.epoch !== loadEpoch.current || context.projectId !== active.projectId || context.workspaceId !== active.workspaceId || active.blocked) throw new Error('工作区或文稿已变化，未改变配图选择；素材副本仍保留。');
+    assertAssetImage(context.projectId, file, true);
+    const selectedIds = [...new Set([...active.selectedIds, file.id])];
+    if (selectedIds.length > DOCUMENT_REFERENCE_IMAGE_LIMIT) throw new Error(`已选 ${DOCUMENT_REFERENCE_IMAGE_LIMIT} 张配图，请先取消部分选择；素材副本仍保留。`);
+    illustrationState.current = { ...active, selectedIds };
+    setImages(items => [...new Map([...items, file].map(item => [item.id, item])).values()]);
+    setImageIds(selectedIds); setImageMode('references');
+    props.notify('已选为本次文档配图，当前正文与草稿保留；点击生成后使用，未调用模型。');
+  }
   function openMaterialPicker(replace?: DocumentImageTarget) {
     if (!ready || busy || loadingSource) return;
     const selected = current.current.document.kind === 'ppt' ? current.current.document.slides.find(item => item.id === selectedId) : undefined;
@@ -342,8 +366,7 @@ export function EditableDocumentStudio(props: PageProps) {
         if (current.current.projectId === projectId && loadEpoch.current === operationEpoch) setDirty(false);
         return true;
       }
-      const reusable = exportFile && snapshot.record && !snapshot.dirty && currentExport.length ? { record: snapshot.record, artifacts: currentExport } : undefined;
-      const result = reusable || (exportFile ? await bridge.export(input) : { record: await bridge.save(input), artifacts: [] });
+      const result = exportFile ? await bridge.export(input) : { record: await bridge.save(input), artifacts: [] };
       if (current.current.projectId !== projectId || loadEpoch.current !== operationEpoch) return false;
       current.current = { ...current.current, record: result.record, dirty: false };
       setRecord(result.record); setDirty(false);
@@ -355,8 +378,8 @@ export function EditableDocumentStudio(props: PageProps) {
       if (saveCopy && exportFile && result.artifacts[0]) {
         const copied = await runnerRef.current.saveArtifact(result.artifacts[0].id);
         if (current.current.projectId !== projectId || loadEpoch.current !== operationEpoch) return false;
-        props.notify(copied.saved ? '当前 Office 文件已导出，项目内原文件和费用记录保留。' : '当前文件已保存在项目内，已取消另存。');
-      } else props.notify(exportFile ? '当前内容已保存并生成真实 Office 文件，未调用模型。' : `已保存编辑版本 v${result.record.revision}，未调用模型。`);
+        props.notify(copied.saved ? '已生成新的本地导出版本，原文件保留，未调用模型。' : '已生成新的本地导出版本，原文件保留，未调用模型；已取消另存。');
+      } else props.notify(exportFile ? '已生成新的本地导出版本，原文件保留，未调用模型。' : `已保存编辑版本 v${result.record.revision}，未调用模型。`);
       if (exportFile) layout.openPanel('delivery');
       return true;
     } catch (cause) {
@@ -462,7 +485,7 @@ export function EditableDocumentStudio(props: PageProps) {
   const textCredentialControl = <label>调用 Key<Select className="simple-inline-field" aria-label="文档调用Key" value={selectedCredential || ''} onValueChange={chooseTextCredential} options={textCredentials.map(key => ({ value: key.id, label: key.name }))} placeholder="选择 Key" />{textKeyIssue && <small role="status">{textKeyIssue}</small>}</label>;
   const refinementScopeControls = <><label>精修范围<Select aria-label="文档精修范围" value={refineScope} onValueChange={setRefineScope} options={[{ value: 'current', label: kind === 'ppt' ? '当前页面' : '当前段落或表格' }, ...(document.kind === 'word' && selectedCellId ? [{ value: 'cell', label: '当前表格单元格' }] : []), { value: 'all', label: '全文文字（保留版式）' }]} /></label></>;
   const scopedRefinement = <LocalRefinement props={props} targets={documentRefinementTargets(document, refineScope === 'all' ? undefined : selectedId, refineScope === 'cell' ? selectedCellId : undefined)} instruction={instruction} model={selectedModel} preferredCredentialId={selectedCredential} compact disabled={!ready || !!busy || !!generationTask || !!textKeyIssue} beforeRun={beforeRun} onApply={changes => { change(applyDocumentRefinement(current.current.document, changes)); props.notify('已应用局部修改，可撤销；保存并导出后再交付。'); }} />;
-  const illustrationControls = <DocumentIllustrationOptions mode={imageMode} onMode={setImageMode} images={availableImages} selectedIds={chosenImages} onSelect={setImageIds} modelId={pictureModel?.id || ''} models={pictureModels} onModel={setImageModelId} credentialId={pictureCredential || ''} credentials={pictureCredentials} onCredential={setImageCredentialId} count={imageCount} onCount={setImageCount} issue={illustrationIssue} />;
+  const illustrationControls = <DocumentIllustrationOptions mode={imageMode} onMode={setImageMode} images={availableImages} selectedIds={chosenImages} onSelect={setImageIds} modelId={pictureModel?.id || ''} models={pictureModels} onModel={setImageModelId} credentialId={pictureCredential || ''} credentials={pictureCredentials} onCredential={setImageCredentialId} count={imageCount} onCount={setImageCount} issue={illustrationIssue} onOpenLibrary={openIllustrationLibrary} disabled={!ready || !!busy || !!loadingSource} />;
   const pictureTools = selectedPicture && <DocumentImageTools key={project.id} onPickAsset={() => openMaterialPicker(selectedPicture)} props={props} target={selectedPicture} images={availableImages} preview={previews[selectedPicture.imageId]} disabled={!ready || !!busy} beforeRun={beforeRun} onReplace={replacePicture} onImport={() => { void importImage(selectedPicture); }} />;
 
   function openTool(tool: StudioTool) {
@@ -484,9 +507,9 @@ export function EditableDocumentStudio(props: PageProps) {
     <textarea id={'document-ai-input-' + project.id} aria-label={refining ? '文档修改指令' : '文档创作需求'} value={refining ? instruction : brief} rows={4} onChange={event => refining ? setInstruction(event.target.value) : setBrief(event.target.value)} placeholder="说明用途、受众、已确认事实和需要保留的内容" />
     {refining && refinementScopeControls}
     <div className="studio-ai-model-row"><span>模型</span><Select aria-label="文档实际模型" value={selectedModel?.id || ''} onValueChange={chooseTextModel} options={[{ value: '', label: '请选择文本模型' }, ...models.map(model => ({ value: model.id, label: model.name, description: model.modelId }))]} /></div>
-    <AiSettingsSection rememberKey="documents:account" title="调用账户" summary={textCredentials.find(key => key.id === selectedCredential)?.name || '未选择账户'} defaultOpen={!!textKeyIssue}>{textCredentialControl}<button type="button" className="btn btn-ghost" onClick={() => props.navigate('models')}>管理模型与账户</button></AiSettingsSection>
-    {!refining && <AiSettingsSection rememberKey="documents:illustrations" title="文档配图" summary={imageMode === 'none' ? '纯文字' : imageMode === 'references' ? chosenImages.length + '张项目图片' : (validDocumentImageCount(imageCount) ? imageCount : '待填写') + '张AI配图'} defaultOpen={!!illustrationIssue}>{illustrationControls}</AiSettingsSection>}
-    <AiSettingsSection rememberKey="documents:more-tools" title="更多工具"><button type="button" className="btn btn-ghost" disabled={!(refining ? instruction : brief).trim()} onClick={savePrompt}><Save size={14} />保存模板</button><RememberedDetails rememberKey="documents:custom-actions"><summary>自定义创作功能</summary><StudioActions props={props} studio="documents" projectId={project.id} outputKind={kind} onBeforeRun={beforeRun} input={editorPlainText(document)} /></RememberedDetails></AiSettingsSection>
+    <AiSettingsSection rememberKey={layout.rememberKey('documents:account')} title="调用账户" summary={textCredentials.find(key => key.id === selectedCredential)?.name || '未选择账户'} defaultOpen={!!textKeyIssue}>{textCredentialControl}<button type="button" className="btn btn-ghost" onClick={() => props.navigate('models')}>管理模型与账户</button></AiSettingsSection>
+    {!refining && <AiSettingsSection rememberKey={layout.rememberKey('documents:illustrations')} title="文档配图" summary={imageMode === 'none' ? '纯文字' : imageMode === 'references' ? chosenImages.length + '张项目图片' : (validDocumentImageCount(imageCount) ? imageCount : '待填写') + '张AI配图'} defaultOpen={!!illustrationIssue}>{illustrationControls}</AiSettingsSection>}
+    <AiSettingsSection rememberKey={layout.rememberKey('documents:more-tools')} title="更多工具"><button type="button" className="btn btn-ghost" disabled={!(refining ? instruction : brief).trim()} onClick={savePrompt}><Save size={14} />保存模板</button><RememberedDetails rememberKey={layout.rememberKey('documents:custom-actions')}><summary>自定义创作功能</summary><StudioActions props={props} studio="documents" projectId={project.id} outputKind={kind} onBeforeRun={beforeRun} input={editorPlainText(document)} /></RememberedDetails></AiSettingsSection>
   </CompactAiPanel>;
   const versions = <VersionTimeline key={project.id} projectId={project.id} document={document} savedRevision={record?.revision} dirty={dirty} busy={!!busy} versions={history} exportNames={currentExport.map(file => file.name)} requestedRevision={comparisonRevision} onRequestConsumed={() => setComparisonRevision(undefined)} loadVersion={revision => bridge ? bridge.loadVersion({ projectId: project.id, revision }) : Promise.reject(new Error('请在桌面应用中读取已保存版本。'))} onRestore={applyVersion} />;
   const assets = <><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={!ready || !!busy} onClick={() => { void importImage(selectedPicture); }}><ImagePlus size={15} />从本地导入图片</button></div><Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker embedded props={props} title={selectedPicture ? '替换当前插图' : '插入文档素材'} description={selectedPicture ? '替换所选图片，正文和其他图片保留，可撤销。' : kind === 'word' ? '插入当前段落之后，原文字保留，可撤销。' : '放入当前页；已有插图时新增图片页，原页保留。'} confirmLabel={selectedPicture ? '替换所选图片' : '插入当前位置'} onClose={layout.closePanel} onChoose={useMaterial} /></Suspense></>;
@@ -504,6 +527,7 @@ export function EditableDocumentStudio(props: PageProps) {
             <main className="ed-main">{!ready ? <div className="ed-loading">{error ? <FileText size={28} /> : <LoaderCircle className="spin" size={28} />}<p>{error ? '请保留原文件并检查工作区路径，当前未创建空白文件覆盖它。' : '正在读取项目编辑源…'}</p></div> : document.kind === 'word' ? <WordEditor showToolbar={false} showAddControls={false} document={document} onChange={changeTypedDocument} selectedId={selectedId} onSelect={id => { scopedEdits.chooseContent(id); setSelectedId(id); setSelectedCellId(''); }} onSelectTableCell={(id, cellId) => { scopedEdits.chooseContent(id); setSelectedId(id); setSelectedCellId(cellId); }} images={images} previews={previews} onEditImage={id => { scopedEdits.chooseContent(id, true); setSelectedId(id); setShowImageTools(true); layout.openPanel('format'); }} onImportImage={() => { void importImage(); }} disabled={!!busy} /> : <PresentationEditor showNavigation={false} showToolbar={false} showImageControls={false} document={document} onChange={changeTypedDocument} selectedId={selectedId} onSelect={id => { scopedEdits.chooseContent(id); setSelectedId(id); }} images={images} previews={previews} onEditImage={id => { scopedEdits.chooseContent(id, true); setSelectedId(id); setShowImageTools(true); layout.openPanel('format'); }} onImportImage={() => { void importImage(); }} disabled={!!busy} />}</main>
     </StudioWorkbench>
     {promptPicker && <PromptPicker prompts={props.prompts} category={kind} onClose={() => setPromptPicker(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPicker(false); }} />}{promptDraft && <PromptEditor categories={props.configuration.categories} initial={promptDraft} onClose={() => setPromptDraft(null)} onSave={(draft, id) => { props.onSavePrompt(draft, id); setPromptDraft(null); }} />}
+    {illustrationPicker && illustrationPicker.projectId === project.id && illustrationPicker.workspaceId === props.workspaceId && <Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker props={props} title="选择文档配图" description="选中素材将复制到当前项目，并用于下一次生成配图；当前正文和未保存编辑保持不变。" confirmLabel="用作本次文档配图" onClose={closeIllustrationPicker} onChoose={useIllustrationMaterial} /></Suspense>}
     {officePreview && officePreview.projectId === project.id && <Suspense fallback={<p role="status">正在打开实际文件预览…</p>}><OfficeFilePreview artifact={officePreview} onClose={() => setOfficePreview(undefined)} onOpenSource={() => { void props.workflowRunner.openArtifact(officePreview.id); }} /></Suspense>}
   </div>;
 }

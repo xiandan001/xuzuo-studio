@@ -6,7 +6,7 @@ export default defineConfig(({ command }) => ({
     name: 'desktop-production-csp',
     transformIndexHtml: command === 'build' ? () => [{
       tag: 'meta',
-      attrs: { 'http-equiv': 'Content-Security-Policy', content: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; frame-src about:; base-uri 'none'; form-action 'none'" },
+      attrs: { 'http-equiv': 'Content-Security-Policy', content: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; frame-src about:; base-uri 'none'; form-action 'none'" },
       injectTo: 'head',
     }] : undefined,
   }],

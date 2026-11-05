@@ -1,4 +1,5 @@
 import { moveProjectWithDraft } from './lib/project-move';
+import { withProjectQuoteMove } from './lib/project-quote-move';
 import { ModalPortal } from './components/ModalPortal';
 import { hasManagedDialog } from './lib/dialog-stack';
 import { flushSync } from 'react-dom';
@@ -33,6 +34,7 @@ import { ProjectCreationRecovery } from './components/ProjectCreationRecovery';
 import { WorkspaceCreateDialog } from './components/WorkspaceCreateDialog';
 import { recoverProjectDraft } from './lib/project-recovery';
 import { liveProjectStateSignature } from './lib/project-status';
+import { initializeNewStudioProject } from './lib/studio-layout-state';
 import { isProductionRun } from './lib/workflow-purpose';
 import type { DeliveryReceipt, DeliverySelection } from './delivery-types';
 import type { RecoveryProjectFields } from './lib/project-recovery';
@@ -368,12 +370,12 @@ export default function App() {
     if (!project || !workspaces.some(item => item.id === destination && !item.removedAt) || destination === sourceWorkspaceId) return false;
     if (jobs.current.has(id) || workflowRunnerRef.current?.runs.some(run => run.projectId === id && activeRun(run))) { notify('请先完成或取消项目的运行任务，再移动工作区。', 'info'); return false; }
     try {
-      const moved = await moveProjectWithDraft({ project, destination, changes, move: workspaceFiles.move, commit: (location, draft) => {
+      const moved = await moveProjectWithDraft({ project, destination, changes, move: (draft, target) => withProjectQuoteMove({ storage: localStorage, projectId: draft.id, sourceWorkspaceId: draft.workspaceId, destinationWorkspaceId: target, name: draft.name, move: () => workspaceFiles.move(draft, target), locate: async () => (await window.desktop?.workspaceFiles?.list())?.projects.find(item => item.projectId === draft.id) }), commit: (location, draft) => {
         setProjects(items => moveProjectWorkspace(items, id, destination).map(item => item.id === id ? { ...item, ...draft, directory: location.directory, updatedAt: new Date().toISOString() } : item));
         if (draft.name) setLedger(items => items.map(item => item.projectId === id ? { ...item, projectName: draft.name! } : item));
       } });
       if (!moved) return false;
-    } catch (error) { notify(error instanceof Error ? error.message : '项目目录移动未完成，原文件已保留。', 'error'); return false; }
+    } catch (error) { await workspaceFiles.refresh().catch(() => undefined); notify(error instanceof Error ? error.message : '项目目录移动未完成，原文件已保留。', 'error'); return false; }
     if (workspaceIdRef.current !== sourceWorkspaceId) { notify('项目目录与资料已移动到目标工作区。'); return true; }
     if (activeId === id) rememberProject(projectsRef.current.find(item => item.workspaceId === sourceWorkspaceId && item.id !== id && !item.trashedAt)?.id || '', sourceWorkspaceId);
     setPromptToApply(undefined);
@@ -680,6 +682,7 @@ export default function App() {
       const location = await workspaceFiles.createProject(draft.selection, project.name);
       if (location.projectId !== project.id || location.workspaceId !== project.workspaceId) throw new Error('项目目录登记与当前选择不一致，未添加项目；请重新选择文件夹。');
       project.directory = location.directory;
+      initializeNewStudioProject(project);
       if (!projectsRef.current.some(item => item.id === project.id)) projectsRef.current = [project, ...projectsRef.current];
       setProjects(items => items.some(item => item.id === project.id) ? items : [project, ...items]);
       if (workspaceIdRef.current !== project.workspaceId || completion && projectCreationCompletion.current !== completion) { notify('项目已在原工作区创建，文件目录已保留。'); return; }

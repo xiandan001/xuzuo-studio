@@ -4,13 +4,18 @@ const values = new Map<string, DisclosureValue>();
 const listeners = new Map<string, Set<() => void>>();
 const notify = (key: string) => { for (const listener of [...(listeners.get(key) || [])]) listener(); };
 
-export function readDisclosure<T extends DisclosureValue>(key: string, fallback: T): T {
-  if (values.has(key)) { const value = values.get(key); return typeof value === typeof fallback ? value as T : fallback; }
+export function readStoredDisclosure(key: string): DisclosureValue | undefined {
+  if (values.has(key)) return values.get(key);
   try {
     const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(prefix + key);
-    if (raw) { const stored = JSON.parse(raw); if (stored?.version === 1 && typeof stored.value === typeof fallback) return stored.value; }
+    if (raw) { const stored = JSON.parse(raw); if (stored?.version === 1 && (typeof stored.value === 'boolean' || typeof stored.value === 'string')) return stored.value; }
   } catch { /* A display preference must not interrupt editing. */ }
-  return fallback;
+  return undefined;
+}
+
+export function readDisclosure<T extends DisclosureValue>(key: string, fallback: T): T {
+  const value = readStoredDisclosure(key);
+  return typeof value === typeof fallback ? value as T : fallback;
 }
 
 export function writeDisclosure(key: string, value: DisclosureValue): void {

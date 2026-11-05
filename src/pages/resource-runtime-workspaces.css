@@ -18,6 +18,11 @@
 .next-interface .asset-category-sidebar .asset-category-create{font-size:13px;padding:10px 11px;color:var(--ui-fg-secondary);border:0}
 .next-interface .asset-category-sidebar .asset-category-note,.next-interface .asset-category-empty{padding:5px 11px;font-size:11px;line-height:1.9;color:var(--ui-fg-muted)}
 .next-interface .asset-library-content{min-width:0;gap:20px}
+.next-interface .asset-library-page .page-heading{margin-bottom:20px}
+.next-interface .asset-library-page .op-project-toolbar{margin:0}
+.next-interface .asset-library-page .asset-library-content{gap:16px}
+.asset-library-result-actions{display:flex;align-items:center;justify-content:flex-end;gap:18px;flex-wrap:wrap}
+.asset-library-result-actions>button{color:var(--ui-accent)}
 .next-interface .asset-library-source-tabs{gap:26px;margin:0;padding:0;border-bottom:1px solid var(--ui-border)}
 .next-interface .asset-library-source-tabs>button{padding:12px 0 14px;font-size:14px}
 .next-interface .asset-library-source-tabs>button>span{font-size:10px;padding:1px 5px;color:var(--ui-fg-muted);background:var(--ui-surface-subtle)}

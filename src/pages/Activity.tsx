@@ -6,6 +6,7 @@ import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock
 import { TaskScopeFilter } from '../components/TaskScopeFilter';
 import { Select } from '../components/Select';
 import { scopedTaskRuns } from '../lib/task-visibility';
+import { isLocalExportRun } from '../lib/workflow-purpose';
 import type { TaskScope } from '../lib/task-visibility';
 import { filterTaskRuns, taskGroup, taskNextAction, taskStatusLabel } from '../lib/task-center';
 import type { TaskGroup } from '../lib/task-center';
@@ -31,6 +32,7 @@ function TaskRow({ run, props, bulkMode, selected, locked, onSelect }: { run: Wo
   const action = taskNextAction(run);
   const planning = run.purpose === 'automation-plan';
   const steps = run.snapshot.steps.filter(step => step.enabled);
+  const localExport = isLocalExportRun(run);
   const completeCount = steps.filter(step => run.attempts.filter(attempt => attempt.stepId === step.id).at(-1)?.status === 'complete').length;
   const Icon = run.status === 'running' ? LoaderCircle : run.status === 'complete' ? CheckCircle2 : taskGroup(run) === 'attention' ? CircleAlert : Clock3;
   const detailId = `task-detail-${run.id}`;
@@ -38,8 +40,8 @@ function TaskRow({ run, props, bulkMode, selected, locked, onSelect }: { run: Wo
     {bulkMode && <label className="bulk-selection-label bulk-task-check"><input type="checkbox" aria-label={`选择任务 ${run.id}`} checked={!!selected} disabled={locked || !canOrganizeRun(run)} onChange={event => onSelect?.(event.target.checked)} />{canOrganizeRun(run) ? '选择任务' : '运行中或等待处理，暂不能整理'}</label>}
     <div className="activity-task-summary">
       <span className={`activity-task-icon ${run.status}`}><Icon size={21} className={run.status === 'running' ? 'spin' : undefined} /></span>
-      <div className="activity-task-name"><div><strong>{project?.name || '项目已移出当前列表'}</strong><span className={`activity-status ${run.status}`}>{planning && run.status === 'complete' ? '方案已准备好' : taskStatusLabel(run)}</span><span className="activity-mode">{planning ? 'AI方案规划' : run.mode === 'live' ? '真实调用' : '模拟'}</span></div><p>{run.workflowName}</p><small>{planning && run.status === 'complete' ? '这次只整理方案，尚未制作文档或图片。' : run.status === 'running' ? run.pauseRequested ? '当前请求结束后暂停' : `正在处理：${run.snapshot.steps[run.stepIndex]?.name || '整理结果'}` : run.error ? '此任务需要处理，展开可查看原因和继续方式' : `${completeCount} / ${steps.length} 步已完成`}</small></div>
-      <div className="activity-task-cost"><span>{run.mode === 'live' ? '调用花费' : '模拟费用'}</span><CostTotal summary={summarizeCosts(runCostRecords(run, props.ledger))} /><small>{Number.isNaN(Date.parse(run.updatedAt)) ? run.updatedAt : new Date(run.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small></div>
+      <div className="activity-task-name"><div><strong>{project?.name || '项目已移出当前列表'}</strong><span className={`activity-status ${run.status}`}>{planning && run.status === 'complete' ? '方案已准备好' : taskStatusLabel(run)}</span><span className="activity-mode">{planning ? 'AI方案规划' : localExport ? '本地导出' : run.mode === 'live' ? '真实调用' : '模拟'}</span></div><p>{run.workflowName}</p><small>{planning && run.status === 'complete' ? '这次只整理方案，尚未制作文档或图片。' : run.status === 'running' ? run.pauseRequested ? '当前请求结束后暂停' : `正在处理：${run.snapshot.steps[run.stepIndex]?.name || '整理结果'}` : run.error ? '此任务需要处理，展开可查看原因和继续方式' : `${completeCount} / ${steps.length} 步已完成`}</small></div>
+      <div className="activity-task-cost"><span>{localExport ? '未调用模型' : run.mode === 'live' ? '调用花费' : '模拟费用'}</span><CostTotal summary={summarizeCosts(runCostRecords(run, props.ledger))} /><small>{Number.isNaN(Date.parse(run.updatedAt)) ? run.updatedAt : new Date(run.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small></div>
       <div className="activity-task-controls">{!archived && project && action === 'project' ? <button className="btn btn-primary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}>{run.status === 'waiting-review' ? '检查并交付' : '查看成品'}<ArrowRight size={15} /></button> : <button className="btn btn-secondary" aria-expanded={expanded} aria-controls={detailId} onClick={() => setExpanded(value => !value)}>{archived ? '查看与恢复' : planning ? '查看方案与记录' : run.status === 'running' ? '查看进度' : run.status === 'waiting-review' ? '查看检查步骤' : taskGroup(run) === 'attention' ? '处理任务' : '查看结果与步骤'}<ChevronDown size={15} /></button>}
         <button className="activity-detail-toggle" aria-label={`${expanded ? '收起' : '展开'}任务详情 ${run.id}`} aria-expanded={expanded} aria-controls={detailId} onClick={() => setExpanded(value => !value)}>{expanded ? '收起详情' : '步骤与更多操作'}<ChevronDown size={13} className={expanded ? 'is-open' : ''} /></button>
       </div>
