@@ -43,4 +43,45 @@ describe('真实 Word 原生表格交付', () => {
       expect((await store.loadVersion({ projectId: 'project-one', revision: first.revision })).document).toEqual(document);
     } finally { await fs.rm(directory, { recursive: true, force: true }); }
   });
+  it.each(['header', 'borders'] as const)('仅关闭 %s 后导出，再载入旧版恢复原生表格格式与原历史', async flag => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-word-table-format-'));
+    try {
+      const projectDirectory = path.join(directory, 'project-one'); await fs.mkdir(path.join(projectDirectory, '.xuzuo'), { recursive: true });
+      const artifactStore = createArtifactStore({ directory: path.join(directory, 'artifacts'), loadModule: dependencies });
+      const store = createEditorStore({ workspaceStorage: { projectDirectory: async () => projectDirectory }, artifactStore });
+      const block = newWordBlock('table'); block.table!.rows[0].cells[0].text = '事项'; block.table!.rows[1].cells[0].text = '原始交付内容';
+      const document: WordEditorDocument = { schemaVersion: 1, kind: 'word', title: '表格独立格式恢复', blocks: [block] };
+      const original = JSON.stringify(document), first = await store.save({ projectId: 'project-one', expectedRevision: 0, document });
+      const changed = structuredClone(document); changed.blocks[0].table![flag] = false;
+      const edited = await store.export({ projectId: 'project-one', expectedRevision: first.revision, document: changed });
+      const xmlFor = async (artifacts: ArtifactMetadata[]) => {
+        const file = artifacts.find(item => item.name.endsWith('.docx'))!;
+        const zip = await JSZip.loadAsync((await artifactStore.read(file.id)).buffer);
+        return zip.file('word/document.xml').async('string');
+      };
+      const expectTableFormat = (xml: string, header: boolean, borders: boolean) => {
+        const table = xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/)?.[0]; expect(table).toBeDefined();
+        const firstRow = table!.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0]; expect(firstRow).toBeDefined();
+        const headerTag = firstRow!.match(/<w:tblHeader\b[^>]*\/>/)?.[0];
+        expect(!!headerTag && !/\bw:val="(?:false|0|off)"/.test(headerTag)).toBe(header);
+        expect(firstRow!.includes('w:fill="F0F2F7"')).toBe(header);
+        const borderXml = table!.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0]; expect(borderXml).toBeDefined();
+        for (const side of ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']) expect(borderXml).toMatch(new RegExp(`<w:${side}\\b[^>]*w:val="${borders ? 'single' : 'none'}"`));
+        expect(table).toContain('事项'); expect(table).toContain('原始交付内容');
+      };
+      expectTableFormat(await xmlFor(edited.artifacts), changed.blocks[0].table!.header, changed.blocks[0].table!.borders);
+      const old = await store.loadVersion({ projectId: 'project-one', revision: first.revision }); expect(old.document).toEqual(document);
+      const restored = await store.save({ projectId: 'project-one', expectedRevision: edited.record.revision, document: old.document });
+      const exported = await store.export({ projectId: 'project-one', expectedRevision: restored.revision, document: restored.document });
+      expectTableFormat(await xmlFor(exported.artifacts), true, true);
+      expect((await store.loadVersion({ projectId: 'project-one', revision: first.revision })).document).toEqual(document);
+      expect((await store.loadVersion({ projectId: 'project-one', revision: edited.record.revision })).document).toEqual(changed);
+      expect((await createEditorStore({ workspaceStorage: { projectDirectory: async () => projectDirectory }, artifactStore }).load({ projectId: 'project-one', kind: 'word', title: '' }))?.document).toEqual(document);
+      expect(JSON.stringify(document)).toBe(original); expect(exported.record.revision).toBe(4);
+    } finally {
+      const resolved = await fs.realpath(directory);
+      if (path.dirname(resolved) !== await fs.realpath(os.tmpdir()) || path.basename(resolved) !== path.basename(directory) || !path.basename(resolved).startsWith('xuzuo-word-table-format-')) throw Error('Unowned Word table fixture');
+      await fs.rm(resolved, { recursive: true, force: true });
+    }
+  });
 });

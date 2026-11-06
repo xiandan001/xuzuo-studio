@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { compareDocumentVersions } from './version-comparison';
 import { emptyEditorDocument, newWordBlock, newEditorSlide } from './editor-document';
+import type { WordEditorDocument } from '../editor-types';
 import type { SpreadsheetDocument } from '../spreadsheet-types';
 
 describe('版本比较只读展示完整内容与格式差异', () => {
@@ -10,6 +11,22 @@ describe('版本比较只读展示完整内容与格式差异', () => {
     const before = JSON.stringify({ current, previous }), diff = compareDocumentVersions(current, previous);
     expect(diff.total).toBeGreaterThan(2); expect(diff.changes.some(change => change.before === '当前正文' && change.after === '历史正文')).toBe(true); expect(diff.changes.some(change => change.label.includes('格式'))).toBe(true);
     expect(JSON.stringify({ current, previous })).toBe(before);
+  });
+  it.each([
+    { name: '同值', header: true, borders: true, labels: [] },
+    { name: '仅表头', header: false, borders: true, labels: ['第 1 段表格格式·表头'] },
+    { name: '仅边框', header: true, borders: false, labels: ['第 1 段表格格式·边框'] },
+    { name: '表头与边框', header: false, borders: false, labels: ['第 1 段表格格式·表头', '第 1 段表格格式·边框'] },
+  ])('Word表格$name变化只报告实际格式，不伪报文字或修改原稿', ({ header, borders, labels }) => {
+    const current: WordEditorDocument = { schemaVersion: 1, kind: 'word', title: '表格格式', blocks: [{ id: 'table-1', type: 'table', text: '', fontSize: 12, bold: false, italic: false, align: 'left', table: { columns: [{ id: 'col-1' }, { id: 'col-2' }], rows: [{ id: 'row-1', cells: [{ id: 'c11', text: '事项' }, { id: 'c12', text: '数量' }] }, { id: 'row-2', cells: [{ id: 'c21', text: '交付' }, { id: 'c22', text: '1' }] }], header: true, borders: true } }] };
+    const previous = structuredClone(current); previous.blocks[0].table!.header = header; previous.blocks[0].table!.borders = borders;
+    const original = JSON.stringify({ current, previous }), diff = compareDocumentVersions(current, previous);
+    expect(diff.total).toBe(labels.length); expect(diff.changes.map(change => change.label)).toEqual(labels);
+    expect(diff.changes.filter(change => change.label.includes('格式'))).toHaveLength(labels.length);
+    expect(diff.changes.filter(change => change.label.includes('文字'))).toHaveLength(0);
+    if (!header) expect(diff.changes.find(change => change.label.endsWith('表头'))).toMatchObject({ before: '首行为表头', after: '无表头' });
+    if (!borders) expect(diff.changes.find(change => change.label.endsWith('边框'))).toMatchObject({ before: '显示边框', after: '无边框' });
+    expect(JSON.stringify({ current, previous })).toBe(original);
   });
   it('PPT比较备注、插图变化和版式，限制展示条数但统计全部', () => {
     const slide = { ...newEditorSlide('第一页'), body: '当前', notes: '当前备注', imageId: 'one' }, current = { ...emptyEditorDocument('ppt', '演示'), kind: 'ppt' as const, theme: 'paper' as const, slides: [slide] };

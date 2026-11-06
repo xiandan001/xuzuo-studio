@@ -23,6 +23,10 @@ export function compareDocumentVersions(current: ComparableDocument, previous: C
       add(`第 ${index + 1} 段文字`, block.table ? block.table.rows.map(row => row.cells.map(cell => cell.text).join(' | ')).join('\n') : block.text, match.block.table ? match.block.table.rows.map(row => row.cells.map(cell => cell.text).join(' | ')).join('\n') : match.block.text);
       if (block.imageId !== match.block.imageId) add(`第 ${index + 1} 段插图`, block.imageId ? '当前插图' : '无插图', match.block.imageId ? '该版本插图' : '无插图');
       add(`第 ${index + 1} 段格式`, `${blockType(block.type)} · ${block.fontSize} 磅 · ${align(block.align)}${block.bold ? ' · 加粗' : ''}${block.italic ? ' · 斜体' : ''}`, `${blockType(match.block.type)} · ${match.block.fontSize} 磅 · ${align(match.block.align)}${match.block.bold ? ' · 加粗' : ''}${match.block.italic ? ' · 斜体' : ''}`);
+      if (block.table && match.block.table) {
+        add(`第 ${index + 1} 段表格格式·表头`, block.table.header ? '首行为表头' : '无表头', match.block.table.header ? '首行为表头' : '无表头');
+        add(`第 ${index + 1} 段表格格式·边框`, block.table.borders ? '显示边框' : '无边框', match.block.table.borders ? '显示边框' : '无边框');
+      }
       if (index !== match.index) add('段落位置', `第 ${index + 1} 段`, `第 ${match.index + 1} 段`);
     }
     for (const { block, index } of old.values()) add(`该版本第 ${index + 1} 段`, '当前没有该段落', block.text || (block.type === 'image' ? '插图' : '表格/空段落'));
