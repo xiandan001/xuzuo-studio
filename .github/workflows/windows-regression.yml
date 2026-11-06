@@ -1,0 +1,50 @@
+name: Windows regression
+
+on:
+  push:
+    branches: [codex/studio-performance-ci]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      TZ: Asia/Shanghai
+      NODE_PATH: ${{ github.workspace }}/node_modules
+    steps:
+      - name: Keep source line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+      - name: Check backend dependencies
+        run: node scripts/verify-runtime-dependencies.mjs
+      - name: Verify generated runtime
+        run: |
+          node scripts/build-spreadsheet-runtime.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --exit-code -- electron
+      - name: Type check
+        run: node node_modules/typescript/bin/tsc -b --pretty false
+      - name: Build renderer
+        run: node node_modules/vite/bin/vite.js build
+      - name: Run source tests with one worker
+        run: node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs --maxWorkers=1 --reporter=json --outputFile="$env:RUNNER_TEMP/xuzuo-vitest.json"
+      - name: Verify complete results
+        if: always()
+        run: node scripts/verify-ci-result.mjs "$env:RUNNER_TEMP/xuzuo-vitest.json"

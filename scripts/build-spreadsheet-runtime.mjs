@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-const ts = require(path.join(root, 'work/ui-build/node_modules/typescript'));
+const localTypeScript = path.join(root, 'work/ui-build/node_modules/typescript');
+const ts = require(fs.existsSync(localTypeScript) ? localTypeScript : 'typescript');
 const modules = ['spreadsheet-engine', 'spreadsheet-generated-formatting', 'spreadsheet-generated', 'word-table', 'editor-generated', 'delivery-quality', 'spreadsheet-delivery'];
 for (const name of modules) {
   const filename = path.join(root, `src/lib/${name}.ts`);

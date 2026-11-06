@@ -21,7 +21,7 @@ describe('thumbnail cache pruning preserves path protection with bounded leaf wo
   it('a full120-entry cache stays within budget without repeated ancestor walks for every entry', async () => {
     const f = await fixture(); let lstat = 0, active = 0, peak = 0;
     const fileSystem = { ...fs, lstat: async (...args) => { lstat++; active++; peak = Math.max(peak, active); try { return await fs.lstat(...args); } finally { active--; } } };
-    await createImageThumbnails({ directory: f.directory, nativeImage: adapter, fileSystem }).get(source('new'));
+    const cache = createImageThumbnails({ directory: f.directory, nativeImage: adapter, fileSystem }); await cache.get(source('new')); expect((await cache.drain()).budgetVerified).toBe(true);
     expect((await fs.readdir(f.directory)).filter(name => name.endsWith('.png'))).toHaveLength(120);
     expect(await fs.readFile(path.join(f.directory, 'user-notes.txt'), 'utf8')).toBe('preserve');
     expect(lstat).toBeLessThan(600); expect(peak).toBeLessThanOrEqual(8);
@@ -29,8 +29,8 @@ describe('thumbnail cache pruning preserves path protection with bounded leaf wo
   it('leaf links stop cleanup and preserve their outside targets', async () => {
     const f = await fixture(0), outside = path.join(f.root, 'outside'); await fs.mkdir(outside); await fs.writeFile(path.join(outside, 'keep.txt'), 'outside');
     const link = path.join(f.directory, hash('linked') + '.png'); await fs.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
-    await expect(createImageThumbnails({ directory: f.directory, nativeImage: adapter }).get(source('new'))).rejects.toThrow();
-    expect(await fs.readFile(path.join(outside, 'keep.txt'), 'utf8')).toBe('outside'); await fs.unlink(link);
+    const cache = createImageThumbnails({ directory: f.directory, nativeImage: adapter }); await cache.get(source('new')); const status = await cache.drain(); expect(status.cacheFailures).toBeGreaterThan(0); expect(status.errors.some(error => /链接|无效/.test(error.message))).toBe(true); expect(status.budgetVerified).toBe(false);
+    expect(await fs.readFile(path.join(outside, 'keep.txt'), 'utf8')).toBe('outside'); await fs.unlink(link); await cache.drain();
   });
   it('a directory replaced during the scan cannot delete any files through the new path', async () => {
     const f = await fixture(2), outside = path.join(f.root, 'outside'); await fs.mkdir(outside); let moved = false;
@@ -43,8 +43,8 @@ describe('thumbnail cache pruning preserves path protection with bounded leaf wo
       }
       return names;
     } };
-    await expect(createImageThumbnails({ directory: f.directory, nativeImage: adapter, fileSystem, maxEntries: 1 }).get(source('new'))).rejects.toThrow();
+    const cache = createImageThumbnails({ directory: f.directory, nativeImage: adapter, fileSystem, maxEntries: 1 }); await cache.get(source('new')); const status = await cache.drain(); expect(status.cacheFailures).toBeGreaterThan(0); expect(status.budgetVerified).toBe(false);
     expect((await fs.readdir(outside)).filter(name => name.endsWith('.png'))).toHaveLength(3);
-    expect(await fs.readFile(path.join(outside, 'user-notes.txt'), 'utf8')).toBe('preserve'); await fs.unlink(f.directory);
+    expect(await fs.readFile(path.join(outside, 'user-notes.txt'), 'utf8')).toBe('preserve'); await fs.unlink(f.directory); await cache.drain();
   });
 });

@@ -19,16 +19,18 @@ describe('受管缩略图保持比例、隔离缓存且保留原始完整性检�
     const root = await fixture(), adapter = imageAdapter(), first = source('one', true), cache = createImageThumbnails({ directory: path.join(root, 'cache'), nativeImage: adapter });
     const result = await Promise.all([cache.get(first), cache.get(first)]); expect(first.read).toHaveBeenCalledTimes(1);
     expect(result[0]).toMatchObject({ width: 320, height: 160, originalWidth: 1200, originalHeight: 600, transparency: 'present', thumbnail: true });
+    await cache.drain();
     const restarted = createImageThumbnails({ directory: path.join(root, 'cache'), nativeImage: imageAdapter() }), same = source('one'); await restarted.get(same); expect(same.read).not.toHaveBeenCalled();
-    const opaque = await restarted.get(source('two')); expect(opaque.transparency).toBe('unknown');
+    const opaque = await restarted.get(source('two')); expect(opaque.transparency).toBe('unknown'); await restarted.drain();
   });
   it('条数预算只清理可识别缓存文件，不碰原图和其他文件；缓存损坏可重建', async () => {
     const root = await fixture(), directory = path.join(root, 'cache'); await fs.mkdir(directory); const sentinel = path.join(directory, 'user-notes.txt'); await fs.writeFile(sentinel, 'preserve');
     const cache = createImageThumbnails({ directory, nativeImage: imageAdapter(), maxEntries: 2, maxBytes: 1024 });
     for (const id of ['a', 'b', 'c']) await cache.get(source(id));
+    await cache.drain();
     expect((await fs.readdir(directory)).filter(name => name.endsWith('.png'))).toHaveLength(2); expect(await fs.readFile(sentinel, 'utf8')).toBe('preserve');
     const key = createHash('sha256').update('c').digest('hex'); await fs.writeFile(path.join(directory, key + '.json'), '{bad');
-    const next = source('c'), restarted = createImageThumbnails({ directory, nativeImage: imageAdapter() }); await restarted.get(next); expect(next.read).toHaveBeenCalledTimes(1);
+    const next = source('c'), restarted = createImageThumbnails({ directory, nativeImage: imageAdapter() }); await restarted.get(next); expect(next.read).toHaveBeenCalledTimes(1); await restarted.drain();
   });
   it('缓存不能绕过外部删改、大小/Hash不符和回收状态', async () => {
     const root = await fixture(), store = createArtifactStore({ directory: path.join(root, 'artifacts') }), cache = createImageThumbnails({ directory: path.join(root, 'cache'), nativeImage: imageAdapter() });
@@ -37,6 +39,7 @@ describe('受管缩略图保持比例、隔离缓存且保留原始完整性检�
     const original = await fs.readFile(file.path); await fs.writeFile(file.path, Buffer.alloc(original.length, 120));
     await expect(cache.get(await store.thumbnailSource(file.id))).rejects.toThrow('内容已在应用外改变');
     await fs.writeFile(file.path, original); await store.trash(file.id); await expect(store.thumbnailSource(file.id)).rejects.toThrow('回收站');
+    await cache.drain();
   });
   it('缓存目录链接被拒绝，外部目标不写入', async () => {
     const root = await fixture(), outside = path.join(root, 'outside'), directory = path.join(root, 'cache'); await fs.mkdir(outside);

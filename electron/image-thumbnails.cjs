@@ -6,9 +6,17 @@ const { checkedDirectory, checkedFile } = require('./workspace-paths.cjs');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const MAX_THUMB_BYTES = 1024 * 1024;
 function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault, maxEntries = 120, maxBytes = 24 * 1024 * 1024 }) {
-  const fs = fileSystem, root = path.resolve(directory), pending = new Map(), memory = new Map(), loaders = new Set(), waitingLoaders = [];
-  let memoryBytes = 0, queue = Promise.resolve(), activeLoaders = 0, dirty = false, unprunedWrites = 0, lastWrittenKey;
+  const fs = fileSystem, root = path.resolve(directory), pending = new Map(), memory = new Map(), loaders = new Set(), waitingLoaders = [], writes = new Map(), waitingWriters = [], cacheErrors = [];
+  let memoryBytes = 0, queue = Promise.resolve(), writerQueue = Promise.resolve(), draining, writerSlots = 0, activeLoaders = 0, dirty = false, cleanupScheduled = false, failureCount = 0, lastBudget, unprunedWrites = 0, lastWrittenKey;
   const serial = action => { const task = queue.then(action); queue = task.catch(() => undefined); return task; };
+  function cacheFailure(error, operation, key) {
+    failureCount++; cacheErrors.push({ operation, ...(key ? { key } : {}), message: String(error?.message || error).slice(0, 500), ...(typeof error?.code === 'string' ? { code: error.code.slice(0, 64) } : {}) });
+    if (cacheErrors.length > 8) cacheErrors.shift();
+  }
+  async function writerSlot() {
+    if (writerSlots === 8) await new Promise(resolve => waitingWriters.push(resolve)); else writerSlots++;
+  }
+  function releaseWriter() { const next = waitingWriters.shift(); if (next) next(); else writerSlots--; }
   async function loaderSlot(action) {
     if (activeLoaders === 2) await new Promise(resolve => waitingLoaders.push(resolve)); else activeLoaders++;
     try { return await action(); }
@@ -16,12 +24,15 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
   }
   async function cleanup(keep, force = false) {
     if (!dirty && !force) return;
+    lastBudget = undefined;
     try { await fs.lstat(root); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; dirty = false; unprunedWrites = 0; return; }
-    await prune(keep); dirty = false; unprunedWrites = 0;
+    catch (error) { if (error.code !== 'ENOENT') throw error; dirty = false; unprunedWrites = 0; lastBudget = { entries: 0, bytes: 0 }; return; }
+    lastBudget = await prune(keep); dirty = false; unprunedWrites = 0;
   }
-  async function cleanupIfIdle() {
-    if (!pending.size && !loaders.size && dirty) await serial(() => cleanup(lastWrittenKey));
+  function cleanupIfIdle() {
+    if (pending.size || loaders.size || writes.size || !dirty || cleanupScheduled || draining) return;
+    cleanupScheduled = true;
+    writerQueue = writerQueue.then(() => cleanup(lastWrittenKey)).catch(error => cacheFailure(error, 'cleanup')).finally(() => { cleanupScheduled = false; });
   }
   function retain(key, result, bytes) {
     if (memory.has(key)) { memoryBytes -= memory.get(key).bytes; memory.delete(key); }
@@ -29,8 +40,12 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     while (memory.size > 32 || memoryBytes > 4 * 1024 * 1024) { const first = memory.keys().next().value; memoryBytes -= memory.get(first).bytes; memory.delete(first); }
     return result;
   }
+  function memoryPreview(key) {
+    if (!memory.has(key)) return;
+    const value = memory.get(key); memory.delete(key); memory.set(key, value); return value.result;
+  }
   async function cached(key) {
-    if (memory.has(key)) { const value = memory.get(key); memory.delete(key); memory.set(key, value); return value.result; }
+    const reused = memoryPreview(key); if (reused) return reused;
     const metaPath = path.join(root, key + '.json'), imagePath = path.join(root, key + '.png');
     try {
       await fs.lstat(root);
@@ -45,10 +60,21 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     } catch (error) { if (error.code !== 'ENOENT' && error.name !== 'SyntaxError') throw error; }
   }
   async function atomic(filename, bytes) {
+    const identity = await directoryIdentity();
     try { await fs.lstat(filename); await checkedFile(fs, filename); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const temporary = filename + '.' + randomUUID() + '.tmp';
-    try { await fs.writeFile(temporary, bytes, { flag: 'wx' }); await fs.rename(temporary, filename); }
-    finally { await fs.unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+    let attempted = false, collision = false, renamed = false;
+    try {
+      if (identity !== await directoryIdentity()) throw new Error('缩略图缓存目录已变化，未提交缓存。');
+      attempted = true;
+      try { await fs.writeFile(temporary, bytes, { flag: 'wx' }); }
+      catch (error) { collision = error.code === 'EEXIST'; throw error; }
+      if (identity !== await directoryIdentity()) throw new Error('缩略图缓存目录已变化，未提交缓存。');
+      await fs.rename(temporary, filename); renamed = true;
+    } finally {
+      // A replaced directory may point outside this cache. Never clean through it.
+      if (attempted && !collision && !renamed && identity === await directoryIdentity().catch(() => undefined)) await fs.unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
   }
   async function directoryIdentity() {
     await checkedDirectory(fs, root); const stat = await fs.lstat(root);
@@ -84,44 +110,74 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
       try { await checkedFile(fs, meta); await fs.unlink(meta); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       await fs.unlink(entry.filename); count--; bytes -= entry.bytes;
     }
+    return { entries: count, bytes };
   }
-  async function generate(source, key) {
-    const reused = await cached(key); if (reused) return reused;
-    const file = await source.read();
-    if (!file?.buffer || file.buffer.length > 32 * 1024 * 1024) throw new Error('此图片超过缩略图处理范围，请打开原文件查看。');
-    const image = nativeImage.createFromBuffer(file.buffer); if (image.isEmpty()) throw new Error('图片无法解码，原文件与记录未改动。');
-    const size = image.getSize(), ratio = Math.min(1, 320 / size.width, 320 / size.height);
-    if (!size.width || !size.height || size.width * size.height > 67_108_864) throw new Error('图片像素过大，请打开原文件查看。');
-    const width = Math.max(1, Math.round(size.width * ratio)), height = Math.max(1, Math.round(size.height * ratio));
-    const thumbnail = image.resize({ width, height, quality: 'good' }), buffer = thumbnail.toPNG();
-    if (buffer.length > MAX_THUMB_BYTES) throw new Error('缩略图超过允许大小，原文件未修改。');
-    const pixels = thumbnail.toBitmap(); let transparency = 'unknown'; for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] < 255) { transparency = 'present'; break; }
-    const meta = { version: 1, key, width, height, originalWidth: size.width, originalHeight: size.height, transparency, sha256: hash(buffer) };
+  function preview(buffer, meta) {
+    return { mimeType: 'image/png', dataUrl: 'data:image/png;base64,' + buffer.toString('base64'), width: meta.width, height: meta.height, originalWidth: meta.originalWidth, originalHeight: meta.originalHeight, transparency: meta.transparency, thumbnail: true };
+  }
+  function pendingPreview(key) {
+    const item = writes.get(key); if (!item) return;
+    const result = preview(item.buffer, item.meta); return retain(key, result, result.dataUrl.length * 2 + 256);
+  }
+  async function persistCache(key, buffer, meta) {
     if (unprunedWrites >= 7) await cleanup(lastWrittenKey);
-    // Count attempts so a failed metadata commit cannot allow an eighth extra PNG.
+    // Count attempts even when only the PNG commits, so an eighth cannot leak.
     await checkedDirectory(fs, root, true); dirty = true; unprunedWrites++;
     await atomic(path.join(root, key + '.png'), buffer); await atomic(path.join(root, key + '.json'), Buffer.from(JSON.stringify(meta) + '\n')); lastWrittenKey = key;
-    if (unprunedWrites >= 7 || pending.size <= 1 && loaders.size <= 1) await cleanup(key);
-    const result = { mimeType: 'image/png', dataUrl: 'data:image/png;base64,' + buffer.toString('base64'), width, height, originalWidth: size.width, originalHeight: size.height, transparency, thumbnail: true };
-    return retain(key, result, result.dataUrl.length * 2 + 256);
+    if (unprunedWrites >= 7) await cleanup(key);
+  }
+  function writeCache(key, buffer, meta) {
+    writes.set(key, { buffer, meta });
+    writerQueue = writerQueue.then(() => persistCache(key, buffer, meta)).catch(error => cacheFailure(error, 'write', key)).finally(() => { writes.delete(key); releaseWriter(); cleanupIfIdle(); });
+  }
+  async function generate(source, key) {
+    const waiting = pendingPreview(key); if (waiting) return waiting;
+    const reused = await cached(key); if (reused) return reused;
+    await writerSlot();
+    let transferred = false;
+    try {
+      const file = await source.read();
+      if (!file?.buffer || file.buffer.length > 32 * 1024 * 1024) throw new Error('此图片超过缩略图处理范围，请打开原文件查看。');
+      const image = nativeImage.createFromBuffer(file.buffer); if (image.isEmpty()) throw new Error('图片无法解码，原文件与记录未改动。');
+      const size = image.getSize(), ratio = Math.min(1, 320 / size.width, 320 / size.height);
+      if (!size.width || !size.height || size.width * size.height > 67_108_864) throw new Error('图片像素过大，请打开原文件查看。');
+      const width = Math.max(1, Math.round(size.width * ratio)), height = Math.max(1, Math.round(size.height * ratio));
+      const thumbnail = image.resize({ width, height, quality: 'good' }), buffer = thumbnail.toPNG();
+      if (buffer.length > MAX_THUMB_BYTES) throw new Error('缩略图超过允许大小，原文件未修改。');
+      const pixels = thumbnail.toBitmap(); let transparency = 'unknown'; for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] < 255) { transparency = 'present'; break; }
+      const meta = { version: 1, key, width, height, originalWidth: size.width, originalHeight: size.height, transparency, sha256: hash(buffer) };
+      const result = preview(buffer, meta); writeCache(key, buffer, meta); transferred = true;
+      return retain(key, result, result.dataUrl.length * 2 + 256);
+    } finally { if (!transferred) releaseWriter(); }
   }
   function get(source) {
     if (!source || source.artifact?.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.artifact.mimeType) || typeof source.key !== 'string' || typeof source.read !== 'function') return Promise.reject(new Error('请选择可预览的受管图片。'));
-    const key = hash(source.key); if (pending.has(key)) return pending.get(key);
-    const task = serial(() => generate(source, key)).then(result => ({ ...result, artifact: source.artifact })).finally(async () => { pending.delete(key); await cleanupIfIdle(); }); pending.set(key, task); return task;
+    const key = hash(source.key), ready = memoryPreview(key) || pendingPreview(key); if (ready) return Promise.resolve({ ...ready, artifact: source.artifact });
+    if (pending.has(key)) return pending.get(key);
+    const task = serial(() => generate(source, key)).then(result => ({ ...result, artifact: source.artifact })).finally(() => { pending.delete(key); cleanupIfIdle(); }); pending.set(key, task); return task;
   }
+  const cacheStatus = () => ({ pendingWrites: writes.size, pendingPngBytes: [...writes.values()].reduce((bytes, item) => bytes + item.buffer.length, 0), reservedWrites: writerSlots, memoryEntries: memory.size, memoryBytes, cacheFailures: failureCount, errors: cacheErrors.map(error => ({ ...error })), budget: lastBudget ? { ...lastBudget } : undefined, budgetVerified: !pending.size && !loaders.size && !writes.size && !writerSlots && !cleanupScheduled && !dirty && !!lastBudget && lastBudget.entries <= maxEntries && lastBudget.bytes <= maxBytes });
   return {
     get,
     getFrom(loadSource) {
       if (typeof loadSource !== 'function') return Promise.reject(new Error('缩略图来源读取无效。'));
       let task;
-      task = loaderSlot(async () => get(await loadSource())).finally(async () => { loaders.delete(task); await cleanupIfIdle(); });
+      task = loaderSlot(async () => get(await loadSource())).finally(() => { loaders.delete(task); cleanupIfIdle(); });
       loaders.add(task); return task;
     },
     clear() { memory.clear(); memoryBytes = 0; },
-    async drain() {
-      while (pending.size || loaders.size) await Promise.allSettled([...pending.values(), ...loaders]);
-      await serial(() => cleanup(undefined, true));
+    cacheStatus,
+    drain() {
+      if (draining) return draining;
+      draining = (async () => {
+        do {
+          while (pending.size || loaders.size || writes.size || writerSlots || cleanupScheduled) await Promise.allSettled([...pending.values(), ...loaders, writerQueue]);
+          writerQueue = writerQueue.then(() => cleanup(undefined, true)).catch(error => cacheFailure(error, 'drain-cleanup'));
+          await writerQueue;
+        } while (pending.size || loaders.size || writes.size || writerSlots || cleanupScheduled);
+        return cacheStatus();
+      })().finally(() => { draining = undefined; });
+      return draining;
     },
   };
 }

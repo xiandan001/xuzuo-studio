@@ -66,7 +66,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
   async function submitLocked(id, itemId) {
     let record = records.get(id), item = record.items.find(item => item.id === itemId);
     await admission(item.project);
-    const location = await workspaceStorage.ensureProject({ projectId: item.project.id, workspaceId: item.project.workspaceId, name: item.project.name });
+    const location = { directory: await workspaceStorage.projectDirectory(item.project.id) };
     await admission(item.project);
     const variables = { ...record.request.variables, ...item.variables }, resolution = replaceVariables(record.request.input, variables);
     const request = imageGroupRequest(record, item, { ...record.request, project: { ...item.project, directory: location.directory }, input: resolution.content, variables });
@@ -85,13 +85,17 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
     if (cancelled && active(run.status)) await liveEngine.control({ id: run.id, action: 'cancel' });
   }
   async function pump(id) {
+    let tracked;
     while (!closing) {
       const record = records.get(id); if (!record || record.status === 'cancelled') break;
       const item = record.items.find(item => ['submitting', 'running', 'waiting-review'].includes(item.status)) || (record.status === 'running' ? record.items.find(item => item.status === 'queued') : undefined);
       if (!item) { if (record.status === 'running') await mutate(id, next => { next.status = next.items.some(item => ['failed', 'interrupted'].includes(item.status)) ? 'paused' : 'complete'; }); break; }
       try {
-        if (item.status === 'queued') { await submit(id, item.id); continue; }
-        const run = await linkedRun(item);
+        if (item.status === 'queued') { tracked = undefined; await submit(id, item.id); continue; }
+        if (tracked?.itemId !== item.id || tracked.projectId !== item.project.id) tracked = { itemId: item.id, projectId: item.project.id, runs: [] };
+        const incoming = await liveEngine.snapshot(tracked.revision, { summaryOnly: true, projectIds: [item.project.id] });
+        if (incoming) { tracked.revision = Number.isSafeInteger(incoming.revision) ? incoming.revision : undefined; tracked.runs = incoming.runs; }
+        const run = tracked.runs.find(run => run.id === item.runId) || tracked.runs.find(run => run.projectId === item.project.id && run.createdAt >= (item.attempts.at(-1)?.submittedAt || '9999'));
         if (!run) { await mutate(id, next => { const row = next.items.find(row => row.id === item.id); row.status = 'interrupted'; row.error = '已记录提交标记但尚未确认运行编号，未自动重发；请检查项目任务。'; next.status = 'paused'; }); break; }
         if (run.status === 'waiting-review') {
           const detailed = liveEngine.runDetail ? await liveEngine.runDetail(run.id) : run;

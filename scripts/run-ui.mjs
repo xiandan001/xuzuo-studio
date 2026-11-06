@@ -11,7 +11,7 @@ const commands = {
   build: 'tsc -b && vite build',
   preview: 'vite preview --host 127.0.0.1',
   desktop: 'electron .',
-  test: 'vitest run',
+  test: 'vitest run --maxWorkers=1',
   package: 'npm run build && electron-builder --win dir --publish never && node ../../scripts/build-setup.mjs package',
 };
 if (!(action in commands)) throw new Error(`Unsupported UI command: ${action}`);

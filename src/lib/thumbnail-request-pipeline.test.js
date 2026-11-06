@@ -52,18 +52,21 @@ describe('thumbnail source admission and bounded deferred cleanup', () => {
     };
     const f = await fixture({ fileSystem }); directory = f.directory;
     await Promise.all(Array.from({ length: 24 }, (_, index) => f.cache.get(source('burst-' + index))));
+    await f.cache.drain();
     expect(scans).toBeLessThanOrEqual(5); expect(peakPng).toBeLessThanOrEqual(10); expect(peakMeta).toBeLessThanOrEqual(10);
     const final = await budget(directory); expect(final.pngs).toBeLessThanOrEqual(3); expect(final.bytes).toBeLessThanOrEqual(1024); expect(final.temporary).toBe(0);
     expect(await fs.readFile(path.join(directory, 'user-notes.txt'), 'utf8')).toBe('owned sentinel');
   });
 
-  it('sequential direct get keeps the original immediate entry-budget semantics', async () => {
+  it('sequential direct get with explicit cache drain keeps the original entry-budget semantics', async () => {
     const f = await fixture({ entries: 2, maxEntries: 2 });
-    for (let index = 0; index < 10; index++) { await f.cache.get(source('sequential-' + index)); expect((await budget(f.directory)).pngs).toBeLessThanOrEqual(2); }
+    for (let index = 0; index < 10; index++) { await f.cache.get(source('sequential-' + index)); await f.cache.drain(); expect((await budget(f.directory)).pngs).toBeLessThanOrEqual(2); }
   });
 
   it.each(['loader-error', 'invalid-source', 'read-error'])('last%s settles deferred cleanup even without a successful final image', async kind => {
-    const f = await fixture(), release = deferred();
+    const written = deferred(); let metadataWrites = 0;
+    const fileSystem = { ...fs, rename: async (...args) => { await fs.rename(...args); if (args[1].endsWith('.json') && ++metadataWrites === 3) written.resolve(); } };
+    const f = await fixture({ fileSystem }), release = deferred();
     const good = Array.from({ length: 3 }, (_, index) => f.cache.getFrom(async () => source('good-' + index)));
     const last = f.cache.getFrom(async () => {
       await release.promise;
@@ -71,8 +74,9 @@ describe('thumbnail source admission and bounded deferred cleanup', () => {
       if (kind === 'invalid-source') return { artifact: { kind: 'text' } };
       return { ...source('read-failed'), read: async () => { throw Error('owned read failed'); } };
     }).catch(error => error);
-    await Promise.all(good); expect((await budget(f.directory)).pngs).toBeGreaterThan(3);
+    await Promise.all(good); await written.promise; expect((await budget(f.directory)).pngs).toBeGreaterThan(3);
     release.resolve(); expect(await last).toBeInstanceOf(Error);
+    await f.cache.drain();
     const final = await budget(f.directory); expect(final.pngs).toBeLessThanOrEqual(3); expect(final.temporary).toBe(0);
   });
 
@@ -85,8 +89,8 @@ describe('thumbnail source admission and bounded deferred cleanup', () => {
     } };
     const f = await fixture({ fileSystem }); directory = f.directory;
     const results = await Promise.allSettled(Array.from({ length: 24 }, (_, index) => f.cache.get(source('partial-' + index))));
-    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1); expect(peakPng).toBeLessThanOrEqual(10);
-    await f.cache.drain(); const final = await budget(directory); expect(final.pngs).toBeLessThanOrEqual(3); expect(final.temporary).toBe(0);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(0);
+    const status = await f.cache.drain(); expect(status.cacheFailures).toBe(1); expect(status.errors.some(error => error.key === hash('partial-6'))).toBe(true); expect(peakPng).toBeLessThanOrEqual(10); const final = await budget(directory); expect(final.pngs).toBeLessThanOrEqual(3); expect(final.temporary).toBe(0);
   });
 
   it('drain enforces budget without prior generation and does not create an absent cache directory', async () => {
