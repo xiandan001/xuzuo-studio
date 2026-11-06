@@ -22,6 +22,38 @@ describe('批量导入与独立项目生产', () => {
     const imported = await parseBatchImport({ name: 'rows.xlsx', buffer: await book.xlsx.writeBuffer() }, dependencies); expect(imported.rows[0]).toEqual({ 客户: '甲', 数量: '0', 启用: 'false', 合计: '5' }); expect(imported.warnings).toHaveLength(1);
     sheet.getCell('D2').value = { formula: '2+3' }; await expect(parseBatchImport({ name: 'bad.xlsx', buffer: await book.xlsx.writeBuffer() }, dependencies)).rejects.toThrow('公式没有可用缓存');
   });
+  it('500项公共列表只线性读取万条账本，费用与未知状态有序且下一快照立即更新', async () => {
+    const f = await fixture(), input = request(), time = '2026-11-06T00:00:00.000Z';
+    const items = Array.from({ length: 500 }, (_, index) => ({ id: `item-${index}`, row: index + 1, variables: { 客户: `客户${index}` }, project: { ...input.project, id: `project-${index}`, name: `客户${index}`, updatedAt: time }, status: 'complete', attempts: [], artifacts: [] }));
+    const record = { version: 1, id: 'ledger-index-batch', name: '账本索引验收', workspaceId: input.project.workspaceId, status: 'complete', createdAt: time, updatedAt: time, items, request: input, projectNameTemplate: '{{客户}}' };
+    const directory = path.join(f.directory, 'batches-v1'), filename = path.join(directory, `${record.id}.json`), seed = JSON.stringify(record);
+    await fs.mkdir(directory); await fs.writeFile(filename, seed, { flag: 'wx' });
+    let projectReads = 0, snapshotCalls = 0;
+    const makeLedger = (prefix, cents, unknown) => Array.from({ length: 10000 }, (_, index) => Object.freeze({
+      id: `${prefix}-${index}`, get projectId() { projectReads++; return items[index % items.length].project.id; },
+      costCents: cents, costState: unknown && index === 9999 ? 'unknown' : 'calculated', status: 'complete',
+      ...(index === 0 ? { calculation: Object.freeze({ nativeCurrency: 'USD', nativeAmount: '0.01', ...(unknown ? {} : { cnyAmount: '0.07' }) }) } : {}),
+    }));
+    const initialLedger = Object.freeze(makeLedger('initial', 1, true)), initialInput = JSON.stringify(initialLedger);
+    let ledger = initialLedger;
+    const engine = { snapshot: async () => { snapshotCalls++; return { runs: [], ledger }; } };
+    const batch = createBatchProduction({ ...f, liveEngine: engine }); running.push({ batch, engine: f.engine });
+    await batch.list(); projectReads = 0;
+    const [first] = await batch.list(), firstReads = projectReads;
+    expect(firstReads).toBeGreaterThan(0); expect(firstReads).toBeLessThanOrEqual(20000);
+    const summary = value => value.items.map(item => ({ id: item.id, row: item.row, projectId: item.project.id, status: item.status, costCents: item.costCents, projectCost: item.project.costCents, unknownCost: item.unknownCost, ledgerIds: item.ledger.map(entry => entry.id) }));
+    const expected = (prefix, cents, unknown, reverse = false) => items.map((item, index) => ({ id: item.id, row: item.row, projectId: item.project.id, status: 'complete', costCents: cents * 20, projectCost: cents * 20, unknownCost: unknown && (index === 0 || index === 499), ledgerIds: Array.from({ length: 20 }, (_, ordinal) => `${prefix}-${index + (reverse ? 19 - ordinal : ordinal) * 500}`) }));
+    expect(summary(first)).toEqual(expected('initial', 1, true)); expect(first.items.reduce((total, item) => total + item.costCents, 0)).toBe(10000);
+    expect(JSON.stringify(initialLedger)).toBe(initialInput);
+    const nextLedger = Object.freeze(makeLedger('next', 2, false).reverse()), nextInput = JSON.stringify(nextLedger);
+    ledger = nextLedger; projectReads = 0;
+    const [next] = await batch.list(), nextReads = projectReads;
+    expect(nextReads).toBeGreaterThan(0); expect(nextReads).toBeLessThanOrEqual(20000);
+    expect(summary(next)).toEqual(expected('next', 2, false, true)); expect(next.items.reduce((total, item) => total + item.costCents, 0)).toBe(20000);
+    expect(summary(first)).toEqual(expected('initial', 1, true));
+    expect(JSON.stringify(initialLedger)).toBe(initialInput); expect(JSON.stringify(nextLedger)).toBe(nextInput);
+    expect(await fs.readFile(filename, 'utf8')).toBe(seed); expect(snapshotCalls).toBe(3); expect(f.calls).toHaveLength(0);
+  });
   it('两行保存即有独立注册目录，串行产生真实DOCX，引擎只调用两次且账本各记一次', async () => {
     const f = await setup(), record = await create(f);
     expect(f.calls).toHaveLength(0); expect(new Set(record.items.map(item => item.project.directory)).size).toBe(2); for (const item of record.items) await fs.lstat(item.project.directory);

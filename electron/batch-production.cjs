@@ -46,10 +46,16 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
   async function mutate(id, update) { return serial(async () => { await ready; const before = records.get(id); if (!before) throw new Error('批次不存在。'); const next = structuredClone(before); update(next); next.updatedAt = now(); await write(next); return next; }); }
   async function publicRecord(record, snapshot) {
     const { request: _request, projectNameTemplate: _template, ...result } = structuredClone(record);
+    const ledgerByProject = new Map(), runsById = new Map();
+    for (const entry of snapshot.ledger) {
+      const projectId = entry.projectId, entries = ledgerByProject.get(projectId);
+      if (entries) entries.push(entry); else ledgerByProject.set(projectId, [entry]);
+    }
+    for (const run of snapshot.runs) if (!runsById.has(run.id)) runsById.set(run.id, run);
     for (const item of result.items) {
-      const entries = snapshot.ledger.filter(entry => entry.projectId === item.project.id); item.ledger = entries; item.costCents = entries.reduce((sum, entry) => sum + entry.costCents, 0); item.unknownCost = entries.some(entry => entry.costState === 'unknown' || entry.calculation && entry.calculation.nativeCurrency === 'USD' && entry.calculation.cnyAmount === undefined);
+      const entries = ledgerByProject.get(item.project.id)?.slice() || []; item.ledger = entries; item.costCents = entries.reduce((sum, entry) => sum + entry.costCents, 0); item.unknownCost = entries.some(entry => entry.costState === 'unknown' || entry.calculation && entry.calculation.nativeCurrency === 'USD' && entry.calculation.cnyAmount === undefined);
       item.project.costCents = item.costCents;
-      const run = snapshot.runs.find(run => run.id === item.runId);
+      const run = runsById.get(item.runId);
       if (run) { item.artifacts = run.attempts.flatMap(attempt => attempt.artifacts || []); if (item.status !== 'queued' && item.status !== 'submitting') item.status = run.status === 'paused' ? 'interrupted' : run.status; const outputError = imageGroupOutputError(record, item, run); if (outputError) { item.status = 'failed'; item.error = outputError; } else if (record.kind === 'image-groups' && run.status === 'complete') { const exporter = run.snapshot.steps.filter(step => step.enabled && step.kind === 'export').at(-1); item.artifacts = run.attempts.filter(attempt => attempt.stepId === exporter?.id && attempt.status === 'complete').at(-1)?.artifacts || item.artifacts; } }
     }
     return result;
