@@ -22,7 +22,8 @@ const allowedSkips = new Set([
 ]);
 const required = new Map([
   ['image-group-test-scope.test.js', 8], ['image-group-batch-native.test.js', 10],
-  ['batch-production.test.js', 14], ['batch-poll-scope.test.js', 5],
+  ['batch-production.test.js', 15], ['batch-poll-scope.test.js', 5],
+  ['paid-output-recovery-native.test.js', 1],
   ['batch-submit-directory.test.js', 3], ['engine-empty-attachments-manifest.test.js', 1],
   ['asset-thumbnail-admission.test.js', 7], ['image-thumbnails.test.ts', 4],
   ['production-drain.test.js', 7], ['thumbnail-background-cache.test.js', 12],
