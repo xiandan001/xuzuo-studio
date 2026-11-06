@@ -5,20 +5,23 @@ import type { ArtifactPreview } from '../live-types';
 export function useAssetThumbnail<T extends HTMLElement>(asset: StudioAsset, workspaceId: string) {
   const bridge = typeof window === 'undefined' ? undefined : window.desktop?.assets;
   const thumbnail = bridge?.thumbnail;
-  const available = !asset.archivedAt && !asset.unavailable && (!bridge?.probe || asset.unavailable === false);
+  // Thumbnail IPC checks its own source; the general probe must not delay it.
+  const available = !asset.archivedAt && !asset.unavailable;
   const eligible = available && asset.kind === 'image' && ['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType);
-  const availability = asset.unavailable === undefined ? 'unknown' : asset.unavailable ? 'missing' : 'available';
+  const availability = asset.unavailable ? 'missing' : 'available';
   const key = `${workspaceId}/${asset.id}/${asset.archivedAt || ''}/${availability}/${asset.bytes}`;
   const element = useRef<T>(null), [visibleKey, setVisibleKey] = useState(''), [retryCount, setRetryCount] = useState(0);
   const [value, setValue] = useState<{ key: string; preview?: ArtifactPreview; error?: string; loading?: boolean }>();
   useEffect(() => {
-    if (!eligible || !element.current || !thumbnail) return;
+    if (!eligible || !element.current || !thumbnail) { setVisibleKey(''); return; }
     if (typeof IntersectionObserver === 'undefined') { setVisibleKey(key); return; }
-    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisibleKey(key); observer.disconnect(); } }, { rootMargin: '160px' });
-    observer.observe(element.current); return () => observer.disconnect();
+    let disposed = false;
+    const observer = new IntersectionObserver(entries => { if (!disposed && entries.some(entry => entry.isIntersecting)) { setVisibleKey(key); observer.disconnect(); } }, { rootMargin: '160px' });
+    observer.observe(element.current); return () => { disposed = true; observer.disconnect(); };
   }, [eligible, key, thumbnail]);
   useEffect(() => {
-    if (!eligible || visibleKey !== key || !thumbnail) return;
+    if (!eligible) { setValue(undefined); return; }
+    if (visibleKey !== key || !thumbnail) return;
     let disposed = false; setValue({ key, loading: true });
     void thumbnail({ workspaceId, id: asset.id }).then(preview => {
       if (!preview.dataUrl || !/^data:image\/png;base64,/.test(preview.dataUrl)) throw Error('invalid thumbnail');
