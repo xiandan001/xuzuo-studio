@@ -21,6 +21,7 @@ const { createArtifactStore } = require('../../electron/artifact-store.cjs');
 const { createModelReceipts } = require('../../electron/model-receipts.cjs');
 const { createLiveWorkflowEngine } = require('../../electron/live-workflow-engine.cjs');
 const { createProjectBackup } = require('../../electron/project-backup.cjs');
+const { calculateCost } = require('../../electron/live-cost.cjs');
 const base = path.resolve('work'), roots = [], profiles = [], stamp = '2026-11-07T00:00:00Z';
 const clone = value => structuredClone(value), durable = value => JSON.parse(JSON.stringify(value));
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -79,10 +80,13 @@ async function sourceFixture(directory, counters) {
     const name = item.currency.toLowerCase(), attemptId = `attempt-${name}`, providerRequestId = `synthetic-provider-${name}`;
     const artifact = await source.artifacts.write({ projectId: project.id, runId: 'source-run', name: `synthetic-${name}.txt`, mimeType: 'text/plain', text: `Synthetic historical ${item.currency} result END-${name}` }); artifacts.push(artifact);
     const usage = { inputTokens: 100, outputTokens: 17, totalTokens: 117, providerRequestId };
-    const pricingSnapshot = { unit: 'request', currency: item.currency, input: '0', output: item.amount, ...(item.currency === 'USD' ? { exchangeRate: fx.rate } : {}) };
-    const calculation = { version: 1, ruleId: `synthetic-tariff-${name}`, ruleVersion: 'frozen-1', nativeCurrency: item.currency, nativeAmount: item.amount, cnyAmount: item.cny, ...(item.currency === 'USD' ? { fx: clone(fx) } : {}), components: [{ code: 'request', label: 'Synthetic historical request', quantity: 1, unit: 'request', unitPrice: item.amount, amount: item.amount, currency: item.currency }], basis: 'Synthetic recovery fixture, no account charge', completeness: 'complete' };
-    ledger.push({ id: `fee-${name}`, projectId: project.id, projectName: project.name, workflowRunId: 'source-run', workflowAttemptId: attemptId, workflowStepId: workflow.steps[index].id, action: '初次生成', model: 'Synthetic historical model', billingMode: 'live', status: 'complete', costState: 'calculated', costCents: item.cents, time: stamp, quantity: 1, usage, pricingSnapshot, calculation, ...(item.currency === 'USD' ? { fxSnapshot: clone(fx) } : {}) });
-    attempts.push({ id: attemptId, stepId: workflow.steps[index].id, stepName: workflow.steps[index].name, modelLabel: 'Synthetic historical model', status: 'complete', costState: 'calculated', costCents: item.cents, action: '初次生成', summary: `Synthetic ${item.currency} received`, input: 'Synthetic input', prompt: 'Synthetic prompt', artifacts: [artifact], usage, calculation, startedAt: stamp });
+    const pricingSnapshot = { unit: 'request', currency: item.currency, input: '0', output: item.amount };
+    const priced = calculateCost(pricingSnapshot, usage, { operation: 'text', startedAt: stamp, fx: clone(fx) });
+    expect(priced).toMatchObject({ costState: 'calculated', costCents: item.cents, calculation: { completeness: 'complete', nativeCurrency: item.currency, nativeAmount: item.amount, cnyAmount: item.cny } });
+    if (item.currency === 'USD') expect(priced.calculation.fx).toEqual(fx);
+    const calculation = priced.calculation;
+    ledger.push({ id: `fee-${name}`, projectId: project.id, projectName: project.name, workflowRunId: 'source-run', workflowAttemptId: attemptId, workflowStepId: workflow.steps[index].id, action: '初次生成', model: 'Synthetic historical model', billingMode: 'live', status: 'complete', costState: priced.costState, costCents: priced.costCents, costReason: priced.reason, time: stamp, quantity: 1, usage, pricingSnapshot, calculation, ...(item.currency === 'USD' ? { fxSnapshot: clone(fx) } : {}) });
+    attempts.push({ id: attemptId, stepId: workflow.steps[index].id, stepName: workflow.steps[index].name, modelLabel: 'Synthetic historical model', status: 'complete', costState: priced.costState, costCents: priced.costCents, action: '初次生成', summary: `Synthetic ${item.currency} received`, input: 'Synthetic input', prompt: 'Synthetic prompt', artifacts: [artifact], usage, calculation, startedAt: stamp });
     // Only persist labelled historical fixture data; no provider client or credential vault is constructed.
     await source.receipts.execute({ requestId: attemptId, runId: 'source-run', projectId: project.id, connection: { providerId: 'synthetic', baseUrl: 'https://synthetic.invalid/unused' }, model: { modelId: `synthetic-${name}` }, kind: 'text', prompt: 'Stored synthetic result', input: 'Synthetic input', attachments: [], options: {} }, async () => ({ text: `Synthetic ${item.currency} received`, artifacts: [artifact], usage, providerRequestId }));
   }
