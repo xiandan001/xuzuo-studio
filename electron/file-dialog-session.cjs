@@ -37,22 +37,36 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
   const blocked = blockedPaths.map(absolute);
   const canCreateDirectory = options.allowCreateDirectory === true || options.properties?.includes('createDirectory') === true || mode === 'save';
   const overwrite = new Map(); let approved;
-  let roots = root ? [root] : [], exactPaths = exact ? [exact] : [], protectedPaths = blocked, preparation;
+  let roots = root ? [root] : [], exactPaths = exact ? [exact] : [], protectedPaths = blocked, preparation, refreshing, policyPaths, hasAliases = false;
 
-  function prepare() {
-    if (!preparation) preparation = (async () => {
-      assertActive(); const resolve = createDialogPathResolver(fs);
-      const [canonicalRoot, canonicalExact, canonicalBlocked] = await Promise.all([
-        root ? resolve(root, { requireDirectory: true, assertActive }) : undefined,
-        exact ? resolve(exact, { allowMissing: true, assertActive }) : undefined,
-        Promise.all(blocked.map(item => resolve(item, { allowMissing: true, assertActive }))),
-      ]);
-      assertActive();
-      roots = root ? [...new Set([root, canonicalRoot.path])] : [];
-      exactPaths = exact ? [...new Set([exact, canonicalExact.path])] : [];
-      protectedPaths = [...new Set([...blocked, ...canonicalBlocked.map(item => item.path)])];
-    })().catch(error => { throw error.code ? filesystemError(error) : error; });
-    return preparation;
+  async function readPolicyPaths() {
+    assertActive(); const resolve = createDialogPathResolver(fs);
+    const values = await Promise.all([
+      root ? resolve(root, { requireDirectory: true, assertActive }) : undefined,
+      exact ? resolve(exact, { allowMissing: true, assertActive }) : undefined,
+      ...blocked.map(item => resolve(item, { allowMissing: true, assertActive })),
+    ]);
+    assertActive(); return values.map(item => item?.path);
+  }
+  async function prepare() {
+    try {
+      if (!preparation) {
+        preparation = readPolicyPaths().then(values => {
+          policyPaths = values;
+          roots = root ? [...new Set([root, values[0]])] : [];
+          exactPaths = exact ? [...new Set([exact, values[1]])] : [];
+          protectedPaths = [...new Set([...blocked, ...values.slice(2)])];
+          hasAliases = [root, exact, ...blocked].some((item, index) => item && !samePath(item, values[index]));
+        });
+        return await preparation;
+      }
+      await preparation;
+      if (!hasAliases) return;
+      if (!refreshing) refreshing = readPolicyPaths().then(values => {
+        if (values.some((item, index) => item !== undefined && !samePath(item, policyPaths[index]))) throw new Error('路径对应的位置已变化，请关闭窗口后重新选择。');
+      }).finally(() => { refreshing = undefined; });
+      await refreshing;
+    } catch (error) { throw error.code ? filesystemError(error) : error; }
   }
 
   function isBlocked(target) { const parts = target.split(path.sep).map(part => part.toLowerCase()); return parts.some(part => ['.xuzuo', '.xuzuo-assets', '.xuzuo-workspace-v1.json'].includes(part)) || protectedPaths.some(item => within(item, target)); }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
@@ -122,6 +122,18 @@ describe('custom native dialog broker', () => {
     const window = await f.nextWindow(); await f.invoke(window, 'request');
     await expect(f.invoke(window, 'accept', { paths: [f.workspace] })).rejects.toThrow('项目子目录'); expect(window.destroyed).toBe(false);
     allow = true; await f.invoke(window, 'accept', { paths: [f.workspace] }); expect((await result).filePaths).toEqual([f.workspace]); expect(window.destroyed).toBe(true); f.broker.dispose();
+  });
+  it('does not enter a selection validator after cancellation during data-root canonicalization', async () => {
+    const f = await fixture(), validateSelection = vi.fn();
+    const pending = f.broker.showOpenDialog({ properties: ['openDirectory'], validateSelection }), window = await f.nextWindow();
+    await f.invoke(window, 'request');
+    let entered, release; const started = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    const realpath = fs.realpath, spy = vi.spyOn(fs, 'realpath').mockImplementation(async value => { if (value === f.userData) { entered(); await gate; } return realpath(value); });
+    try {
+      const accept = f.invoke(window, 'accept', { directory: f.workspace }), rejected = expect(accept).rejects.toThrow('已取消');
+      await started; f.broker.cancelPickers(); expect((await pending).canceled).toBe(true); release(); await rejected;
+      expect(validateSelection).not.toHaveBeenCalled(); expect(window.destroyed).toBe(true);
+    } finally { release(); spy.mockRestore(); f.broker.dispose(); }
   });
   it('cancels active file requests before exit while leaving a separate message usable', async () => {
     const f = await fixture(), picker = f.broker.showOpenDialog({ properties: ['openDirectory'] });

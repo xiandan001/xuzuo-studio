@@ -81,4 +81,19 @@ describe('file picker physical path aliases', () => {
     await expect(f.session().seed()).rejects.toThrow('链接');
     expect(await fs.readdir(f.canonical)).toEqual([]);
   });
+  it.each(['scope', 'protected'])('rejects a %s policy whose alias mapping changes after opening', async kind => {
+    const f = await fixture();
+    await fs.writeFile(path.join(f.canonical, 'private.json'), 'original private bytes');
+    await fs.writeFile(path.join(f.outside, 'private.json'), 'other private bytes');
+    const session = kind === 'scope' ? f.session() : f.session({ allowedRoot: undefined }, [path.join(f.alias, 'private.json')]);
+    await session.seed();
+    const redirected = value => { const relative = path.relative(f.alias, value); return !relative || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? path.join(f.outside, relative) : value; };
+    f.fileSystem.lstat = value => fs.lstat(redirected(value));
+    f.fileSystem.realpath = value => fs.realpath(redirected(value));
+    await expect(session.list({ path: f.canonical })).rejects.toThrow('位置已变化');
+    await expect(session.createFolder({ path: f.canonical, name: 'must-not-create' })).rejects.toThrow('位置已变化');
+    expect(await fs.readdir(f.canonical)).toEqual(['private.json']);
+    expect(await fs.readdir(f.outside)).toEqual(['private.json']);
+    expect(f.readFile).not.toHaveBeenCalled();
+  });
 });

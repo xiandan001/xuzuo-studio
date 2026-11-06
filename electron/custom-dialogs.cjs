@@ -137,6 +137,7 @@ function createCustomDialogs({ app, BrowserWindow, ipcMain, getWindow, trustedSe
       if (!Array.isArray(accepted.paths) || !accepted.paths.length) throw new Error('请选择文件或文件夹。');
       if (record.kind === 'open' && record.options.properties.includes('openDirectory')) {
         const userData = await createDialogPathResolver(fs)(app.getPath('userData'), { requireDirectory: true });
+        if (record.finished) throw new Error('此文件选择已取消。');
         if (accepted.paths.some(value => samePath(path.resolve(value), userData.path))) throw new Error('应用数据目录不能用作工作区或项目，请选择独立文件夹。');
       }
       if (record.validateSelection) await record.validateSelection(accepted.paths);
