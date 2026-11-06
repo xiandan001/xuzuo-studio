@@ -13,7 +13,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const oldVersion = '2.1.5', oldSha = '86018caf95d1e5fbcb0818334d40141d959e1b20c4bf0b1f3fa05eef7f18350b', oldBytes = 180565504;
 const children = [], report = { passed: false, checks: [], engineInstallVerified: false, updateCliVerified: false, fullRuntimeFilesVerified: false, postSwitchRollbackVerified: false,
   scope: 'Full real runtime payloads with current production installer engine/CLI in a disposable QA namespace; not literal production-installer invocation, GUI interaction, power-loss recovery or five-area completion',
-  interruptedProcessRecoveryVerified: false, literalProductionInstallerExecuted: false, nativeGuiPointerTested: false, normalUserProfileAccessed: false, productionRegistryTouched: false, originalDeliveryInputsUnchanged: false, providerCallsRequested: 0 };
+  interruptedProcessRecoveryVerified: false, preparingProcessInterruptionVerified: false, preparingRetryVerified: false, coveragePhase: 'install-preparing', powerLossRecoveryVerified: false, afterSwapForcedTerminationVerified: false,
+  literalProductionInstallerExecuted: false, nativeGuiPointerTested: false, normalUserProfileAccessed: false, productionRegistryTouched: false, originalDeliveryInputsUnchanged: false, providerCallsRequested: 0 };
 let fixture, phase = 'guards', current, original, reportFile, ownerProcess, oldApp, bootstrap, installed, totalDeadline;
 function inside(parent, value) { const relative = path.relative(parent, path.resolve(value)); assert(relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative), 'Path escaped its owned root'); return value; }
 async function ordinary(filename, directory = false) {
@@ -141,6 +142,9 @@ async function main() {
   const [old, next] = packages; report.payloadBinding = packages.map(item => ({ version: item.metadata.version, sourceFiles: 74, unchangedFiles: 73, variation: { path: 'resources/xuzuo-maintenance.exe', source: item.manifest.version === oldVersion ? extracted[0].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') : extracted[1].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe'), qa: item.manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') } }));
   installed = path.join(fixture, 'installed', 'application'); inside(fixture, installed);
   const userDirectory = path.join(fixture, 'creative-data'); await fsp.mkdir(userDirectory); const userFile = path.join(userDirectory, 'user-sentinel.json'); await fsp.writeFile(userFile, '{"ownedFixture":true,"preserve":"project-draft-and-fee-sentinel"}\n', { flag: 'wx' }); const userHash = await identity(userFile);
+  const syntheticFeeFile = path.join(userDirectory, 'synthetic-fee-sentinel.json');
+  await fsp.writeFile(syntheticFeeFile, JSON.stringify({ kind: 'synthetic-install-fee-sentinel', realLedger: false, entries: [{ id: 'synthetic-1', costCents: 35 }, { id: 'synthetic-2', costCents: 65 }], totalCostCents: 100 }) + '\n', { flag: 'wx' });
+  const syntheticFeeHash = await identity(syntheticFeeFile);
   phase = 'install-real-old-runtime'; await command(old.driver, ['install-full', installed]); await verifyRuntime(installed, old.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']);
   const oldStatus = await command(old.driver, ['status', installed]); assert.equal(oldStatus.registration.Version, oldVersion); assert.equal(oldStatus.registration.Machine, false); assert(oldStatus.shortcuts.every(file => file.exists));
   report.engineInstallVerified = true;
@@ -154,6 +158,41 @@ async function main() {
   assert.equal(fault.oldRootSwapObserved, true); inside(fixture, fault.retainedStage); await ordinary(fault.retainedStage, true);
   await verifyRuntime(installed, old.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']); assert.deepEqual(await command(old.driver, ['status', installed]), oldStatus); assert.deepEqual(await identity(userFile), userHash);
   report.postSwitchRollbackVerified = true; report.rollbackEvidence = fault;
+  phase = 'install-preparing-process-interruption';
+  const baselineFiles = []; for (const [name, filename] of await walk(installed)) baselineFiles.push({ path: name, ...await identity(filename) });
+  async function verifyInterruptedBaseline(pendingJournal) {
+    const files = await walk(installed); assert.deepEqual([...files.keys()].sort(), baselineFiles.map(file => file.path).sort());
+    for (const file of baselineFiles) assert.deepEqual(await identity(files.get(file.path)), { bytes: file.bytes, sha256: file.sha256 }, file.path);
+    assert.deepEqual(await command(old.driver, ['status', installed]), { ...oldStatus, pendingJournal });
+    assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(syntheticFeeFile), syntheticFeeHash);
+  }
+  const readyFile = inside(fixture, path.join(fixture, `install-preparing-ready-${randomUUID().replaceAll('-', '')}.json`)); await assert.rejects(fsp.lstat(readyFile), { code: 'ENOENT' });
+  const held = launch(next.driver, ['hold-preparing', installed, readyFile], 180000, process.env, 'install-preparing-held');
+  const ready = await waitFor(async () => {
+    assert.equal(held.child.exitCode, null, 'Preparing controller exited before its barrier'); assert.equal(held.child.signalCode, null);
+    try { return await json(readyFile); } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw error; }
+  }, value => value?.passed === true);
+  assert.equal(ready.kind, 'xuzuo-install-preparing-barrier'); assert.equal(ready.coveragePhase, 'install-preparing'); assert.equal(ready.phase, 'preparing'); assert.equal(ready.holdMilliseconds, 90000);
+  assert.equal(ready.pid, held.child.pid); assert.equal(path.resolve(ready.root), installed); assert.equal(path.resolve(ready.executable).toLowerCase(), path.resolve(next.driver).toLowerCase()); assert.equal(ready.oldVersion, oldVersion); assert.match(ready.nonce, /^[a-f0-9]{32}$/);
+  const journalFile = inside(fixture, path.join(fixture, 'setup-state', metadata.installGuid, 'transaction.json'));
+  assert.equal(path.resolve(ready.journalPath), journalFile); assert.equal(path.resolve(ready.stage), path.join(path.dirname(installed), '.xuzuo-stage-' + ready.nonce)); assert.equal(path.resolve(ready.backup), path.join(path.dirname(installed), '.xuzuo-backup-' + ready.nonce));
+  await ordinary(ready.stage, true); await assert.rejects(fsp.lstat(ready.backup), { code: 'ENOENT' });
+  const journalBeforeTermination = await identity(journalFile); assert.equal(journalBeforeTermination.sha256, ready.journalSha256);
+  const heldIdentity = await command(bootstrap, ['process-info', String(held.child.pid), next.driver]);
+  assert.equal(heldIdentity.pid, ready.pid); assert.equal(path.resolve(heldIdentity.executable).toLowerCase(), path.resolve(next.driver).toLowerCase()); assert(Math.abs(heldIdentity.startedAt - ready.startedAt) <= 2);
+  const readyAge = Date.now() - Date.parse(ready.readyAt); assert(readyAge >= 0 && readyAge < 60000, 'Preparing barrier is stale');
+  assert.equal(held.child.exitCode, null); assert.equal(held.child.signalCode, null); assert.equal(held.state.timedOut, false);
+  const termination = await command(bootstrap, ['stop-owned-process', String(held.child.pid), next.driver, String(heldIdentity.startedAt)]); assert.equal(termination.terminationRequested, true, 'Preparing controller had already exited; explicit termination was not proved'); held.state.expectedTerminationRequested = true;
+  const heldExit = await held.done; assert.equal(heldExit.timedOut, false); assert.notEqual(heldExit.code, 0); assert(held.child.exitCode !== null || held.child.signalCode !== null);
+  assert.deepEqual(await identity(journalFile), journalBeforeTermination, 'Terminated process did not retain the exact pending journal');
+  const pendingJournal = await json(journalFile); assert.equal(pendingJournal.phase, 'preparing'); assert.equal(pendingJournal.operation, 'install'); assert.equal(pendingJournal.nonce, ready.nonce);
+  await verifyRuntime(ready.stage, next.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']);
+  assert.equal((await identity(path.join(ready.stage, '.xuzuo-setup-owner.json'))).sha256, ready.stageOwnerSha256); assert.deepEqual(await json(path.join(ready.stage, 'resources/xuzuo-install-manifest.json')), next.manifest);
+  await verifyInterruptedBaseline(true);
+  const recovered = await command(next.driver, ['recover-pending', installed]); assert.equal(recovered.coveragePhase, 'install-preparing'); assert.notEqual(recovered.pid, ready.pid); assert.equal(path.resolve(recovered.root), installed); assert.equal(recovered.version, oldVersion); assert.equal(recovered.pendingJournal, false);
+  for (const filename of [journalFile, ready.stage, ready.backup]) await assert.rejects(fsp.lstat(filename), { code: 'ENOENT' });
+  await verifyInterruptedBaseline(false);
+  report.preparingProcessInterruptionVerified = true; report.preparingInterruption = { coveragePhase: 'install-preparing', ready, process: heldIdentity, termination, recovery: recovered, journalBeforeTermination, oldRootFiles: baselineFiles.length, syntheticFeeSentinel: { realLedger: false, ...syntheticFeeHash, unchanged: true }, powerLossRecoveryVerified: false, afterSwapForcedTerminationVerified: false };
   const oldText = old.manifest.files.find(file => /license/i.test(file.path) && !file.path.includes('/')); assert(oldText);
   const oldModified = inside(installed, path.join(installed, oldText.path)); await ordinary(oldModified); await fsp.appendFile(oldModified, '\nOWNED PRE-UPGRADE MODIFICATION\n'); const oldModifiedHash = await identity(oldModified);
   phase = 'real-old-hidden-process'; const profile = path.join(fixture, 'old-profile'); await fsp.mkdir(profile);
@@ -175,8 +214,8 @@ async function main() {
   const updateExit = await update.done; assert.equal(updateExit.code, 0); assert(!updateExit.timedOut);
   const updateResult = await json(resultFile); assert.equal(updateResult.success, true); assert.equal(updateResult.version, current.version);
   await verifyRuntime(installed, next.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']); const nextStatus = await command(next.driver, ['status', installed]); assert.equal(nextStatus.registration.Version, current.version); assert(nextStatus.shortcuts.every(file => file.exists));
-  assert.deepEqual(await identity(userFile), userHash); assert.equal((await fsp.readdir(profile)).filter(name => /^credentials(?:[-.]|$)/i.test(name)).length, 0);
-  report.updateCliVerified = true; report.fullRuntimeFilesVerified = true; report.oldProcess = processIdentity;
+  assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(syntheticFeeFile), syntheticFeeHash); assert.equal((await fsp.readdir(profile)).filter(name => /^credentials(?:[-.]|$)/i.test(name)).length, 0);
+  report.updateCliVerified = true; report.fullRuntimeFilesVerified = true; report.oldProcess = processIdentity; report.preparingRetryVerified = true;
   const retainedBackups = (await fsp.readdir(path.dirname(installed), { withFileTypes: true })).filter(entry => entry.isDirectory() && entry.name.startsWith('.xuzuo-backup-'));
   assert.equal(retainedBackups.length, 1, 'Expected only the retained modified baseline backup');
   const retainedModified = inside(fixture, path.join(path.dirname(installed), retainedBackups[0].name, oldText.path)); assert.deepEqual(await identity(retainedModified), oldModifiedHash);
@@ -187,10 +226,10 @@ async function main() {
   phase = 'uninstall-preserves-sentinels'; const text = next.manifest.files.find(file => /(?:license|licenses)/i.test(file.path) && !file.path.includes('/') && !/\.exe$/i.test(file.path)); assert(text, 'Expected an actual managed license text for a modified-file sentinel');
   const modified = inside(installed, path.join(installed, ...text.path.split('/'))); await ordinary(modified); await fsp.appendFile(modified, '\nOWNED USER MODIFICATION\n'); const modifiedHash = await identity(modified);
   await command(next.driver, ['uninstall', installed]); const removed = await command(next.driver, ['status', installed]); assert.equal(removed.registration, null); assert.equal(removed.installRegistry.exists, false); assert.equal(removed.uninstallRegistry.exists, false); assert(removed.shortcuts.every(file => !file.exists)); assert.equal(removed.pendingJournal, false);
-  assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(unknown), unknownHash); assert.deepEqual(await identity(modified), modifiedHash);
+  assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(syntheticFeeFile), syntheticFeeHash); assert.deepEqual(await identity(unknown), unknownHash); assert.deepEqual(await identity(modified), modifiedHash);
   for (const file of next.manifest.files) if (file.path !== text.path) await assert.rejects(fsp.lstat(path.join(installed, ...file.path.split('/'))), { code: 'ENOENT' });
   assert.deepEqual([...(await walk(installed)).keys()].sort(), ['owned-customer-note.txt', text.path].sort());
-  report.uninstallQaCleanupVerified = true; report.sentinelsPreserved = true; report.checks = ['full old install', 'corrupt extraction rejected before switch', 'post-old-root-swap rollback', 'real old process wait', 'full current update preserves modified baseline', 'downgrade rejected', 'unknown upgrade rejected', 'uninstall preserves unknown/modified/external files']; report.passed = true;
+  report.uninstallQaCleanupVerified = true; report.sentinelsPreserved = true; report.syntheticFeeSentinelPreserved = true; report.checks = ['full old install', 'corrupt extraction rejected before switch', 'post-old-root-swap rollback', 'install-preparing process termination and fresh-process recovery', 'real old process wait', 'full current update preserves modified baseline', 'downgrade rejected', 'unknown upgrade rejected', 'uninstall preserves unknown/modified/external files']; report.passed = true;
 }
 await main().catch(error => { report.error = { phase, name: error.name, code: error.code, message: String(error.message).slice(0, 1600) }; process.exitCode = 1; }).finally(async () => {
   if (ownerProcess && ownerProcess.child.exitCode === null) ownerProcess.child.stdin.end();

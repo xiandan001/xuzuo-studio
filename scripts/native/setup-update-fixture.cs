@@ -201,6 +201,50 @@ namespace Xuzuo.Setup
             }
             return new { passed = true, processes = found, uninspectable = uninspectable };
         }
+        private static object HoldPreparing(SetupEngine engine, string root, string readyFile)
+        {
+            var metadata = engine.Metadata; root = Owned(metadata, root); readyFile = Owned(metadata, readyFile);
+            Guid token; var name = Path.GetFileName(readyFile); const string prefix = "install-preparing-ready-";
+            Check(Same(Path.GetDirectoryName(readyFile), metadata.validationRoot) && name.StartsWith(prefix, StringComparison.Ordinal) && name.EndsWith(".json", StringComparison.Ordinal) && Guid.TryParse(name.Substring(prefix.Length, name.Length - prefix.Length - 5), out token) && name == prefix + token.ToString("N") + ".json", "Preparing ready path differs.");
+            var journalPath = Owned(metadata, Path.Combine(metadata.validationRoot, "setup-state", metadata.installGuid, "transaction.json"));
+            Check(!File.Exists(readyFile) && !Directory.Exists(readyFile) && !File.Exists(journalPath) && !Directory.Exists(journalPath) && !engine.HasRecoverableOperation(root), "Preparing fixture must start without old evidence or journal.");
+            engine.ValidateRegisteredRoot(root); var before = engine.ReadRegistration();
+            Check(before != null && !before.Machine && Same(before.Root, root), "Preparing fixture needs an owned installed baseline.");
+            var announced = false;
+            engine.Progress = delegate(string stage, string detail, double? percent)
+            {
+                if (stage != "正在完成安装" || percent != 93 || announced) return;
+                var journal = SetupJson.File<SetupJournal>(journalPath);
+                Check(engine.HasRecoverableOperation(root) && journal.operation == "install" && journal.phase == "preparing" && Same(journal.root, root), "Expected the actual install-preparing journal.");
+                var stageRoot = Owned(metadata, journal.stage); var backup = Owned(metadata, journal.backup);
+                Check(Same(stageRoot, Path.Combine(Path.GetDirectoryName(root), ".xuzuo-stage-" + journal.nonce)) && Same(backup, Path.Combine(Path.GetDirectoryName(root), ".xuzuo-backup-" + journal.nonce)) && Directory.Exists(stageRoot) && Directory.Exists(root) && !Directory.Exists(backup) && !File.Exists(backup), "Preparing stage/root/backup differs.");
+                Check(journal.newManifest != null && journal.newManifest.version == metadata.version && journal.newManifest.files.Count == 74 && journal.oldManifest != null && journal.oldManifest.version == before.Version, "Preparing manifests differ.");
+                var ownerPath = Owned(metadata, Path.Combine(stageRoot, ".xuzuo-setup-owner.json")); var owner = SetupJson.File<Dictionary<string, object>>(ownerPath);
+                Check(Convert.ToInt32(owner["format"]) == 1 && Convert.ToString(owner["appId"]) == metadata.appId && Convert.ToString(owner["installGuid"]) == metadata.installGuid && Convert.ToString(owner["nonce"]) == journal.nonce, "Preparing stage owner differs.");
+                engine.ValidateRegisteredRoot(root); Check(engine.ReadRegistration().Version == before.Version && !File.Exists(Path.Combine(root, ".xuzuo-setup-operation.json")), "Old root was already switched or changed.");
+                using (var process = Process.GetCurrentProcess())
+                {
+                    SetupJson.Write(readyFile, new { passed = true, kind = "xuzuo-install-preparing-barrier", coveragePhase = "install-preparing", phase = journal.phase, pid = process.Id, executable = process.MainModule.FileName, startedAt = (process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds, readyAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), holdMilliseconds = 90000, root = root, stage = stageRoot, backup = backup, nonce = journal.nonce, journalPath = journalPath, journalSha256 = Sha(journalPath), stageOwnerSha256 = Sha(ownerPath), oldVersion = before.Version });
+                }
+                announced = true;
+                using (var hold = new ManualResetEvent(false)) hold.WaitOne(90000);
+                throw new TimeoutException("Preparing barrier was not explicitly terminated within ninety seconds.");
+            };
+            try { engine.Install(root, true); }
+            finally { engine.Progress = null; }
+            throw new InvalidDataException("Preparing barrier was not reached; no interruption was verified.");
+        }
+        private static object RecoverPreparing(SetupEngine engine, string root)
+        {
+            var metadata = engine.Metadata; root = Owned(metadata, root);
+            var journalPath = Owned(metadata, Path.Combine(metadata.validationRoot, "setup-state", metadata.installGuid, "transaction.json"));
+            var journal = SetupJson.File<SetupJournal>(journalPath);
+            Check(journal.operation == "install" && journal.phase == "preparing" && Same(journal.root, root) && engine.HasRecoverableOperation(root), "Expected a recoverable install-preparing operation.");
+            var stage = Owned(metadata, journal.stage); var backup = Owned(metadata, journal.backup);
+            engine.RecoverPending(); engine.ValidateRegisteredRoot(root);
+            Check(!File.Exists(journalPath) && !Directory.Exists(stage) && !File.Exists(stage) && !Directory.Exists(backup) && !File.Exists(backup), "Preparing recovery left journal/stage/backup paths.");
+            using (var process = Process.GetCurrentProcess()) return new { passed = true, coveragePhase = "install-preparing", pid = process.Id, root = root, version = engine.ReadRegistration().Version, pendingJournal = false };
+        }
         private static object ProbePath(string value)
         {
             var points = new List<string>();
@@ -308,6 +352,8 @@ namespace Xuzuo.Setup
                 else if (args.Length == 2 && args[0] == "status") result = Status(engine, args[1]);
                 else if (args.Length == 2 && args[0] == "owned-processes") result = OwnedProcesses(metadata, args[1]);
                 else if (args.Length == 2 && args[0] == "post-switch-failure") result = PostSwitchFailure(engine, args[1]);
+                else if (args.Length == 3 && args[0] == "hold-preparing") result = HoldPreparing(engine, args[1], args[2]);
+                else if (args.Length == 2 && args[0] == "recover-pending") result = RecoverPreparing(engine, args[1]);
                 else if (args.Length == 2 && args[0] == "shortcut-probe") result = ShortcutProbe(engine, args[1]);
                 else if (args.Length == 6 && args[0] == "extract-source") result = ExtractSource(metadata, args);
                 else if (args.Length == 3 && args[0] == "process-info")
@@ -317,11 +363,11 @@ namespace Xuzuo.Setup
                 }
                 else if (args.Length == 4 && args[0] == "stop-owned-process")
                 {
-                    var expected = Owned(metadata, args[2]); int pid; double startedAt;
+                    var expected = Owned(metadata, args[2]); int pid; double startedAt; var terminationRequested = false;
                     if (!Int32.TryParse(args[1], out pid) || pid <= 0 || !Double.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out startedAt)) throw new InvalidDataException("Invalid owned process identity.");
-                    try { using (var process = Process.GetProcessById(pid)) { Check(Same(process.MainModule.FileName, expected) && Math.Abs((process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds - startedAt) <= 2, "Owned process identity changed; not stopped."); process.Kill(); Check(process.WaitForExit(5000), "Owned process did not exit."); } }
+                    try { using (var process = Process.GetProcessById(pid)) { Check(Same(process.MainModule.FileName, expected) && Math.Abs((process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds - startedAt) <= 2, "Owned process identity changed; not stopped."); process.Kill(); terminationRequested = true; Check(process.WaitForExit(5000), "Owned process did not exit."); } }
                     catch (ArgumentException) { /* An already exited PID needs no action. */ }
-                    result = new { passed = true };
+                    result = new { passed = true, terminationRequested = terminationRequested };
                 }
                 else throw new ArgumentException("Unknown fixture operation.");
                 Console.WriteLine(SetupJson.Serializer().Serialize(result));
