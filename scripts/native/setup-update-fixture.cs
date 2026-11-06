@@ -201,6 +201,79 @@ namespace Xuzuo.Setup
             }
             return new { passed = true, processes = found, uninspectable = uninspectable };
         }
+        private static object ProbePath(string value)
+        {
+            var points = new List<string>();
+            for (var index = 0; index < value.Length; index++)
+            {
+                var point = Char.ConvertToUtf32(value, index); if (Char.IsHighSurrogate(value[index])) index++;
+                points.Add("U+" + point.ToString("X4", CultureInfo.InvariantCulture));
+            }
+            return new { value = value, utf16Length = value.Length, codePointCount = points.Count, codePoints = points, exists = File.Exists(value) || Directory.Exists(value) };
+        }
+        private static object ProbeException(Exception error)
+        {
+            var chain = new List<object>();
+            for (var current = error; current != null && chain.Count < 5; current = current.InnerException)
+            {
+                var message = current.Message ?? ""; var stack = current.StackTrace ?? "";
+                chain.Add(new { type = current.GetType().FullName, hresult = "0x" + current.HResult.ToString("X8", CultureInfo.InvariantCulture), message = message.Substring(0, Math.Min(512, message.Length)), stack = stack.Substring(0, Math.Min(2000, stack.Length)) });
+            }
+            return chain;
+        }
+        private static object ShortcutProbe(SetupEngine engine, string original)
+        {
+            var metadata = engine.Metadata; original = Owned(metadata, original);
+            var attributes = File.GetAttributes(original); var source = new FileInfo(original);
+            Check((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0 && source.Exists && source.Length > 0 && source.Length <= 536870912 && String.Equals(source.Extension, ".exe", StringComparison.OrdinalIgnoreCase), "Expected an owned ordinary executable.");
+            Check(source.Name.Any(character => character > 127), "Probe requires the original non-ASCII executable filename.");
+            var ownerPath = Owned(metadata, Path.Combine(metadata.validationRoot, ".xuzuo-setup-validation.json"));
+            var owner = SetupJson.File<Dictionary<string, object>>(ownerPath);
+            Check(Convert.ToInt32(owner["format"]) == 1 && Convert.ToString(owner["kind"]) == "xuzuo-setup-validation" && Convert.ToString(owner["appId"]) == metadata.appId && String.Equals(Convert.ToString(owner["installGuid"]), metadata.installGuid, StringComparison.OrdinalIgnoreCase) && Same(Convert.ToString(owner["root"]), metadata.validationRoot), "Probe validation owner differs.");
+            var directory = Owned(metadata, Path.Combine(metadata.validationRoot, "shortcut-probe-" + Guid.NewGuid().ToString("N")));
+            Check(directory.All(character => character < 128) && !Directory.Exists(directory) && !File.Exists(directory), "Probe needs a new ASCII base directory.");
+            Directory.CreateDirectory(directory); NoLinks(directory);
+            var write = typeof(SetupEngine).GetMethod("WriteShortcut", BindingFlags.Instance | BindingFlags.NonPublic);
+            Check(write != null, "Production shortcut method missing.");
+            var cases = new[] {
+                new { id = "ascii-directory-ascii-file", folder = "ascii-directory-ascii-file", filename = "application.exe" },
+                new { id = "ascii-directory-original-file", folder = "ascii-directory-original-file", filename = source.Name },
+                new { id = "chinese-space-directory-ascii-file", folder = "中文 空格目录", filename = "application.exe" }
+            };
+            var results = new List<object>(); var succeeded = 0; var digest = Sha(original);
+            using (var locked = new FileStream(original, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                foreach (var item in cases)
+                {
+                    var child = Owned(metadata, Path.Combine(directory, item.folder));
+                    var target = Owned(metadata, Path.Combine(child, item.filename)); var link = Owned(metadata, Path.Combine(child, "probe.lnk"));
+                    var stage = "copy-identical-executable"; var success = false; object error = null; string readback = null; object shell = null, shortcut = null;
+                    try
+                    {
+                        Check(!Directory.Exists(child) && !File.Exists(child), "Probe case directory exists."); Directory.CreateDirectory(child); NoLinks(child);
+                        File.Copy(original, target, false); NoLinks(target); Check(new FileInfo(target).Length == source.Length && Sha(target) == digest, "Probe target bytes differ.");
+                        Check(!File.Exists(link) && !Directory.Exists(link), "Probe shortcut already exists.");
+                        stage = "production-WriteShortcut"; write.Invoke(engine, new object[] { link, target, child });
+                        stage = "readback-CreateShortcut"; NoLinks(link); Check(File.Exists(link) && (File.GetAttributes(link) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0, "Production shortcut missing or redirected.");
+                        shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                        shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { link });
+                        stage = "readback-TargetPath"; readback = Convert.ToString(shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null));
+                        Check(!String.IsNullOrEmpty(readback) && Path.IsPathRooted(readback) && Same(readback, target), "Shortcut target readback differs.");
+                        stage = "completed"; success = true;
+                    }
+                    catch (Exception failure) { error = ProbeException(failure); }
+                    finally
+                    {
+                        try { if (shortcut != null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut); if (shell != null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell); }
+                        catch (Exception failure) { success = false; if (error == null) { stage = "release-readback-COM"; error = ProbeException(failure); } }
+                    }
+                    if (success) succeeded++;
+                    results.Add(new { id = item.id, succeeded = success, stage = stage, error = error, targetExists = File.Exists(target), directory = ProbePath(child), target = ProbePath(target), shortcut = ProbePath(link), readback = readback == null ? null : ProbePath(readback) });
+                }
+                Check(locked.Length == source.Length && Sha(original) == digest, "Original executable changed during probe.");
+            }
+            return new { passed = true, diagnosticCompleted = true, allCasesSucceeded = succeeded == cases.Length, originalUnchanged = true, directory = directory, original = ProbePath(original), bytes = source.Length, sha256 = digest, culture = CultureInfo.CurrentCulture.Name, uiCulture = CultureInfo.CurrentUICulture.Name, cases = results, scope = "Validation-only production WriteShortcut diagnostic; no application launch, install success, Unicode root-cause or industrial-acceptance claim." };
+        }
         [STAThread]
         public static int Main(string[] args)
         {
@@ -216,6 +289,7 @@ namespace Xuzuo.Setup
                 else if (args.Length == 2 && args[0] == "status") result = Status(engine, args[1]);
                 else if (args.Length == 2 && args[0] == "owned-processes") result = OwnedProcesses(metadata, args[1]);
                 else if (args.Length == 2 && args[0] == "post-switch-failure") result = PostSwitchFailure(engine, args[1]);
+                else if (args.Length == 2 && args[0] == "shortcut-probe") result = ShortcutProbe(engine, args[1]);
                 else if (args.Length == 6 && args[0] == "extract-source") result = ExtractSource(metadata, args);
                 else if (args.Length == 3 && args[0] == "process-info")
                 {
