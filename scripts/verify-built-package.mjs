@@ -90,6 +90,7 @@ async function verifyArchive(archive, source, managedRoot, managedFiles) {
       files.add(relative);
     }
   }
+  assert(![...files].some(relative => /(?:^|\/)node_modules\/jsdom(?:\/|$)/.test(relative)), 'Development DOM test library must not be packaged');
   const packaged = JSON.parse(packed('package.json').toString('utf8'));
   assert.equal(packaged.name, source.name); assert.equal(packaged.version, source.version); assert.equal(packaged.main, source.main);
   const exclusions = new Set(['electron/credential-self-test.cjs', 'electron/live-self-test.cjs', 'assets/setup-window.xaml']);
@@ -124,7 +125,7 @@ async function verifyArchive(archive, source, managedRoot, managedFiles) {
   const maintenance = 'resources/xuzuo-maintenance.exe', maintenanceHash = await fileHashes(path.join(managedRoot, native(maintenance)));
   assert.equal(maintenanceHash.sha256, (await fileHashes(path.join(root, 'work/setup-runtime/xuzuo-maintenance.exe'))).sha256, 'Maintenance extraResource mismatch');
   assert(managedFiles.has('resources/app.asar') && managedFiles.has(maintenance) && managedFiles.has('resources/app.asar.unpacked/' + drive));
-  return { counts, runtimeDependencies, driveHelperUnpacked: true, maintenanceMatchesBuild: true, rendererNetworkCspPresent: true };
+  return { counts, runtimeDependencies, devDomLibraryExcluded: true, driveHelperUnpacked: true, maintenanceMatchesBuild: true, rendererNetworkCspPresent: true };
 }
 async function main() {
   assert.equal(process.platform, 'win32', 'Static setup resource inspection requires Windows');
