@@ -52,7 +52,26 @@ describe('批量导入与独立项目生产', () => {
     expect(summary(next)).toEqual(expected('next', 2, false, true)); expect(next.items.reduce((total, item) => total + item.costCents, 0)).toBe(20000);
     expect(summary(first)).toEqual(expected('initial', 1, true));
     expect(JSON.stringify(initialLedger)).toBe(initialInput); expect(JSON.stringify(nextLedger)).toBe(nextInput);
-    expect(await fs.readFile(filename, 'utf8')).toBe(seed); expect(snapshotCalls).toBe(3); expect(f.calls).toHaveLength(0);
+    const extraEntries = [], extraSeeds = new Map();
+    for (let index = 0; index < 50; index++) {
+      const projectId = `many-project-${index}`, id = `many-batch-${index}`;
+      const extra = { ...record, id, items: [{ ...items[0], id: `many-item-${index}`, project: { ...items[0].project, id: projectId } }] };
+      const target = path.join(directory, `${id}.json`), raw = JSON.stringify(extra); extraSeeds.set(target, raw); await fs.writeFile(target, raw, { flag: 'wx' });
+      extraEntries.push(Object.freeze({ id: `many-fee-${index}`, get projectId() { projectReads++; return projectId; }, costCents: 3, costState: 'calculated', status: 'complete' }));
+    }
+    ledger = Object.freeze([...nextLedger, ...extraEntries]); const allInput = JSON.stringify(ledger);
+    const reopened = createBatchProduction({ ...f, liveEngine: engine }); running.push({ batch: reopened }); projectReads = 0;
+    const all = await reopened.list(), allReads = projectReads;
+    expect(allReads).toBeGreaterThan(0); expect(allReads).toBeLessThanOrEqual(ledger.length * 2); expect(all).toHaveLength(51);
+    expect(summary(all.find(item => item.id === record.id))).toEqual(expected('next', 2, false, true));
+    for (let index = 0; index < 50; index++) {
+      const row = all.find(item => item.id === `many-batch-${index}`).items[0];
+      expect(row.project.id).toBe(`many-project-${index}`); expect(row.costCents).toBe(3); expect(row.project.costCents).toBe(3); expect(row.unknownCost).toBe(false); expect(row.ledger.map(entry => entry.id)).toEqual([`many-fee-${index}`]);
+    }
+    expect(all.flatMap(item => item.items).reduce((sum, item) => sum + item.costCents, 0)).toBe(20150);
+    expect(JSON.stringify(ledger)).toBe(allInput); expect(JSON.stringify(initialLedger)).toBe(initialInput); expect(JSON.stringify(nextLedger)).toBe(nextInput);
+    for (const [target, raw] of extraSeeds) expect(await fs.readFile(target, 'utf8')).toBe(raw);
+    expect(summary(first)).toEqual(expected('initial', 1, true)); expect(await fs.readFile(filename, 'utf8')).toBe(seed); expect(snapshotCalls).toBe(4); expect(f.calls).toHaveLength(0);
   });
   it('两行保存即有独立注册目录，串行产生真实DOCX，引擎只调用两次且账本各记一次', async () => {
     const f = await setup(), record = await create(f);

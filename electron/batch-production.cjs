@@ -44,14 +44,18 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
   })();
   void ready.catch(() => undefined);
   async function mutate(id, update) { return serial(async () => { await ready; const before = records.get(id); if (!before) throw new Error('批次不存在。'); const next = structuredClone(before); update(next); next.updatedAt = now(); await write(next); return next; }); }
-  async function publicRecord(record, snapshot) {
-    const { request: _request, projectNameTemplate: _template, ...result } = structuredClone(record);
+  function indexSnapshot(snapshot) {
     const ledgerByProject = new Map(), runsById = new Map();
     for (const entry of snapshot.ledger) {
       const projectId = entry.projectId, entries = ledgerByProject.get(projectId);
       if (entries) entries.push(entry); else ledgerByProject.set(projectId, [entry]);
     }
     for (const run of snapshot.runs) if (!runsById.has(run.id)) runsById.set(run.id, run);
+    return { ledgerByProject, runsById };
+  }
+  async function publicRecord(record, snapshot, index = indexSnapshot(snapshot)) {
+    const { request: _request, projectNameTemplate: _template, ...result } = structuredClone(record);
+    const { ledgerByProject, runsById } = index;
     for (const item of result.items) {
       const entries = ledgerByProject.get(item.project.id)?.slice() || []; item.ledger = entries; item.costCents = entries.reduce((sum, entry) => sum + entry.costCents, 0); item.unknownCost = entries.some(entry => entry.costState === 'unknown' || entry.calculation && entry.calculation.nativeCurrency === 'USD' && entry.calculation.cnyAmount === undefined);
       item.project.costCents = item.costCents;
@@ -152,7 +156,7 @@ function createBatchProduction({ directory, workspaceStorage, liveEngine, artifa
       const record = { version: 1, id, name: input.name.trim(), workspaceId: project.workspaceId, status: 'queued', createdAt: time, updatedAt: time, items, request, projectNameTemplate: template, ...(grouped ? { kind: 'image-groups' } : {}) };
       await serial(() => write(record)); return publicRecord(record, await snapshot());
     },
-    async list() { await ready; const current = await snapshot(); return Promise.all([...records.values()].reverse().map(record => publicRecord(record, current))); },
+    async list() { await ready; const current = await snapshot(), items = [...records.values()].reverse(); if (!items.length) return []; const index = indexSnapshot(current); return Promise.all(items.map(record => publicRecord(record, current, index))); },
     async get({ id }) { await ready; const record = records.get(id); if (!record) throw new Error('批次不存在。'); return publicRecord(record, await snapshot()); },
     async exportRecords(projectIds) { await ready; await queue; const ids = new Set(projectIds); return [...records.values()].filter(record => record.items.some(item => ids.has(item.project.id))).map(record => ({ ...structuredClone(record), items: structuredClone(record.items.filter(item => ids.has(item.project.id))) })); },
     async importRecords(incoming, { idMap, backupId } = {}) {
