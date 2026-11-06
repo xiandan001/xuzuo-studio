@@ -50,7 +50,7 @@ function launch(executable, args, timeout = 180000, env = process.env, kind = 'f
 }
 async function command(executable, args, success = true, timeout) {
   const result = await launch(executable, args, timeout).done;
-  assert(!result.timedOut, 'Owned fixture command exceeded its deadline'); assert.equal(result.code, success ? 0 : 1, `Fixture command failed: ${args[0]}`);
+  assert(!result.timedOut, 'Owned fixture command exceeded its deadline'); assert.equal(result.code, success ? 0 : 1, `Fixture command failed: ${args[0]}\n${result.stderr.slice(0, 4000)}`);
   if (!success) return result;
   const output = JSON.parse(result.stdout.replace(/^\uFEFF/, '').trim()); assert.equal(output.passed, true); return output;
 }
@@ -112,7 +112,7 @@ async function main() {
   async function controller(destination, meta, manifest, payload) {
     const metaFile = path.join(path.dirname(destination), path.basename(destination) + '.metadata.json'); await fsp.writeFile(metaFile, JSON.stringify(meta) + '\n', { flag: 'wx' });
     const resources = [[metaFile, 'Setup.Metadata.json'], ...(manifest ? [[manifest, 'Setup.Manifest.json'], [payload, 'Setup.Payload.zip']] : [])];
-    const built = await launch(compiler, ['/nologo', '/noconfig', '/utf8output', '/target:exe', '/main:Xuzuo.Setup.SetupUpdateFixture', '/out:' + destination, ...references.map(file => '/reference:' + file), ...resources.map(([file, name]) => '/resource:' + file + ',' + name), ...sources], 120000, process.env, 'compiler').done;
+    const built = await launch(compiler, ['/nologo', '/noconfig', '/utf8output', '/debug:full', '/target:exe', '/main:Xuzuo.Setup.SetupUpdateFixture', '/out:' + destination, ...references.map(file => '/reference:' + file), ...resources.map(([file, name]) => '/resource:' + file + ',' + name), ...sources], 120000, process.env, 'compiler').done;
     assert.equal(built.code, 0, 'Validation controller compilation failed'); assert(!built.timedOut); return destination;
   }
   bootstrap = await controller(path.join(fixture, 'bootstrap.exe'), metadata);
