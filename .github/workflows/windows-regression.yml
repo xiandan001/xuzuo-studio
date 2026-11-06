@@ -44,7 +44,9 @@ jobs:
       - name: Build renderer
         run: node node_modules/vite/bin/vite.js build
       - name: Run source tests with one worker
-        run: node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs --maxWorkers=1 --reporter=json --outputFile="$env:RUNNER_TEMP/xuzuo-vitest.json"
+        run: |
+          New-Item -ItemType Directory -Force -Path work | Out-Null
+          node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs --maxWorkers=1 --reporter=json --outputFile="$env:RUNNER_TEMP/xuzuo-vitest.json"
       - name: Verify complete results
         if: always()
         run: node scripts/verify-ci-result.mjs "$env:RUNNER_TEMP/xuzuo-vitest.json"
