@@ -52,6 +52,8 @@ jobs:
         run: node scripts/verify-ci-result.mjs "$env:RUNNER_TEMP/xuzuo-vitest.json"
       - name: Record reference transport measurements
         run: node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs src/pages/ImageReferenceInspection.test.tsx --maxWorkers=1 --reporter=verbose --silent=false
+      - name: Measure isolated renderer recovery storage
+        run: node scripts/measure-recovery-storage.mjs
       - name: Build Windows drive helper
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
