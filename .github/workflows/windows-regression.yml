@@ -50,3 +50,27 @@ jobs:
       - name: Verify complete results
         if: always()
         run: node scripts/verify-ci-result.mjs "$env:RUNNER_TEMP/xuzuo-vitest.json"
+      - name: Build Windows drive helper
+        run: node scripts/build-drive-helper.mjs
+      - name: Build custom maintenance runtime
+        run: node scripts/build-setup.mjs runtime
+      - name: Package desktop application
+        run: node node_modules/electron-builder/cli.js --win dir --publish never
+      - name: Build custom Windows installer
+        run: node scripts/build-setup.mjs package
+      - name: Verify actual installer and packaged sources
+        run: node scripts/verify-built-package.mjs
+      - name: Retain verified internal installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xuzuo-internal-windows-${{ github.sha }}
+          archive: true
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            outputs/release-v2.1.6/Xuzuo-Studio-Setup-2.1.6.exe
+            outputs/release-v2.1.6/Xuzuo-Studio-Setup-2.1.6.exe.blockmap
+            outputs/release-v2.1.6/Xuzuo-Studio-Setup-2.1.6.manifest.json
+            outputs/release-v2.1.6/latest.yml
+            outputs/release-v2.1.6/package-verification.json
