@@ -29,17 +29,18 @@ const required = new Map([
   ['thumbnail-cache-prune.test.js', 3], ['thumbnail-first-display.test.js', 1],
   ['thumbnail-request-pipeline.test.js', 9],
 ]);
-const results = report.testResults || [], critical = [], skipped = [], observedFiles = new Set();
+const results = report.testResults || [], critical = [], skipped = [], failures = [], observedFiles = new Set();
 for (const suite of results) {
   observedFiles.add(path.relative(root, suite.name).replaceAll('\\', '/'));
   const name = suite.name.replaceAll('\\', '/').split('/').at(-1), tests = suite.assertionResults || [];
   if (required.has(name)) critical.push({ name, expected: required.get(name), actual: tests.length, passed: tests.filter(test => test.status === 'passed').length });
   for (const test of tests) if (!['passed', 'failed'].includes(test.status)) skipped.push({ file: name, name: test.fullName, status: test.status });
+  for (const test of tests) if (test.status === 'failed') failures.push({ file: name, name: test.fullName, messages: test.failureMessages?.slice(0, 2).map(message => message.slice(0, 2000)) });
 }
 const counts = { total: report.numTotalTests, passed: report.numPassedTests, failed: report.numFailedTests, skipped: report.numPendingTests };
 const unexpectedSkips = skipped.filter(test => !allowedSkips.has(test.file + ':' + test.name));
 const missingFiles = expectedFiles.filter(file => !observedFiles.has(file));
-console.log(JSON.stringify({ commit: process.env.GITHUB_SHA, counts, sourceFiles: expectedFiles.length, missingFiles, critical, skipped, unexpectedSkips }, null, 2));
+console.log(JSON.stringify({ commit: process.env.GITHUB_SHA, counts, sourceFiles: expectedFiles.length, missingFiles, critical, skipped, unexpectedSkips, failures }, null, 2));
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Windows regression\n\nTotal ${counts.total}; passed ${counts.passed}; failed ${counts.failed}; skipped ${counts.skipped}.\n\nThis is Node/backend and build verification. Native UI and real provider-account acceptance are separate.\n`, 'utf8');
 assert.equal(report.success, true, 'The full source test run did not succeed');
 assert.equal(report.numFailedTests, 0); assert(report.numTotalTests > 0);
