@@ -356,6 +356,7 @@ function registerRuntime(credentials) {
     return files;
   }));
   handle('thumbnail-artifact', id => thumbnails.getFrom(() => artifactStore.thumbnailSource(id)));
+  handle('inspect-image-artifact', id => artifactStore.inspectImageArtifact(id));
   handle('preview-artifact', async id => { const [artifact] = await artifactStore.list([id]); if (artifact.kind === 'office') { const file = await artifactStore.read(id), structured = await documentArtifactPreview(artifact).catch(() => undefined); return { mimeType: file.mimeType, artifact, ...(structured || { text: await extractReferenceText(file) }), supported: true }; } const preview = await artifactStore.preview(id); return { mimeType: preview.artifact?.mimeType || preview.mimeType, ...preview }; });
   handle('trash-artifact', async id => {
     if (movingArtifacts.has(id)) throw new Error('这个文件正在处理，请稍后再试。');

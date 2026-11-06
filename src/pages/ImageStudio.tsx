@@ -37,6 +37,7 @@ import { ImageOutputControls } from '../components/ImageOutputControls';
 import { effectiveImageOptions, imageFormatModelDisabled, imageOutputIssue, RASTER_IMAGE_TYPES } from '../lib/image-output-options';
 import type { ImageOutputOptions } from '../image-options-types';
 import { MAX_IMAGE_QUANTITY, validImageQuantity } from '../lib/image-quantity';
+import { inspectImageReference, readImageReferencePreviews } from '../lib/image-reference-inspection';
 import { PurposeTemplates } from '../components/PurposeTemplates';
 import { ProjectReferences } from '../components/ProjectReferences';
 import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft } from '../lib/image-studio';
@@ -256,14 +257,8 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     if (!runtimeAvailable) { setCheckingReferences(false); setReferenceError('参考图保存在桌面应用中，请打开 EXE 核对，或重新导入、移除参考图。'); return; }
     setCheckingReferences(true);
     void (async () => {
-      let firstPreview: string | undefined;
       try {
-        for (const [index, reference] of draft.references.entries()) {
-          const preview = await runnerRef.current.previewArtifact(reference.id);
-          if (!current) return;
-          if (!RASTER_IMAGE_TYPES.has(preview.mimeType) || !isImageUrl(preview.dataUrl)) throw new Error('image preview unavailable');
-          if (!index) firstPreview = preview.dataUrl;
-        }
+        const firstPreview = await readImageReferencePreviews(draft.references, runnerRef.current, () => current);
         if (current) setReferencePreview(firstPreview);
       } catch { if (current) setReferenceError('有参考图无法读取，可能已被回收或移动。请重新导入、移除，或先恢复文件后重试；当前参考记录已保留。'); }
       finally { if (current) setCheckingReferences(false); }
@@ -291,10 +286,9 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     void (async () => {
       try {
         assertAssetImage(project.id, application.file);
-        const preview = await runnerRef.current.previewArtifact(application.file.id);
+        await inspectImageReference(application.file.id, runnerRef.current);
         const context = assetContext.current;
         if (disposed || !alive.current || context.workspaceId !== application.workspaceId || context.application?.token !== application.token) return;
-        if (!isImageUrl(preview.dataUrl)) throw new Error('素材图片暂不能读取，原参考图与已复制文件保留。');
         changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, application.file));
         setTextSelection(undefined); setTemplateOffer(undefined); setActionError(''); appliedAssetToken.current = application.token;
         revealEditingInput();
@@ -310,9 +304,8 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     if (busy || importing || saving) throw new Error('请等待当前图片操作完成，素材副本保留。');
     assertAssetImage(project.id, file);
     const originalProject = project.id, originalWorkspace = props.workspaceId;
-    const preview = await runnerRef.current.previewArtifact(file.id);
+    await inspectImageReference(file.id, runnerRef.current);
     if (!alive.current || assetContext.current.workspaceId !== originalWorkspace || assetContext.current.projectId !== originalProject) throw new Error('当前项目已变化，未修改旧工作台。');
-    if (!isImageUrl(preview.dataUrl)) throw new Error('素材图片无法读取，请检查已复制的项目文件。');
     changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, file));
     setTextSelection(undefined); setTemplateOffer(undefined); setActionError('');
     revealEditingInput();

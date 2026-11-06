@@ -152,6 +152,7 @@ contextBridge.exposeInMainWorld('desktop', {
     importFiles: projectId => ipcRenderer.invoke('runtime:import-files', projectId),
     previewArtifact: id => ipcRenderer.invoke('runtime:preview-artifact', id),
     thumbnailArtifact: id => ipcRenderer.invoke('runtime:thumbnail-artifact', id),
+    inspectImageArtifact: id => ipcRenderer.invoke('runtime:inspect-image-artifact', id),
     openArtifact: id => ipcRenderer.invoke('runtime:open-artifact', id),
     saveArtifact: id => ipcRenderer.invoke('runtime:save-artifact', id),
     trashArtifact: id => ipcRenderer.invoke('runtime:trash-artifact', id),

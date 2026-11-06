@@ -235,6 +235,15 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
       if (metadata?.projectId && optionsRef.current.projects.some(project => project.id === metadata.projectId && project.purgedAt)) throw new Error('项目已永久移除，不能再预览其产物。');
       return previewCache.preview(optionsRef.current.workspaceId, id, () => bridge.previewArtifact(id), metadata);
     },
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.inspectImageArtifact === 'function' ? {
+      async inspectImageArtifact(id: string) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.inspectImageArtifact) throw new Error('当前桌面后台不支持参考图片检查。');
+        const metadata = updatedArtifacts[id] || trashedArtifacts?.find(item => item.id === id);
+        if (metadata?.projectId && optionsRef.current.projects.some(project => project.id === metadata.projectId && project.purgedAt)) throw new Error('项目已永久移除，不能再预览其产物。');
+        return bridge.inspectImageArtifact(id);
+      },
+    } : {}),
     async thumbnailArtifact(id) {
       const bridge = window.desktop?.runtime; if (!bridge) throw new Error('请在桌面版预览真实产物。');
       const metadata = updatedArtifacts[id] || trashedArtifacts?.find(item => item.id === id);

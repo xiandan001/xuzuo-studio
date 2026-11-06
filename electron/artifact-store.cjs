@@ -246,6 +246,17 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
     });
   }
 
+  async function inspectImageArtifact(id) {
+    const types = ['image/png', 'image/jpeg', 'image/webp'], limit = 20 * 1024 * 1024;
+    const [artifact] = await list([id]);
+    if (artifact.kind !== 'image' || !types.includes(artifact.mimeType)) throw new Error('参考图片仅支持 PNG、JPEG 或 WebP。');
+    if (!artifact.bytes || artifact.bytes > limit) throw new Error('参考图片为空或超过 20 MB，请重新选择。');
+    const file = await read(id), bytes = file.buffer.length;
+    if (file.kind !== 'image' || !types.includes(file.mimeType)) throw new Error('参考图片格式已变化，请重新选择。');
+    if (!bytes || bytes > limit) throw new Error('参考图片为空或超过 20 MB，请重新选择。');
+    return { id: file.id, mimeType: file.mimeType, bytes };
+  }
+
   function thumbnailSource(id) {
     return serial(async () => {
       if (!validId(id)) throw new Error('请使用有效的图片编号。');
@@ -368,7 +379,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
   }); }
 
   const operations = createOperationTracker();
-  const api = { write, read, thumbnailSource, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
+  const api = { write, read, inspectImageArtifact, thumbnailSource, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
   return { ...Object.fromEntries(Object.entries(api).map(([name, action]) => [name, (...args) => operations.track(() => action(...args))])), drain: operations.drain, flush: operations.flush };
 }
 

@@ -37,12 +37,14 @@ export interface LivePreflightIssue { message: string; stepId?: string; field?: 
 export interface LivePreflight { ok: boolean; errors: string[]; issues?: LivePreflightIssue[]; warnings: string[]; steps: LivePreflightStep[]; estimatedCents?: number; unknownCost: boolean; }
 export interface LiveSnapshot { delta?: boolean; runs: WorkflowRun[]; ledger: LedgerEntry[]; revision?: number; }
 export interface ArtifactPreview { mimeType: string; dataUrl?: string; text?: string; documentSource?: boolean; sourceRevision?: number; thumbnail?: boolean; width?: number; height?: number; originalWidth?: number; originalHeight?: number; transparency?: 'present' | 'unknown'; }
+export interface ImageArtifactInspection { id: string; mimeType: string; bytes: number; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
   saveImageMarkup?: (input: { projectId: string; sourceArtifactId: string; dataUrl: string }) => Promise<ArtifactMetadata>;
   startChecked?: (input: LiveStartRequest) => Promise<LiveCheckedStartResult>;
   lookupStart?: (input: LiveStartLookup) => Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }>;
   thumbnailArtifact?: (id: string) => Promise<ArtifactPreview>;
+  inspectImageArtifact?: (id: string) => Promise<ImageArtifactInspection>;
   onProjectFilesChanged?: (listener: (projectId: string) => void) => () => void;
   listProjectArtifacts?: (projectId: string) => Promise<ArtifactMetadata[]>;
   trashArtifact: (id: string) => Promise<ArtifactMetadata>;

@@ -63,6 +63,7 @@ export interface StudioConfiguration {
 export interface WorkflowRunner {
   inventoryRevision?: number;
   thumbnailArtifact?: (id: string) => Promise<import('./live-types').ArtifactPreview>;
+  inspectImageArtifact?: (id: string) => Promise<import('./live-types').ImageArtifactInspection>;
   loadRunDetail?: (id: string) => Promise<WorkflowRun>;
   listProjectArtifacts?: (projectId: string, options?: { refresh?: boolean }) => Promise<ArtifactMetadata[]>;
   simulationStorage?: SimulationStorageRecovery;
