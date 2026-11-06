@@ -64,6 +64,7 @@ async function run(mode) {
   finally { clearTimeout(timer); }
   let result;
   try { result = JSON.parse(await fs.readFile(path.join(fixture, `${mode}-result.json`), 'utf8')); } catch { /* A crash may prevent the owned result file. */ }
+  if (code !== 0 && result) console.log('RECOVERY_STORAGE_PARTIAL ' + JSON.stringify(result));
   assert(!timedOut, 'Owned measurement process exceeded its 90-second deadline'); assert.equal(code, 0, result?.error || stderr || 'Isolated renderer failed');
   assert(result, 'Isolated renderer produced no result file');
   assert.equal(result.passed, true); assert.equal(result.phase, mode === 'measure' ? 'measured' : 'verified'); return result;

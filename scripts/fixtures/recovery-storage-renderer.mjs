@@ -63,7 +63,7 @@ function expandExcel(payload) {
     const cells = { ...sheet.cells };
     for (const [address, cell] of Object.entries(cells)) {
       if (/^A[1-9]\d*$/.test(address) && typeof cell.value === 'string' && !cell.formula) {
-        cells[address] = { ...cell, value: cell.value + 'Q'.repeat(256) };
+        cells[address] = { ...cell, value: cell.value + '测'.repeat(256) };
         changedCells++;
       }
     }
@@ -109,10 +109,12 @@ function measureQuota(item, payload) {
   const expanded = expandExcel(payload), serialized = serializeImmutableSnapshot(expanded.payload);
   check(serialized === JSON.stringify(expanded.payload), 'QUOTA_SERIALIZATION_MISMATCH');
   check(serialized.length - original.length > fillerSize + 1024, 'QUOTA_EXPANSION_MARGIN');
-  const filler = 'F'.repeat(fillerSize), keys = [];
+  // Electron v45.1.0 raises DOM storage to 100MiB; CJK keeps the bounded
+  // 1024-block ceiling above that quota even with one-byte string optimizations.
+  const filler = '测'.repeat(fillerSize), keys = [];
   let quotaReached = false, failedWritePreserved = false;
   try {
-    for (let index = 0; index < 512; index++) {
+    for (let index = 0; index < 1024; index++) {
       const fillerKey = `${namespace}:filler:${index}`;
       check(localStorage.getItem(fillerKey) === null, 'FILLER_KEY_ALREADY_EXISTS');
       try { localStorage.setItem(fillerKey, filler); keys.push(fillerKey); }
@@ -133,7 +135,7 @@ function measureQuota(item, payload) {
   check(!writeRecoveryDraft(localStorage, key, serialized), 'QUOTA_RETRY_FAILED');
   check(localStorage.getItem(key) === serialized, 'QUOTA_RETRY_VALUE_MISMATCH');
   localStorage.setItem(quotaKey, JSON.stringify({ caseId: item.id, expanded: true }));
-  return { quotaReached, fillerBlocks: keys.length, fillerCharactersPerBlock: fillerSize, changedCells: expanded.changedCells,
+  return { quotaReached, fillerBlocks: keys.length, fillerCharactersPerBlock: fillerSize, fillerUtf8BytesPerBlock: encoder.encode(filler).byteLength, referenceQuotaBytes: 100 * 1024 * 1024, changedCells: expanded.changedCells,
     failedWritePreserved, retryWroteExpanded: true, expandedCharacters: serialized.length, expandedUtf8Bytes: encoder.encode(serialized).byteLength };
 }
 
