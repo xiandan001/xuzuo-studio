@@ -90,9 +90,9 @@ describe('真实引擎内的自然语言规划', () => {
     const result = await until(() => f.service.read(request), value => value.status === 'complete'); expect(result.error).toBeTruthy(); expect(result.error).toMatch(/日历|时刻|间隔|定时/); expect(JSON.parse(result.resultText)).toEqual(plan); expect(f.calls).toHaveLength(1); expect((await f.engine.snapshot()).ledger[0].costCents).toBe(15); expect((await f.center.snapshot('workspace')).rules).toEqual([]);
   });
   it('先保存run绑定再取消，迟到ACK及取消失败不会假称已经取消', async () => {
-    let release, entered; const held = new Promise(resolve => { release = resolve; releases.push(resolve); }), started = new Promise(resolve => { entered = resolve; });
-    const f = await fixture({ startOverride: async (request, engine) => { const run = await engine.start(request); entered(); await held; return run; }, controlOverride: async () => { throw Error('cancel transport unavailable'); }, fetchOverride: async (_url, options) => new Promise((_resolve, reject) => { options.signal.addEventListener('abort', () => reject(Error('fixture cancelled')), { once: true }); }) });
-    const pending = f.service.start(input); await started;
+    let release, entered, requestEntered; const held = new Promise(resolve => { release = resolve; releases.push(resolve); }), started = new Promise(resolve => { entered = resolve; }), requestStarted = new Promise(resolve => { requestEntered = resolve; });
+    const f = await fixture({ startOverride: async (request, engine) => { const run = await engine.start(request); entered(); await held; return run; }, controlOverride: async () => { throw Error('cancel transport unavailable'); }, fetchOverride: async (_url, options) => new Promise((_resolve, reject) => { options.signal.addEventListener('abort', () => reject(Error('fixture cancelled')), { once: true }); requestEntered(); }) });
+    const pending = f.service.start(input); await started; await requestStarted;
     const cancelled = await f.service.cancel(input); expect(cancelled.status).toBe('cancelling'); release();
     const late = await pending; expect(late.runId).toBeTruthy(); expect(late.status).toBe('cancelling'); expect(late.error).toContain('取消'); expect((await f.engine.runDetail(late.runId)).status).toBe('running'); expect(f.calls).toHaveLength(1);
     await f.engine.control({ id: late.runId, action: 'cancel' });
