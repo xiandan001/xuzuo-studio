@@ -225,7 +225,7 @@ namespace Xuzuo.Setup
                 else if (args.Length == 4 && args[0] == "stop-owned-process")
                 {
                     var expected = Owned(metadata, args[2]); int pid; double startedAt;
-                    Check(Int32.TryParse(args[1], out pid) && pid > 0 && Double.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out startedAt), "Invalid owned process identity.");
+                    if (!Int32.TryParse(args[1], out pid) || pid <= 0 || !Double.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out startedAt)) throw new InvalidDataException("Invalid owned process identity.");
                     try { using (var process = Process.GetProcessById(pid)) { Check(Same(process.MainModule.FileName, expected) && Math.Abs((process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds - startedAt) <= 2, "Owned process identity changed; not stopped."); process.Kill(); Check(process.WaitForExit(5000), "Owned process did not exit."); } }
                     catch (ArgumentException) { /* An already exited PID needs no action. */ }
                     result = new { passed = true };
