@@ -62,6 +62,7 @@ async function fixture() {
   function open() {
     const storage = createWorkspaceStorage({ directory: profile });
     const artifacts = createArtifactStore({ directory: path.join(profile, 'artifacts'), workspaceStorage: storage, fileSystem });
+    storage.setArtifactMigrator((id, destination, options) => artifacts.migrateProject(id, destination, options));
     const runtime = createModelRuntime({ directory: profile, artifactStore: artifacts, credentialStore: credentials, fetchImpl });
     const execute = runtime.execute;
     runtime.execute = (request, options) => { state.requests.push(structuredClone(request)); return execute(request, options); };
