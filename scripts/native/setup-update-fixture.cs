@@ -234,7 +234,9 @@ namespace Xuzuo.Setup
             Check(directory.All(character => character < 128) && !Directory.Exists(directory) && !File.Exists(directory), "Probe needs a new ASCII base directory.");
             Directory.CreateDirectory(directory); NoLinks(directory);
             var write = typeof(SetupEngine).GetMethod("WriteShortcut", BindingFlags.Instance | BindingFlags.NonPublic);
-            Check(write != null, "Production shortcut method missing.");
+            var read = typeof(SetupEngine).GetMethod("ReadShortcutTarget", BindingFlags.Static | BindingFlags.NonPublic);
+            var owned = typeof(SetupEngine).GetMethod("ShortcutOwned", BindingFlags.Instance | BindingFlags.NonPublic);
+            Check(write != null && read != null && owned != null, "Production shortcut methods missing.");
             var cases = new[] {
                 new { id = "ascii-directory-ascii-file", folder = "ascii-directory-ascii-file", filename = "application.exe" },
                 new { id = "ascii-directory-original-file", folder = "ascii-directory-original-file", filename = source.Name },
@@ -246,19 +248,36 @@ namespace Xuzuo.Setup
                 foreach (var item in cases)
                 {
                     var child = Owned(metadata, Path.Combine(directory, item.folder));
-                    var target = Owned(metadata, Path.Combine(child, item.filename)); var link = Owned(metadata, Path.Combine(child, "probe.lnk"));
+                    var target = Owned(metadata, Path.Combine(child, item.filename)); var link = Owned(metadata, Path.Combine(child, item.id == "chinese-space-directory-ascii-file" ? "中文 快捷方式.lnk" : "probe.lnk"));
                     var stage = "copy-identical-executable"; var success = false; object error = null; string readback = null; object shell = null, shortcut = null;
+                    var ownershipMatched = false; var foreignRootRejected = false; var legacyWshReadable = false; var brokenLinkRejected = false;
                     try
                     {
                         Check(!Directory.Exists(child) && !File.Exists(child), "Probe case directory exists."); Directory.CreateDirectory(child); NoLinks(child);
                         File.Copy(original, target, false); NoLinks(target); Check(new FileInfo(target).Length == source.Length && Sha(target) == digest, "Probe target bytes differ.");
                         Check(!File.Exists(link) && !Directory.Exists(link), "Probe shortcut already exists.");
                         stage = "production-WriteShortcut"; write.Invoke(engine, new object[] { link, target, child });
-                        stage = "readback-CreateShortcut"; NoLinks(link); Check(File.Exists(link) && (File.GetAttributes(link) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0, "Production shortcut missing or redirected.");
-                        shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-                        shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { link });
-                        stage = "readback-TargetPath"; readback = Convert.ToString(shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null));
+                        stage = "readback-Unicode-target"; NoLinks(link); Check(File.Exists(link) && (File.GetAttributes(link) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0, "Production shortcut missing or redirected.");
+                        readback = Convert.ToString(read.Invoke(null, new object[] { link }));
                         Check(!String.IsNullOrEmpty(readback) && Path.IsPathRooted(readback) && Same(readback, target), "Shortcut target readback differs.");
+                        var caseMetadata = SetupJson.Serializer().Deserialize<SetupMetadata>(SetupJson.Serializer().Serialize(metadata)); caseMetadata.executable = item.filename;
+                        var caseEngine = new SetupEngine(caseMetadata); var linkHash = Sha(link);
+                        stage = "ownership-guards"; ownershipMatched = (bool)owned.Invoke(caseEngine, new object[] { link, child });
+                        foreignRootRejected = !(bool)owned.Invoke(caseEngine, new object[] { link, directory });
+                        Check(ownershipMatched && foreignRootRejected && Sha(link) == linkHash, "Shortcut ownership guard failed or modified the link.");
+                        if (item.id == "ascii-directory-ascii-file")
+                        {
+                            stage = "legacy-WSH-link"; var legacy = Owned(metadata, Path.Combine(child, "legacy-wsh.lnk")); Check(!File.Exists(legacy), "Legacy link already exists.");
+                            shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                            shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { legacy });
+                            shortcut.GetType().InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { target });
+                            shortcut.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+                            var legacyHash = Sha(legacy); legacyWshReadable = Same(Convert.ToString(read.Invoke(null, new object[] { legacy })), target) && (bool)owned.Invoke(caseEngine, new object[] { legacy, child });
+                            Check(legacyWshReadable && Sha(legacy) == legacyHash, "Legacy WSH link was not read safely.");
+                            stage = "broken-link-guard"; var broken = Owned(metadata, Path.Combine(child, "broken.lnk")); File.WriteAllText(broken, "OWNED INVALID SHORTCUT", new UTF8Encoding(false)); var brokenHash = Sha(broken);
+                            try { brokenLinkRejected = !(bool)owned.Invoke(caseEngine, new object[] { broken, child }); } catch (TargetInvocationException failure) { if (!(failure.InnerException is System.Runtime.InteropServices.COMException)) throw; brokenLinkRejected = true; }
+                            Check(brokenLinkRejected && Sha(broken) == brokenHash, "Malformed shortcut was accepted or modified.");
+                        }
                         stage = "completed"; success = true;
                     }
                     catch (Exception failure) { error = ProbeException(failure); }
@@ -268,7 +287,7 @@ namespace Xuzuo.Setup
                         catch (Exception failure) { success = false; if (error == null) { stage = "release-readback-COM"; error = ProbeException(failure); } }
                     }
                     if (success) succeeded++;
-                    results.Add(new { id = item.id, succeeded = success, stage = stage, error = error, targetExists = File.Exists(target), directory = ProbePath(child), target = ProbePath(target), shortcut = ProbePath(link), readback = readback == null ? null : ProbePath(readback) });
+                    results.Add(new { id = item.id, succeeded = success, stage = stage, error = error, ownershipMatched = ownershipMatched, foreignRootRejected = foreignRootRejected, legacyWshReadable = item.id == "ascii-directory-ascii-file" ? (object)legacyWshReadable : null, brokenLinkRejected = item.id == "ascii-directory-ascii-file" ? (object)brokenLinkRejected : null, targetExists = File.Exists(target), directory = ProbePath(child), target = ProbePath(target), shortcut = ProbePath(link), readback = readback == null ? null : ProbePath(readback) });
                 }
                 Check(locked.Length == source.Length && Sha(original) == digest, "Original executable changed during probe.");
             }

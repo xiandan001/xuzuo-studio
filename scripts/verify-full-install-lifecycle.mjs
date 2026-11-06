@@ -126,6 +126,7 @@ async function main() {
   }
   assert.equal(Buffer.compare(await fsp.readFile(extracted[1].manifestFile), await fsp.readFile(path.join(release, `Xuzuo-Studio-Setup-${current.version}.manifest.json`))), 0, 'Current embedded sidecar differs');
   phase = 'probe-shortcut-paths'; report.shortcutProbe = await command(bootstrap, ['shortcut-probe', path.join(extracted[0].runtime, extracted[0].manifest.executable)]);
+  assert.equal(report.shortcutProbe.allCasesSucceeded, true, 'Shortcut paths or ownership guards failed; full installation was not started');
   phase = 'build-full-validation-payloads'; const packages = [];
   for (const source of extracted) {
     const meta = { ...metadata, version: source.manifest.version }, maintenance = path.join(fixture, source.name, 'qa-maintenance.exe'); await compileSetup(maintenance, meta);

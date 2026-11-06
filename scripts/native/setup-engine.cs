@@ -28,6 +28,29 @@ namespace Xuzuo.Setup
         private long lastProgress;
         public Action<string, string, double?> Progress;
 
+        [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int length, IntPtr findData, uint flags);
+            void GetIDList(out IntPtr itemList);
+            void SetIDList(IntPtr itemList);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder description, int length);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string description);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int length);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int length);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+            void GetHotkey(out ushort hotkey);
+            void SetHotkey(ushort hotkey);
+            void GetShowCmd(out int command);
+            void SetShowCmd(int command);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconPath, int length, out int index);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int index);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+            void Resolve(IntPtr window, uint flags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+        }
+
         [DllImport("kernel32.dll")] private static extern uint GetLogicalDrives();
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint QueryDosDevice(string name, StringBuilder target, int length);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern uint GetDriveType(string root);
@@ -307,24 +330,36 @@ namespace Xuzuo.Setup
         private bool ShortcutOwned(string path, string root)
         {
             NoReparse(path);
-            if (!File.Exists(path)) return true; object shell = null, shortcut = null;
-            try { shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { path }); var target = Convert.ToString(shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null)); return !String.IsNullOrEmpty(target) && Same(target, At(root, metadata.executable)); }
-            finally { if (shortcut != null) Marshal.FinalReleaseComObject(shortcut); if (shell != null) Marshal.FinalReleaseComObject(shell); }
+            if (!File.Exists(path)) return true;
+            var target = ReadShortcutTarget(path);
+            return !String.IsNullOrEmpty(target) && Same(target, At(root, metadata.executable));
+        }
+        private static string ReadShortcutTarget(string path)
+        {
+            object shellLink = null;
+            try
+            {
+                shellLink = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+                ((System.Runtime.InteropServices.ComTypes.IPersistFile)shellLink).Load(path, 0);
+                var target = new StringBuilder(260);
+                ((IShellLinkW)shellLink).GetPath(target, target.Capacity, IntPtr.Zero, 4);
+                return target.ToString();
+            }
+            finally { if (shellLink != null) Marshal.FinalReleaseComObject(shellLink); }
         }
         private void WriteShortcut(string path, string executable, string root)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)); object shell = null, shortcut = null;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)); object shellLink = null;
             try
             {
-                shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-                shortcut = shell.GetType().InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { path });
-                var type = shortcut.GetType();
-                type.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { executable });
-                type.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { root });
-                type.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { metadata.productName });
-                type.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+                shellLink = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+                var shortcut = (IShellLinkW)shellLink;
+                shortcut.SetPath(executable);
+                shortcut.SetWorkingDirectory(root);
+                shortcut.SetDescription(metadata.productName);
+                ((System.Runtime.InteropServices.ComTypes.IPersistFile)shellLink).Save(path, true);
             }
-            finally { if (shortcut != null) Marshal.FinalReleaseComObject(shortcut); if (shell != null) Marshal.FinalReleaseComObject(shell); }
+            finally { if (shellLink != null) Marshal.FinalReleaseComObject(shellLink); }
         }
         private void Register(string root, bool desktop, SetupManifest manifest)
         {
