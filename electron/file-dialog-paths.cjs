@@ -9,13 +9,13 @@ const changed = () => new Error('路径对应的位置已变化，请重新选�
 // Share only within one policy preparation or selection; never retain filesystem metadata between user operations.
 function createDialogPathResolver(fs) {
   const directoryStats = new Map();
-  async function checkedParents(directory, assertActive) {
+  async function checkedParents(directory, assertActive, fresh = false) {
     const drive = path.parse(directory).root;
     let current = drive;
     for (const part of [null, ...directory.slice(drive.length).split(path.sep).filter(Boolean)]) {
       assertActive();
       if (part !== null) current = path.join(current, part);
-      if (!directoryStats.has(current)) directoryStats.set(current, fs.lstat(current));
+      if (fresh || !directoryStats.has(current)) directoryStats.set(current, fs.lstat(current));
       const stat = await directoryStats.get(current);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('目录不可用或包含链接，请选择普通文件夹。');
     }
@@ -36,9 +36,10 @@ function createDialogPathResolver(fs) {
     const canonical = path.resolve(await fs.realpath(existing)), resolved = path.join(canonical, ...suffix);
     validateCanonical(resolved);
     await checkedParents(path.dirname(canonical), assertActive);
-    const after = await fs.lstat(canonical);
+    const after = samePath(existing, canonical) ? before : await fs.lstat(canonical);
     if (after.isSymbolicLink() || before.isDirectory() !== after.isDirectory() || before.isFile() !== after.isFile()) throw changed();
     if (!samePath(existing, canonical)) {
+      await checkedParents(path.dirname(existing), assertActive, true);
       const current = await fs.lstat(existing);
       if (current.isSymbolicLink() || !sameIdentity(before, current) || !sameIdentity(current, after)) throw changed();
     }

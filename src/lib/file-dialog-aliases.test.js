@@ -74,4 +74,11 @@ describe('file picker physical path aliases', () => {
     await expect(f.session().seed()).rejects.toThrow('位置已变化');
     expect(await fs.readdir(f.canonical)).toEqual([]);
   });
+  it('rejects an ordinary ancestor replaced by a link during alias resolution', async () => {
+    const f = await fixture(), nativeStat = f.fileSystem.lstat, nativeRealpath = f.fileSystem.realpath; let resolved = false;
+    f.fileSystem.realpath = async value => { const canonical = await nativeRealpath(value); if (value === f.alias) resolved = true; return canonical; };
+    f.fileSystem.lstat = async value => { const stat = await nativeStat(value); return resolved && value === f.root ? Object.assign(Object.create(stat), { isSymbolicLink: () => true }) : stat; };
+    await expect(f.session().seed()).rejects.toThrow('链接');
+    expect(await fs.readdir(f.canonical)).toEqual([]);
+  });
 });
