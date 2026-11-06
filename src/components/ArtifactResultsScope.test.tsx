@@ -139,7 +139,7 @@ function fixture(files: ArtifactMetadata[], trash: ArtifactMetadata[] = [], runs
       store.trash = store.trash.filter(item => item.id !== id); runner.trashedArtifacts = store.trash;
     }),
   } satisfies Partial<WorkflowRunner>;
-  return { store, controls, runner: runner as WorkflowRunner, io: runner };
+  return { store, controls, runner: runner as unknown as WorkflowRunner, io: runner };
 }
 function pageProps(runner: WorkflowRunner): PageProps {
   const project = { id: 'project', workspaceId: 'workspace', kind: 'word', name: '本地项目', status: 'draft', version: 0, costCents: 123, accent: 'blue', updatedAt: '' };
