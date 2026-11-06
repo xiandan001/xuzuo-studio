@@ -1,6 +1,7 @@
 const fsDefault = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { createDialogPathResolver } = require('./file-dialog-paths.cjs');
 
 const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 function within(root, target) {
@@ -36,48 +37,58 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
   const blocked = blockedPaths.map(absolute);
   const canCreateDirectory = options.allowCreateDirectory === true || options.properties?.includes('createDirectory') === true || mode === 'save';
   const overwrite = new Map(); let approved;
+  let roots = root ? [root] : [], exactPaths = exact ? [exact] : [], protectedPaths = blocked, preparation;
 
-  function isBlocked(target) { const parts = target.split(path.sep).map(part => part.toLowerCase()); return parts.some(part => ['.xuzuo', '.xuzuo-assets', '.xuzuo-workspace-v1.json'].includes(part)) || blocked.some(item => within(item, target)); }
+  function prepare() {
+    if (!preparation) preparation = (async () => {
+      assertActive(); const resolve = createDialogPathResolver(fs);
+      const [canonicalRoot, canonicalExact, canonicalBlocked] = await Promise.all([
+        root ? resolve(root, { requireDirectory: true, assertActive }) : undefined,
+        exact ? resolve(exact, { allowMissing: true, assertActive }) : undefined,
+        Promise.all(blocked.map(item => resolve(item, { allowMissing: true, assertActive }))),
+      ]);
+      assertActive();
+      roots = root ? [...new Set([root, canonicalRoot.path])] : [];
+      exactPaths = exact ? [...new Set([exact, canonicalExact.path])] : [];
+      protectedPaths = [...new Set([...blocked, ...canonicalBlocked.map(item => item.path)])];
+    })().catch(error => { throw error.code ? filesystemError(error) : error; });
+    return preparation;
+  }
+
+  function isBlocked(target) { const parts = target.split(path.sep).map(part => part.toLowerCase()); return parts.some(part => ['.xuzuo', '.xuzuo-assets', '.xuzuo-workspace-v1.json'].includes(part)) || protectedPaths.some(item => within(item, target)); }
   function checkScope(value) {
     const target = absolute(value);
-    if (root && !within(root, target)) throw new Error('此位置超出当前操作允许的目录范围。');
+    if (root && !roots.some(item => within(item, target))) throw new Error('此位置超出当前操作允许的目录范围。');
     if (isBlocked(target)) throw new Error('此位置属于应用受保护的本地资料，不能在这里选择或保存文件。');
     if (process.platform === 'win32' && target.startsWith('\\\\') && !options.allowNetworkPaths && !root?.startsWith('\\\\')) throw new Error('请选择本机目录，当前操作不支持网络路径。');
     return target;
   }
-  function checkSelection(target) { if (exact && !samePath(exact, target)) throw new Error(`请选择此操作指定的原位置：${exact}`); }
+  function checkSelection(target) { if (exact && !exactPaths.some(item => samePath(item, target))) throw new Error(`请选择此操作指定的原位置：${exact}`); }
   async function checkedDirectory(value) {
-    const target = checkScope(value), drive = path.parse(target).root;
-    let current = drive;
-    for (const part of [null, ...target.slice(drive.length).split(path.sep).filter(Boolean)]) {
-      if (part !== null) current = path.join(current, part);
-      let stat; try { stat = await fs.lstat(current); } catch (error) { throw filesystemError(error); }
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('目录不可用或包含链接，请选择普通文件夹。');
-    }
-    const canonical = await fs.realpath(target); checkScope(canonical);
-    return canonical;
+    const target = checkScope(value);
+    try { return (await createDialogPathResolver(fs)(target, { requireDirectory: true, validateCanonical: checkScope })).path; }
+    catch (error) { throw error.code ? filesystemError(error) : error; }
   }
   async function fileStat(value) {
-    const target = checkScope(value); await checkedDirectory(path.dirname(target));
+    const target = checkScope(value);
     try {
-      const stat = await fs.lstat(target);
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('此位置不是可选择或覆盖的普通文件。');
-      checkScope(await fs.realpath(target));
+      const { stat } = await createDialogPathResolver(fs)(target, { allowMissing: true, validateCanonical: checkScope });
+      if (stat && !stat.isFile()) throw new Error('此位置不是可选择或覆盖的普通文件。');
       return stat;
     } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
   }
   function allowedFile(filename) { return !extensions.size || extensions.has('*') || extensions.has(extension(filename)); }
   function filterLocations(values) {
-    return values.filter(item => item && typeof item.path === 'string' && path.isAbsolute(item.path) && (!root || within(root, absolute(item.path))) && !isBlocked(absolute(item.path))).map(item => ({ name: String(item.name || item.path), path: absolute(item.path), ...(item.kind ? { kind: item.kind } : {}) }));
+    return values.filter(item => item && typeof item.path === 'string' && path.isAbsolute(item.path) && (!root || roots.some(rootPath => within(rootPath, absolute(item.path)))) && !isBlocked(absolute(item.path))).map(item => ({ name: String(item.name || item.path), path: absolute(item.path), ...(item.kind ? { kind: item.kind } : {}) }));
   }
   async function initialPath() {
-    let candidate = typeof options.defaultPath === 'string' && path.isAbsolute(options.defaultPath) && (!root || within(root, absolute(options.defaultPath))) ? options.defaultPath : root;
+    let candidate = typeof options.defaultPath === 'string' && path.isAbsolute(options.defaultPath) && (!root || roots.some(item => within(item, absolute(options.defaultPath)))) ? options.defaultPath : root;
     if (candidate) {
       candidate = absolute(candidate);
       for (;;) {
         try { return await checkedDirectory(candidate); } catch (error) {
           const parent = path.dirname(candidate);
-          if (parent === candidate || root && !within(root, parent)) { if (root) throw error; break; }
+          if (parent === candidate || root && !roots.some(item => within(item, parent))) { if (root) throw error; break; }
           candidate = parent;
         }
       }
@@ -86,7 +97,7 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
     return checkedDirectory(path.parse(process.cwd()).root);
   }
   async function list({ path: directoryName, search = '', page = 0, pageSize = 100 } = {}) {
-    assertActive();
+    assertActive(); await prepare();
     if (typeof search !== 'string' || search.length > 255 || !Number.isSafeInteger(page) || page < 0 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 200) throw new Error('目录筛选或分页参数无效。');
     const directory = await checkedDirectory(directoryName), query = search.toLocaleLowerCase();
     let children; try { children = await fs.readdir(directory, { withFileTypes: true }); } catch (error) { throw filesystemError(error); }
@@ -104,20 +115,20 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
       }));
       assertActive(); entries.push(...batch.filter(Boolean));
     }
-    const parentPath = path.dirname(directory), canGoUp = parentPath !== directory && (!root || within(root, parentPath)) && !isBlocked(parentPath);
+    const parentPath = path.dirname(directory), canGoUp = parentPath !== directory && (!root || roots.some(item => within(item, parentPath))) && !isBlocked(parentPath);
     assertActive(); return { path: directory, parentPath: canGoUp ? parentPath : null, entries, total, page: effectivePage, pageSize, canGoUp };
   }
   async function createFolder({ path: directoryName, name } = {}) {
-    assertActive();
+    assertActive(); await prepare();
     if (!canCreateDirectory) throw new Error('当前文件选择不允许新建文件夹。');
     const parentPath = await checkedDirectory(directoryName), target = checkScope(path.join(parentPath, basename(name)));
-    if (exact && !samePath(exact, target)) throw new Error('当前操作只允许新建原登记位置的文件夹。');
+    if (exact && !exactPaths.some(item => samePath(item, target))) throw new Error('当前操作只允许新建原登记位置的文件夹。');
     assertActive();
     try { await fs.mkdir(target); } catch (error) { if (error.code === 'EEXIST') throw new Error('同名文件或文件夹已存在，请换一个名称。'); throw filesystemError(error); }
     await checkedDirectory(target); assertActive(); return { path: target, parentPath };
   }
   async function accept(input = {}) {
-    assertActive();
+    assertActive(); await prepare();
     if (mode === 'save') {
       const directory = await checkedDirectory(input.directory); let name = basename(input.filename);
       if (!extension(name) && extensions.size && !extensions.has('*')) name += `.${extensions.has(extension(String(options.defaultPath || ''))) ? extension(options.defaultPath) : [...extensions][0]}`;
@@ -137,7 +148,7 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
       const target = directoryOnly ? await checkedDirectory(value) : checkScope(value); checkSelection(target);
       if (directoryOnly) {
         if (options.selectEmpty) {
-          if (root && samePath(root, target)) throw new Error('这是工作区根目录，请先在其中新建或选择独立的项目子文件夹。');
+          if (root && roots.some(item => samePath(item, target))) throw new Error('这是工作区根目录，请先在其中新建或选择独立的项目子文件夹。');
           if ((await fs.readdir(target)).length) throw new Error('当前文件夹仍有内容（列表只显示子文件夹）。请选择空项目文件夹，已有文件不会被覆盖。');
         }
       }
@@ -148,11 +159,11 @@ function createFileDialogSession({ options = {}, locations = [], blockedPaths = 
   }
   return {
     async seed() {
-      assertActive(); const directory = await initialPath(); assertActive();
+      assertActive(); await prepare(); const directory = await initialPath(); assertActive();
       return { mode, title: options.title || (mode === 'save' ? '保存文件' : directoryOnly ? '选择文件夹' : '选择文件'), buttonLabel: options.buttonLabel || (mode === 'save' ? '保存到这里' : '确认选择'), path: directory,
         defaultFilename: mode === 'save' ? path.basename(String(options.defaultPath || options.defaultFilename || '未命名')) : '',
         locations: filterLocations(locations),
-        filters, multiSelections, maxSelections, directoryOnly: !!directoryOnly, canCreateDirectory, ...(options.selectEmpty ? { selectEmpty: true } : {}), ...(root ? { allowedRoot: root } : {}), ...(exact ? { exactPath: exact } : {}) };
+        filters, multiSelections, maxSelections, directoryOnly: !!directoryOnly, canCreateDirectory, ...(options.selectEmpty ? { selectEmpty: true } : {}), ...(root ? { allowedRoot: roots.at(-1) } : {}), ...(exact ? { exactPath: exactPaths.at(-1) } : {}) };
     },
     list, createFolder, accept, filterLocations,
     async assertSaveTarget(value) {

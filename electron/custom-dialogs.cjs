@@ -1,10 +1,12 @@
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { createFileDialogSession } = require('./file-dialog-session.cjs');
 const { createDialogLocations } = require('./dialog-locations.cjs');
 const { authorizeSave, writeDialogFile } = require('./dialog-save.cjs');
 const { timestampedDefaultPath } = require('./saved-filename.cjs');
+const { createDialogPathResolver, samePath } = require('./file-dialog-paths.cjs');
 
 const FALLBACK_HTML = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; connect-src \'none\'; base-uri \'none\'; form-action \'none\'"><title>序作工作台</title><style>html{height:100%;border-radius:8px;overflow:hidden;font:16px "Segoe UI","Microsoft YaHei",sans-serif;color-scheme:light dark}body{box-sizing:border-box;margin:0;padding:28px;width:100%;height:100%;border-radius:8px;overflow:auto;line-height:1.7}h1{font-size:22px;margin:0 0 12px}p{white-space:pre-wrap;margin:12px 0}footer{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:24px}button{font:inherit;padding:9px 16px;border:1px solid #9a9da6;border-radius:9px;cursor:pointer}button:focus-visible{outline:3px solid #8d7bff;outline-offset:2px}</style></head><body></body></html>';
 const safeText = (value, fallback = '', limit = 5000) => typeof value === 'string' ? value.slice(0, limit) : fallback;
@@ -133,8 +135,10 @@ function createCustomDialogs({ app, BrowserWindow, ipcMain, getWindow, trustedSe
       if (record.finished) throw new Error('此文件选择已取消。');
       if (accepted.overwriteRequired) return accepted;
       if (!Array.isArray(accepted.paths) || !accepted.paths.length) throw new Error('请选择文件或文件夹。');
-      const canonical = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
-      if (record.kind === 'open' && record.options.properties.includes('openDirectory') && accepted.paths.some(value => canonical(value) === canonical(app.getPath('userData')))) throw new Error('应用数据目录不能用作工作区或项目，请选择独立文件夹。');
+      if (record.kind === 'open' && record.options.properties.includes('openDirectory')) {
+        const userData = await createDialogPathResolver(fs)(app.getPath('userData'), { requireDirectory: true });
+        if (accepted.paths.some(value => samePath(path.resolve(value), userData.path))) throw new Error('应用数据目录不能用作工作区或项目，请选择独立文件夹。');
+      }
       if (record.validateSelection) await record.validateSelection(accepted.paths);
       if (record.finished) throw new Error('此文件选择已取消。');
       const file = accepted.paths[0];

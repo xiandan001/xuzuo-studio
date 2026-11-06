@@ -9,7 +9,7 @@ const { createCustomDialogs } = require('../../electron/custom-dialogs.cjs');
 const { writeDialogFile } = require('../../electron/dialog-save.cjs');
 
 async function fixture(overrides = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-dialog-broker-')), workspace = path.join(directory, 'workspace'), userData = path.join(directory, 'app-private');
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-dialog-broker-'))), workspace = path.join(directory, 'workspace'), userData = path.join(directory, 'app-private');
   await fs.mkdir(workspace); await fs.mkdir(userData);
   const windows = [], handlers = new Map();
   class Window extends EventEmitter {
@@ -104,6 +104,17 @@ describe('custom native dialog broker', () => {
     const pending = f.broker.showOpenDialog({ properties: ['openDirectory'] }), window = await f.nextWindow(); await f.invoke(window, 'request');
     await expect(f.invoke(window, 'accept', { paths: [f.userData] })).rejects.toThrow('应用数据目录'); expect(window.destroyed).toBe(false);
     await f.invoke(window, 'accept', { paths: [child] }); expect((await pending).filePaths).toEqual([child]); f.broker.dispose();
+  });
+  it('compares the native application data path with its canonical spelling before accepting a directory', async () => {
+    const raw = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-dialog-root-alias-')), canonical = await fs.realpath(raw), child = path.join(canonical, 'child');
+    await fs.mkdir(child);
+    const f = await fixture({ app: { getPath: name => name === 'userData' ? raw : canonical } });
+    const pending = f.broker.showOpenDialog({ properties: ['openDirectory'] }), window = await f.nextWindow();
+    await f.invoke(window, 'request');
+    await expect(f.invoke(window, 'accept', { directory: canonical })).rejects.toThrow('应用数据目录');
+    expect(window.destroyed).toBe(false);
+    await f.invoke(window, 'accept', { directory: child });
+    expect((await pending).filePaths).toEqual([child]); f.broker.dispose();
   });
   it('keeps an invalid selected folder open so the user can correct it inline', async () => {
     const f = await fixture(); let allow = false;

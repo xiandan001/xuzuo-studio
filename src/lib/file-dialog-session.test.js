@@ -7,7 +7,7 @@ const { createFileDialogSession } = createRequire(import.meta.url)('../../electr
 afterEach(() => vi.restoreAllMocks());
 
 async function fixture(options = {}, extra = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-file-dialog-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-file-dialog-')));
   const locations = [{ name: '隔离目录', path: root, kind: 'workspace' }];
   const session = createFileDialogSession({ options: { mode: 'open', properties: ['openFile'], defaultPath: root, ...options }, locations, ...extra });
   return { root, session, locations };

@@ -40,11 +40,16 @@ for (const suite of results) {
 const counts = { total: report.numTotalTests, passed: report.numPassedTests, failed: report.numFailedTests, skipped: report.numPendingTests };
 const unexpectedSkips = skipped.filter(test => !allowedSkips.has(test.file + ':' + test.name));
 const missingFiles = expectedFiles.filter(file => !observedFiles.has(file));
-console.log(JSON.stringify({ commit: process.env.GITHUB_SHA, counts, sourceFiles: expectedFiles.length, missingFiles, critical, skipped, unexpectedSkips, failures }, null, 2));
+fs.writeSync(1, JSON.stringify({ commit: process.env.GITHUB_SHA, counts, sourceFiles: expectedFiles.length, missingFiles, critical, skipped, unexpectedSkips, failures }, null, 2) + '\n');
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Windows regression\n\nTotal ${counts.total}; passed ${counts.passed}; failed ${counts.failed}; skipped ${counts.skipped}.\n\nThis is Node/backend and build verification. Native UI and real provider-account acceptance are separate.\n`, 'utf8');
-assert.equal(report.success, true, 'The full source test run did not succeed');
-assert.equal(report.numFailedTests, 0); assert(report.numTotalTests > 0);
-assert.equal(missingFiles.length, 0, 'Source test files are missing from the result');
-assert.equal(unexpectedSkips.length, 0, 'Unexpected skipped or unexecuted test cases');
-assert.equal(critical.length, required.size, 'A required test file was not executed');
-for (const item of critical) { assert.equal(item.actual, item.expected, item.name); assert.equal(item.passed, item.expected, item.name + ' contains failed or unexecuted cases'); }
+try {
+  assert.equal(report.success, true, 'The full source test run did not succeed');
+  assert.equal(report.numFailedTests, 0); assert(report.numTotalTests > 0);
+  assert.equal(missingFiles.length, 0, 'Source test files are missing from the result');
+  assert.equal(unexpectedSkips.length, 0, 'Unexpected skipped or unexecuted test cases');
+  assert.equal(critical.length, required.size, 'A required test file was not executed');
+  for (const item of critical) { assert.equal(item.actual, item.expected, item.name); assert.equal(item.passed, item.expected, item.name + ' contains failed or unexecuted cases'); }
+} catch (error) {
+  fs.writeSync(1, '\nCI verification failed: ' + error.message + '\n');
+  process.exitCode = 1;
+}
