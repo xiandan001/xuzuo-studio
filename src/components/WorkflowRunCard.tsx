@@ -3,7 +3,7 @@ import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 import { runDetailKey } from '../lib/run-details';
 import { isLocalExportRun } from '../lib/workflow-purpose';
 import { TaskRunActions } from './TaskRunActions';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, CheckCircle2, CirclePause, LoaderCircle, Pencil, Play, RotateCcw, ShieldCheck, Square, AlertCircle } from 'lucide-react';
 import type { WorkflowRun, WorkflowStep, WorkflowAttempt } from '../configuration-types';
 import { ArtifactResults } from './ArtifactResults';
@@ -29,14 +29,26 @@ function AttemptDetails({ attempts, props, live, projectId, stepRole }: { attemp
 export function WorkflowRunCard({ props, run: summary }: { props: PageProps; run: WorkflowRun }) {
   const [detailsOpen, setDetailsOpen] = useRememberedBoolean(`task:${summary.id}:workflow-details`, !summary.contentTruncated && summary.projectId === props.activeProject.id);
   const [detail, setDetail] = useState<WorkflowRun>();
-  const [detailError, setDetailError] = useState('');
+  const [detailRead, setDetailRead] = useState<{ key: string; loading: boolean; error: string }>();
+  const [detailRequest, setDetailRequest] = useState(0), detailPending = useRef(false);
+  const detailKey = runDetailKey(summary), currentRead = detailRead?.key === detailKey ? detailRead : undefined;
   const run = detail && runDetailKey(detail) === runDetailKey(summary) ? detail : summary;
   useEffect(() => {
-    if (!detailsOpen || !summary.contentTruncated || !props.workflowRunner.loadRunDetail) return;
-    let stopped = false; setDetailError('');
-    void props.workflowRunner.loadRunDetail(summary.id).then(value => { if (!stopped) setDetail(value); }, cause => { if (!stopped) setDetailError(cause instanceof Error ? cause.message : '详情读取失败，可收起后重试。'); });
-    return () => { stopped = true; };
-  }, [detailsOpen, summary.id, summary.detailVersion, summary.contentTruncated, props.workflowRunner.loadRunDetail]);
+    if (!detailsOpen || !summary.contentTruncated) { detailPending.current = false; return; }
+    const load = props.workflowRunner.loadRunDetail;
+    if (!load) { detailPending.current = false; setDetailRead({ key: detailKey, loading: false, error: '当前环境无法读取完整详情，请连接桌面后台。' }); return; }
+    let stopped = false; detailPending.current = true; setDetailRead({ key: detailKey, loading: true, error: '' });
+    void Promise.resolve().then(() => load.call(props.workflowRunner, summary.id)).then(value => {
+      if (!stopped) { detailPending.current = false; setDetail(value); setDetailRead({ key: detailKey, loading: false, error: '' }); }
+    }, cause => {
+      if (!stopped) { detailPending.current = false; setDetailRead({ key: detailKey, loading: false, error: cause instanceof Error ? cause.message : '执行详情读取失败。' }); }
+    });
+    return () => { stopped = true; detailPending.current = false; };
+  }, [detailsOpen, summary.id, detailKey, summary.contentTruncated, props.workflowRunner.loadRunDetail, detailRequest]);
+  function rereadDetail() {
+    if (detailPending.current) return;
+    detailPending.current = true; setDetailRead({ key: detailKey, loading: true, error: '' }); setDetailRequest(value => value + 1);
+  }
   const archived = Boolean(run.hiddenAt || run.trashedAt);
   const [confirmation, setConfirmation] = useState<{ action: 'retry' | 'continue'; stepId?: string; name: string } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -70,7 +82,7 @@ export function WorkflowRunCard({ props, run: summary }: { props: PageProps; run
   }
   return <section className={`panel wf-run-card ${live ? 'wf-real-run' : ''}`}><header><span className={`wf-run-state-icon ${run.status}`}>{run.status === 'running' ? <LoaderCircle size={20} className="spin" /> : run.status === 'complete' ? <CheckCircle2 size={20} /> : run.status === 'waiting-review' ? <ShieldCheck size={20} /> : run.status === 'failed' ? <AlertCircle size={20} /> : <CirclePause size={20} />}</span><div><h3>{run.workflowName}<span className={`wf-run-mode ${live ? 'live' : ''}`}>{localExport ? '本地导出' : live ? '真实' : '模拟'}</span></h3><p>{project?.name || '关联项目'}<i />{Number.isNaN(Date.parse(run.createdAt)) ? run.createdAt : new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</p></div><span className={`wf-run-badge ${run.status}`}>{runLabel}</span><strong>{localExport ? '未调用模型 ' : live ? '调用费用 ' : '模拟费用 '}<CostTotal summary={cost} /></strong></header>
     {run.error && <div className="wf-run-error" role="status"><AlertCircle size={15} /><span>{run.error}</span></div>}{run.pauseRequested && <div className="wf-retry-notice"><CirclePause size={13} /><span>已请求暂停，将在当前请求结束后停止后续步骤；已经发出的请求仍可能收费。</span></div>}
-    <button className="btn btn-ghost" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{detailsOpen ? '收起步骤与结果' : '查看步骤与结果'}</button>{detailError && <p className="form-error" role="alert">{detailError}</p>}{detailsOpen && run.contentTruncated && <p role="status">正在按需读取完整执行详情…</p>}{detailsOpen && !run.contentTruncated && <div className="wf-run-steps">{run.snapshot.steps.map((step, index) => {
+    <button className="btn btn-ghost" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{detailsOpen ? '收起步骤与结果' : '查看步骤与结果'}</button>{detailsOpen && currentRead?.error && <div className="wf-run-error" role="alert"><span>{currentRead.error}</span>{props.workflowRunner.loadRunDetail && <button type="button" className="btn btn-secondary" onClick={rereadDetail} title="只读取已有记录，不调用模型或新增费用">重新读取详情</button>}</div>}{detailsOpen && currentRead?.loading && run.contentTruncated && <p role="status">正在按需读取完整执行详情…</p>}{detailsOpen && !run.contentTruncated && <div className="wf-run-steps">{run.snapshot.steps.map((step, index) => {
       const attempts = run.attempts.filter(attempt => attempt.stepId === step.id); const last = attempts.at(-1); const current = index === run.stepIndex;
       const state = !step.enabled ? '已停用' : (current && run.status === 'waiting-review') || last?.status === 'waiting-review' ? '待人工确认' : last?.status === 'running' ? run.status === 'paused' ? '已暂停' : live ? '处理中' : '模拟中' : last?.status === 'complete' ? '已完成' : last?.status === 'failed' ? '执行失败' : last?.status === 'cancelled' ? '本次已取消' : run.retryStepOnly ? '未重新执行' : terminal ? '未执行' : '待执行';
       const stepCost = summarizeCosts(attempts.map(attempt => attemptCostRecord(attempt, props.ledger, live)));
