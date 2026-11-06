@@ -39,6 +39,23 @@ const cases = [
   { kind: 'excel', extension: 'xlsx', entry: 'xl/sharedStrings.xml', sentinel: '最后一笔-END-XLSX' },
 ] as const;
 
+function phaseRecorder(kind: string) {
+  const started = performance.now(), marks = [{ phase: 'fixture', atMs: 0 }];
+  const report = (event: 'watchdog' | 'completion', extra: Record<string, boolean | number> = {}) => {
+    const elapsedMs = performance.now() - started;
+    console.log('QUICK_DOCUMENT_DELIVERY_DIAGNOSTIC ' + JSON.stringify({
+      event, kind, currentPhase: marks.at(-1)!.phase, elapsedMs, ...extra,
+      marks: marks.map((mark, index) => ({ ...mark, durationMs: (marks[index + 1]?.atMs ?? elapsedMs) - mark.atMs })),
+    }));
+  };
+  const watchdog = setTimeout(() => report('watchdog', { scheduledAfterMs: 4000 }), 4000);
+  watchdog.unref();
+  return {
+    mark(phase: string) { marks.push({ phase, atMs: performance.now() - started }); },
+    finish(bodyAssertionsCompleted: boolean, cleanupCompleted: boolean) { clearTimeout(watchdog); report('completion', { bodyAssertionsCompleted, cleanupCompleted }); },
+  };
+}
+
 async function waitFor(engine: Engine, status: WorkflowRun['status']) {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
@@ -64,20 +81,24 @@ function request(kind: Exclude<ProjectKind, 'image'>): LiveStartRequest {
 }
 
 describe('快捷文档待检查前已生成真正Office文件', () => {
-  it.each(cases)('$kind先生成$extension及检查报告，再等待人工验收，只调用一次隔离模型', async ({ kind, extension, entry, sentinel }) => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-quick-delivery-'));
-    const store = createArtifactStore({ directory: path.join(directory, 'artifacts'), loadModule: dependencies });
-    let calls = 0;
-    const engine = createLiveWorkflowEngine({ directory, artifactStore: store, credentials: { list: async () => [{ id: 'fixture-credential', name: '隔离元数据', connectionId: 'connection', enabled: true }] }, modelRuntime: {
-      supports: (_connection: unknown, capability: string) => capability === 'text',
-      execute: async (input: { projectId: string; runId: string }) => {
-        calls++;
-        const text = JSON.stringify(content[kind]);
-        return { text, artifacts: [await store.write({ ...input, name: 'result.txt', mimeType: 'text/plain', text })], usage: { inputTokens: 100, outputTokens: 50 } };
-      },
-    } });
+  it.each(cases)('$kind ($extension): 先生成实际文件及检查报告，再等待人工验收，只调用一次隔离模型', async ({ kind, extension, entry, sentinel }) => {
+    const phases = phaseRecorder(kind);
+    let directory: string | undefined, engine: Engine | undefined, bodyAssertionsCompleted = false, cleanupCompleted = false;
     try {
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-quick-delivery-'));
+      const store = createArtifactStore({ directory: path.join(directory, 'artifacts'), loadModule: dependencies });
+      let calls = 0;
+      engine = createLiveWorkflowEngine({ directory, artifactStore: store, credentials: { list: async () => [{ id: 'fixture-credential', name: '隔离元数据', connectionId: 'connection', enabled: true }] }, modelRuntime: {
+        supports: (_connection: unknown, capability: string) => capability === 'text',
+        execute: async (input: { projectId: string; runId: string }) => {
+          calls++;
+          const text = JSON.stringify(content[kind]);
+          return { text, artifacts: [await store.write({ ...input, name: 'result.txt', mimeType: 'text/plain', text })], usage: { inputTokens: 100, outputTokens: 50 } };
+        },
+      } });
+      phases.mark('start');
       const started = await engine.start(request(kind));
+      phases.mark('wait-review');
       const waiting = await waitFor(engine, 'waiting-review'), run = waiting.runs[0];
       expect(run.attempts.map(attempt => attempt.status)).toEqual(['complete', 'complete', 'waiting-review']);
       expect(waiting.ledger).toHaveLength(1); expect(calls).toBe(1);
@@ -85,23 +106,37 @@ describe('快捷文档待检查前已生成真正Office文件', () => {
       expect(exported.costState).toBe('not-incurred'); expect(exported.costCents).toBe(0);
       const office = exported.artifacts?.find(artifact => artifact.name.endsWith(`.${extension}`));
       expect(office?.kind).toBe('office');
+      phases.mark('office-read');
       const file = await store.read(office!.id);
       expect((await fs.stat(file.path)).size).toBeGreaterThan(1000);
+      phases.mark('zip');
       const zip = await JSZip.loadAsync(file.buffer);
       expect(await zip.file(entry)!.async('string')).toContain(sentinel);
       if (kind === 'ppt') expect(await zip.file('ppt/notesSlides/notesSlide2.xml')!.async('string')).toContain('最后讲解-END-NOTES');
       if (kind === 'excel') expect(await zip.file('xl/worksheets/sheet1.xml')!.async('string')).toContain('<f>SUM(B2:B3)</f><v>50</v>');
+      phases.mark('report');
       const check = exported.artifacts?.find(artifact => stripSavedTimestamp(artifact.name).endsWith('-检查报告.json'));
       expect(JSON.parse((await store.read(check!.id)).buffer.toString()).status).toBe('requires-human-review');
+      phases.mark('source');
       const raw = run.attempts[0].artifacts![0];
       expect((await store.read(raw.id)).buffer.toString()).toBe(JSON.stringify(content[kind]));
       await engine.snapshot(); await engine.snapshot(); expect(calls).toBe(1);
+      phases.mark('resume');
       await engine.control({ id: started.id, action: 'resume' });
+      phases.mark('wait-complete');
       const done = await waitFor(engine, 'complete');
       expect(done.runs[0].attempts).toHaveLength(3); expect(done.ledger).toHaveLength(1); expect(calls).toBe(1);
+      bodyAssertionsCompleted = true;
     } finally {
-      await engine.shutdown();
-      await fs.rm(directory, { recursive: true, force: true });
+      try {
+        if (engine) { phases.mark('shutdown'); await engine.shutdown(); }
+        if (directory) {
+          phases.mark('cleanup'); const target = path.resolve(directory), parent = path.resolve(os.tmpdir());
+          if (path.dirname(target).toLowerCase() !== parent.toLowerCase() || !path.basename(target).startsWith('xuzuo-quick-delivery-')) throw Error('Unexpected quick delivery fixture path');
+          await fs.rm(target, { recursive: true, force: true });
+        }
+        cleanupCompleted = true;
+      } finally { phases.finish(bodyAssertionsCompleted, cleanupCompleted); }
     }
   });
 });

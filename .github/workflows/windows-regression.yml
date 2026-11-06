@@ -44,12 +44,26 @@ jobs:
       - name: Build renderer
         run: node node_modules/vite/bin/vite.js build
       - name: Run source tests with one worker
+        id: source_tests
         run: |
           New-Item -ItemType Directory -Force -Path work | Out-Null
           node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs --maxWorkers=1 --reporter=json --outputFile="$env:RUNNER_TEMP/xuzuo-vitest.json"
+      - name: Record quick document delivery stages
+        if: ${{ always() && (steps.source_tests.outcome == 'success' || steps.source_tests.outcome == 'failure') }}
+        run: node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs src/lib/quick-document-delivery.test.ts --maxWorkers=1 --reporter=verbose --silent=false
       - name: Verify complete results
         if: always()
         run: node scripts/verify-ci-result.mjs "$env:RUNNER_TEMP/xuzuo-vitest.json"
+      - name: Retain complete test results
+        if: ${{ always() && (steps.source_tests.outcome == 'success' || steps.source_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xuzuo-source-test-results-${{ github.sha }}
+          archive: true
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/xuzuo-vitest.json
       - name: Record reference transport measurements
         run: node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs src/pages/ImageReferenceInspection.test.tsx --maxWorkers=1 --reporter=verbose --silent=false
       - name: Measure isolated renderer recovery storage
