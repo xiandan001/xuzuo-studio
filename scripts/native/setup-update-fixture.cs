@@ -4,6 +4,12 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Collections.Generic;
+using System.IO.Compression;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Win32;
 
 #if FIXTURE_APP
 [assembly: AssemblyProduct("Xuzuo OTA isolated fixture")]
@@ -26,16 +32,206 @@ namespace Xuzuo.Setup
 {
     internal static class SetupUpdateFixture
     {
+        private static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }
+        private static string Full(string value) { return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar); }
+        private static bool Same(string left, string right) { return String.Equals(Full(left), Full(right), StringComparison.OrdinalIgnoreCase); }
+        private static void NoLinks(string value)
+        {
+            var full = Full(value); var cursor = Path.GetPathRoot(full);
+            foreach (var part in full.Substring(cursor.Length).Split(new[] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                cursor = Path.Combine(cursor, part);
+                try { Check((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) == 0, "Validation path contains a reparse point."); }
+                catch (FileNotFoundException) { break; } catch (DirectoryNotFoundException) { break; }
+            }
+        }
+        private static string Owned(SetupMetadata metadata, string value)
+        {
+            var full = Full(value); var root = Full(metadata.validationRoot);
+            Check(full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), "Fixture target escaped validation root."); NoLinks(full); return full;
+        }
+        private static string Sha(string file)
+        {
+            using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read)) using (var hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
+        }
+        private static byte[] Small(Stream stream, int maximum)
+        {
+            using (var output = new MemoryStream())
+            {
+                var bytes = new byte[65536]; int count;
+                while ((count = stream.Read(bytes, 0, bytes.Length)) != 0) { Check(output.Length + count <= maximum, "JSON resource too large."); output.Write(bytes, 0, count); }
+                return output.ToArray();
+            }
+        }
+        private static byte[] Resource(Assembly assembly, string name)
+        {
+            using (var stream = assembly.GetManifestResourceStream(name)) { Check(stream != null, "Source resource missing."); return Small(stream, 16 * 1024 * 1024); }
+        }
+        private static void Relative(string value)
+        {
+            Check(!String.IsNullOrEmpty(value) && !Path.IsPathRooted(value) && !value.Contains("\\"), "Unsafe source entry.");
+            foreach (var part in value.Split('/'))
+            {
+                Check(part.Length != 0 && part != "." && part != ".." && part == part.TrimEnd(' ', '.') && part.IndexOfAny(new[] { '<', '>', ':', '"', '|', '?', '*' }) < 0 && !part.Any(Char.IsControl), "Unsafe source entry.");
+                var device = part.Split('.')[0].ToUpperInvariant();
+                Check(device != "CON" && device != "PRN" && device != "AUX" && device != "NUL" && !(device.Length == 4 && (device.StartsWith("COM") || device.StartsWith("LPT")) && "123456789\u00b9\u00b2\u00b3".IndexOf(device[3]) >= 0), "Reserved source entry.");
+            }
+        }
+        private static object ExtractSource(SetupMetadata metadata, string[] args)
+        {
+            var input = Full(args[1]); var destination = Owned(metadata, args[2]); NoLinks(input);
+            Check(File.Exists(input), "Pinned source installer missing.");
+            Check(Directory.Exists(destination) && !Directory.EnumerateFileSystemEntries(destination).Any(), "Source destination must be new and empty.");
+            using (var locked = new FileStream(input, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                using (var hash = SHA256.Create()) Check(BitConverter.ToString(hash.ComputeHash(locked)).Replace("-", "").ToLowerInvariant() == args[3], "Pinned source installer SHA differs.");
+                // Read embedded data only; the production installer entry point is never invoked.
+                var assembly = Assembly.ReflectionOnlyLoadFrom(input); var utf8 = new UTF8Encoding(false, true);
+                var metadataBytes = Resource(assembly, "Setup.Metadata.json"); var manifestBytes = Resource(assembly, "Setup.Manifest.json");
+                var source = SetupJson.Serializer().Deserialize<SetupMetadata>(utf8.GetString(metadataBytes));
+                var manifest = SetupJson.Serializer().Deserialize<SetupManifest>(utf8.GetString(manifestBytes));
+                Check(source != null && source.format == 1 && !source.validation && source.version == args[4] && source.appId == args[5] && source.executable == metadata.executable, "Source metadata identity differs.");
+                Check(manifest != null && manifest.format == 1 && manifest.version == source.version && manifest.appId == source.appId && manifest.executable == source.executable && manifest.files != null && manifest.files.Count == 74, "Expected a full source runtime manifest.");
+                var expected = new Dictionary<string, SetupFile>(StringComparer.OrdinalIgnoreCase); long total = 0;
+                foreach (var item in manifest.files)
+                {
+                    Relative(item.path); Check(item.bytes >= 0 && item.bytes <= 536870912 && item.sha256 != null && item.sha256.Length == 64 && item.sha256.All(c => c >= '0' && c <= '9' || c >= 'a' && c <= 'f') && !expected.ContainsKey(item.path), "Invalid source manifest entry.");
+                    expected.Add(item.path, item); total = checked(total + item.bytes);
+                }
+                Check(total <= 2147483648L && expected.ContainsKey(source.executable) && expected.ContainsKey("resources/app.asar") && expected.ContainsKey(SetupEngine.MaintenancePath), "Source runtime is incomplete.");
+                var spellings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in manifest.files)
+                {
+                    var parent = item.path; int slash;
+                    while ((slash = parent.LastIndexOf('/')) >= 0) { parent = parent.Substring(0, slash); Check(!expected.ContainsKey(parent), "File/directory collision."); string old; if (spellings.TryGetValue(parent, out old)) Check(old == parent, "Directory case collision."); else spellings.Add(parent, parent); }
+                }
+                var runtime = Path.Combine(destination, "runtime"); Directory.CreateDirectory(runtime); NoLinks(runtime);
+                using (var stream = assembly.GetManifestResourceStream("Setup.Payload.zip"))
+                {
+                    Check(stream != null, "Source payload missing.");
+                    using (var zip = new ZipArchive(stream, ZipArchiveMode.Read, false))
+                    {
+                        Check(zip.Entries.Count == expected.Count, "Source ZIP file set differs."); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var entry in zip.Entries)
+                        {
+                            Relative(entry.FullName); Check(seen.Add(entry.FullName) && expected.ContainsKey(entry.FullName), "Duplicate/unknown source ZIP entry.");
+                            var file = expected[entry.FullName]; var attributes = unchecked((uint)entry.ExternalAttributes); var unixType = (attributes >> 16) & 0xf000;
+                            Check(entry.FullName == file.path && entry.Length == file.bytes && (attributes & 0x410) == 0 && (unixType == 0 || unixType == 0x8000), "Invalid source ZIP entry.");
+                        }
+                        foreach (var entry in zip.Entries)
+                        {
+                            var file = expected[entry.FullName]; var target = Owned(metadata, Path.Combine(runtime, entry.FullName.Replace('/', '\\')));
+                            Check(target.StartsWith(runtime + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), "Source output escaped runtime."); Directory.CreateDirectory(Path.GetDirectoryName(target)); NoLinks(target);
+                            using (var contents = entry.Open()) using (var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None)) using (var hash = SHA256.Create())
+                            {
+                                var buffer = new byte[65536]; long bytes = 0; int count;
+                                while ((count = contents.Read(buffer, 0, buffer.Length)) != 0) { bytes = checked(bytes + count); Check(bytes <= file.bytes, "Source entry exceeded length."); output.Write(buffer, 0, count); hash.TransformBlock(buffer, 0, count, buffer, 0); }
+                                hash.TransformFinalBlock(new byte[0], 0, 0); Check(bytes == file.bytes && BitConverter.ToString(hash.Hash).Replace("-", "").ToLowerInvariant() == file.sha256, "Source entry hash differs."); output.Flush(true);
+                            }
+                        }
+                    }
+                }
+                var manifestFile = Path.Combine(destination, "manifest.json"); var metadataFile = Path.Combine(destination, "metadata.json");
+                using (var output = new FileStream(manifestFile, FileMode.CreateNew)) output.Write(manifestBytes, 0, manifestBytes.Length);
+                using (var output = new FileStream(metadataFile, FileMode.CreateNew)) output.Write(metadataBytes, 0, metadataBytes.Length);
+                return new { passed = true, runtime = runtime, manifestFile = manifestFile, metadataFile = metadataFile, files = expected.Count, bytes = total };
+            }
+        }
+        private static object RegistrySnapshot(string path)
+        {
+            using (var hive = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64)) using (var key = hive.OpenSubKey(path))
+            {
+                return new { exists = key != null, values = key == null ? new object[0] : key.GetValueNames().OrderBy(name => name, StringComparer.Ordinal).Select(name => (object)new { name = name, kind = key.GetValueKind(name).ToString(), value = key.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames) }).ToArray() };
+            }
+        }
+        private static object Status(SetupEngine engine, string root)
+        {
+            var metadata = engine.Metadata; Owned(metadata, root);
+            var shortcuts = new List<object>();
+            foreach (var folder in new[] { "Desktop", "StartMenu" })
+            {
+                var file = Owned(metadata, Path.Combine(metadata.shortcutRoot, folder, metadata.shortcutName + ".lnk"));
+                shortcuts.Add(new { folder = folder, exists = File.Exists(file), sha256 = File.Exists(file) ? Sha(file) : null });
+            }
+            return new { passed = true, registration = engine.ReadRegistration(), installRegistry = RegistrySnapshot("Software\\" + metadata.installGuid), uninstallRegistry = RegistrySnapshot(metadata.uninstallRegistryKey), shortcuts = shortcuts, pendingJournal = File.Exists(Path.Combine(metadata.validationRoot, "setup-state", metadata.installGuid, "transaction.json")) };
+        }
+        private static object PostSwitchFailure(SetupEngine engine, string root)
+        {
+            var metadata = engine.Metadata; root = Owned(metadata, root); var before = engine.ReadRegistration();
+            Check(before != null && Same(before.Root, root) && !before.Machine, "Expected an owned installed baseline.");
+            var journalPath = Owned(metadata, Path.Combine(metadata.validationRoot, "setup-state", metadata.installGuid, "transaction.json"));
+            string held = null, backup = null; var observed = false; var acceptingEvents = true; Exception watcherError = null; var gate = new object();
+            using (var renamed = new ManualResetEvent(false)) using (var watcher = new FileSystemWatcher(Path.GetDirectoryName(root)))
+            {
+                watcher.NotifyFilter = NotifyFilters.DirectoryName;
+                watcher.Renamed += delegate(object sender, RenamedEventArgs value) { lock (gate) { if (acceptingEvents && backup != null && Same(value.OldFullPath, root) && Same(value.FullPath, backup)) { observed = true; renamed.Set(); } } };
+                watcher.Error += delegate(object sender, ErrorEventArgs value) { lock (gate) { if (acceptingEvents) watcherError = value.GetException(); } };
+                watcher.Disposed += delegate { lock (gate) { acceptingEvents = false; } };
+                watcher.EnableRaisingEvents = true;
+                engine.Progress = delegate(string stage, string detail, double? percent)
+                {
+                    if (stage != "正在完成安装" || percent != 93 || held != null) return;
+                    var journal = SetupJson.File<SetupJournal>(journalPath); var stageRoot = Owned(metadata, journal.stage);
+                    Check(journal.root != null && Same(journal.root, root) && journal.phase == "preparing" && Path.GetFileName(stageRoot) == ".xuzuo-stage-" + journal.nonce, "Unexpected real install journal.");
+                    var owner = SetupJson.File<Dictionary<string, object>>(Path.Combine(stageRoot, ".xuzuo-setup-owner.json"));
+                    Check(Convert.ToString(owner["appId"]) == metadata.appId && Convert.ToString(owner["installGuid"]) == metadata.installGuid && Convert.ToString(owner["nonce"]) == journal.nonce, "Stage owner differs.");
+                    held = Owned(metadata, Path.Combine(metadata.validationRoot, "fault-held-stage-" + journal.nonce)); Check(!Directory.Exists(held) && !File.Exists(held), "Held-stage target exists.");
+                    lock (gate) { backup = Owned(metadata, journal.backup); }
+                    Directory.Move(stageRoot, held);
+                };
+                var failed = false; try { engine.Install(root, true); } catch (IOException) { failed = true; }
+                finally { engine.Progress = null; }
+                renamed.WaitOne(1500); watcher.EnableRaisingEvents = false;
+                lock (gate) { acceptingEvents = false; Check(watcherError == null && observed, "Actual old-root swap was not observed."); }
+                Check(failed && held != null && Directory.Exists(held), "Post-switch failure was not exercised.");
+                engine.ValidateRegisteredRoot(root); Check(engine.ReadRegistration().Version == before.Version && !File.Exists(journalPath), "Old installation or journal did not recover.");
+                return new { passed = true, oldRootSwapObserved = true, oldVersion = before.Version, retainedStage = held, interruptedProcessRecoveryVerified = false };
+            }
+        }
+        private static object OwnedProcesses(SetupMetadata metadata, string executable)
+        {
+            executable = Owned(metadata, executable); var found = new List<object>(); var uninspectable = 0;
+            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
+            {
+                using (process)
+                {
+                    try { if (!process.HasExited && Same(process.MainModule.FileName, executable)) found.Add(new { pid = process.Id, startedAt = (process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds }); }
+                    catch { var gone = false; try { gone = process.HasExited; } catch { } if (!gone) uninspectable++; }
+                }
+            }
+            return new { passed = true, processes = found, uninspectable = uninspectable };
+        }
+        [STAThread]
         public static int Main(string[] args)
         {
+            Console.OutputEncoding = new UTF8Encoding(false);
             try
             {
                 var metadata = SetupJson.Resource<SetupMetadata>("Setup.Metadata.json");
                 if (!metadata.validation) throw new InvalidOperationException("Only isolated validation metadata is accepted.");
                 var engine = new SetupEngine(metadata);
-                if (args.Length == 2 && args[0] == "install") engine.Install(args[1], false);
-                else if (args.Length == 2 && args[0] == "uninstall") engine.Uninstall(args[1]);
+                object result;
+                if (args.Length == 2 && (args[0] == "install" || args[0] == "install-full")) { Owned(metadata, args[1]); var installed = engine.Install(args[1], args[0] == "install-full"); result = new { passed = true, root = installed.Root, retainedDirectory = installed.RetainedDirectory }; }
+                else if (args.Length == 2 && args[0] == "uninstall") { Owned(metadata, args[1]); engine.Uninstall(args[1]); result = new { passed = true }; }
+                else if (args.Length == 2 && args[0] == "status") result = Status(engine, args[1]);
+                else if (args.Length == 2 && args[0] == "owned-processes") result = OwnedProcesses(metadata, args[1]);
+                else if (args.Length == 2 && args[0] == "post-switch-failure") result = PostSwitchFailure(engine, args[1]);
+                else if (args.Length == 6 && args[0] == "extract-source") result = ExtractSource(metadata, args);
+                else if (args.Length == 3 && args[0] == "process-info")
+                {
+                    var expected = Owned(metadata, args[2]); int pid; Check(Int32.TryParse(args[1], out pid) && pid > 0, "Invalid owned PID.");
+                    using (var process = Process.GetProcessById(pid)) { Check(Same(process.MainModule.FileName, expected), "Process executable differs."); result = new { passed = true, pid = pid, executable = expected, startedAt = (process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds, productVersion = FileVersionInfo.GetVersionInfo(expected).ProductVersion }; }
+                }
+                else if (args.Length == 4 && args[0] == "stop-owned-process")
+                {
+                    var expected = Owned(metadata, args[2]); int pid; double startedAt;
+                    Check(Int32.TryParse(args[1], out pid) && pid > 0 && Double.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out startedAt), "Invalid owned process identity.");
+                    try { using (var process = Process.GetProcessById(pid)) { Check(Same(process.MainModule.FileName, expected) && Math.Abs((process.StartTime.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds - startedAt) <= 2, "Owned process identity changed; not stopped."); process.Kill(); Check(process.WaitForExit(5000), "Owned process did not exit."); } }
+                    catch (ArgumentException) { /* An already exited PID needs no action. */ }
+                    result = new { passed = true };
+                }
                 else throw new ArgumentException("Unknown fixture operation.");
+                Console.WriteLine(SetupJson.Serializer().Serialize(result));
                 return 0;
             }
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }

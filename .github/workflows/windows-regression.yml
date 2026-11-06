@@ -77,7 +77,30 @@ jobs:
       - name: Build custom Windows installer
         run: node scripts/build-setup.mjs package
       - name: Verify actual installer and packaged sources
+        id: package_verification
         run: node scripts/verify-built-package.mjs
+      - name: Verify Chromium draft retention on close
+        id: close_retention
+        if: ${{ !cancelled() && steps.package_verification.outcome == 'success' }}
+        run: node scripts/verify-chromium-close-retention.mjs
+      - name: Verify full runtime installation lifecycle
+        id: full_install
+        if: ${{ !cancelled() && steps.package_verification.outcome == 'success' }}
+        run: node scripts/verify-full-install-lifecycle.mjs
+      - name: Retain isolated quality evidence
+        if: ${{ !cancelled() && steps.package_verification.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xuzuo-isolated-quality-${{ github.sha }}
+          archive: true
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
+            ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
+            ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
+            outputs/release-v2.1.6/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
