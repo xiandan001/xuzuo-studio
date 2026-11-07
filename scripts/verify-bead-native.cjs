@@ -14,6 +14,14 @@ const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const errorsOf = error => String(error?.stack || error);
 const pdfAssetDirectory = directory => directory.replaceAll('\\', '/').replace(/\/+$/, '') + '/';
+function pdfBodyText(items, view) {
+  const minimum = view[1] + 10 * 72 / 25.4, maximum = view[3] - 30 * 72 / 25.4 + 0.5;
+  return items.filter(item => typeof item.str === 'string' && Number.isFinite(item.transform?.[5]) && item.transform[5] >= minimum && item.transform[5] <= maximum).map(item => item.str).join(' ');
+}
+function pdfTextChecks(bodyPages, expected) {
+  const compact = value => value.replace(/\s/g, ''), body = compact(bodyPages.join('\n'));
+  return Object.fromEntries(Object.entries(expected).map(([field, value]) => [field, body.includes(compact(value))]));
+}
 const requiredFiles = ['bead-source.cjs', 'bead-raster-orientation.cjs', 'bead-pattern.runtime.cjs', 'bead-document.cjs', 'bead-exports.cjs', 'bead-export-helpers.cjs', 'bead-pdf-layout.cjs', 'bead-pdf-printer.cjs', 'cpu-tasks.cjs', 'cpu-worker.cjs', 'image-reference-normalization.cjs', 'image-output-formats.cjs', 'artifact-store.cjs'];
 
 function argumentsFor(args) {
@@ -278,10 +286,12 @@ async function inspectPdfs(directory, output, report, runtime) {
     const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, cMapUrl: pdfAssetDirectory(path.join(pdfRoot, 'cmaps')), cMapPacked: true, standardFontDataUrl: pdfAssetDirectory(path.join(pdfRoot, 'standard_fonts')) });
     const pdf = await loading.promise;
     try {
-      assert.equal(pdf.numPages, entry.plannedPages); const pageTexts = [];
-      for (let number = 1; number <= pdf.numPages; number++) { const page = await pdf.getPage(number), content = await page.getTextContent(); pageTexts.push(content.items.filter(item => typeof item.str === 'string').map(item => item.str).join(' ')); page.cleanup(); }
-      const compact = text => text.replace(/\s/g, ''), all = compact(pageTexts.join('\n'));
-      for (const value of [report.expectedText.version, report.expectedText.license, report.expectedText.longCode]) assert.ok(all.includes(compact(value)), `${entry.name} PDF lost full version, licence or long colour code`);
+      assert.equal(pdf.numPages, entry.plannedPages); const pageTexts = [], bodyPages = [];
+      for (let number = 1; number <= pdf.numPages; number++) { const page = await pdf.getPage(number), content = await page.getTextContent(); pageTexts.push(content.items.filter(item => typeof item.str === 'string').map(item => item.str).join(' ')); bodyPages.push(pdfBodyText(content.items, page.view)); page.cleanup(); }
+      const compact = text => text.replace(/\s/g, '');
+      entry.textChecks = pdfTextChecks(bodyPages, report.expectedText); entry.missingFields = Object.keys(entry.textChecks).filter(field => !entry.textChecks[field]);
+      if (entry.missingFields.length) entry.bodyTextDiagnostics = bodyPages.map((text, index) => ({ page: index + 1, text }));
+      assert.equal(entry.missingFields.length, 0, `${entry.name} PDF lost complete ordered body fields: ${entry.missingFields.join(', ')}`);
       if (entry.chartPages === 9) assert.ok(compact(pageTexts[8]).includes('列61–61·行81–81'), 'The last chart tile lost global row/column coordinates');
       entry.textVerified = true; entry.pdfjsPages = pdf.numPages; entry.output = path.join(output, entry.file); entry.renderedPages = [];
       if (entry.chartPages === 9) for (const number of [1, 9, 10]) {
@@ -337,4 +347,4 @@ else if (require.main === module) {
   else runProbe(process.argv.slice(2)).catch(error => { process.stderr.write(errorsOf(error) + '\n'); process.exitCode = 1; });
 }
 
-module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment, pdfAssetDirectory };
+module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment, pdfAssetDirectory, pdfBodyText, pdfTextChecks };
