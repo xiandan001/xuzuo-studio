@@ -326,9 +326,9 @@ async function runProbe(args) {
   }
 }
 
-if (require.main === module) {
-  if (process.argv[2] === '--native-child') nativeFixture(path.resolve(process.argv[3]), path.resolve(process.argv[4]), process.argv[5]);
-  else if (process.argv.includes('--help')) process.stdout.write('node scripts/verify-bead-native.cjs [--source-root=<absolute repo or app.asar>] [--report=<JSON path>] [--output=<synthetic PDF/PNG directory>]\nRuns one isolated hidden Electron instance, no Key/provider/model or installation. Default report: work/bead-native-acceptance.json\n');
+if (process.versions.electron && process.argv[2] === '--native-child') nativeFixture(path.resolve(process.argv[3]), path.resolve(process.argv[4]), process.argv[5]);
+else if (require.main === module) {
+  if (process.argv.includes('--help')) process.stdout.write('node scripts/verify-bead-native.cjs [--source-root=<absolute repo or app.asar>] [--report=<JSON path>] [--output=<synthetic PDF/PNG directory>]\nRuns one isolated hidden Electron instance, no Key/provider/model or installation. Default report: work/bead-native-acceptance.json\n');
   else runProbe(process.argv.slice(2)).catch(error => { process.stderr.write(errorsOf(error) + '\n'); process.exitCode = 1; });
 }
 
