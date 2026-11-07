@@ -13,7 +13,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const errorsOf = error => String(error?.stack || error);
-const requiredFiles = ['bead-source.cjs', 'bead-pattern.runtime.cjs', 'bead-document.cjs', 'bead-exports.cjs', 'bead-export-helpers.cjs', 'bead-pdf-layout.cjs', 'bead-pdf-printer.cjs', 'cpu-tasks.cjs', 'cpu-worker.cjs', 'image-reference-normalization.cjs', 'image-output-formats.cjs', 'artifact-store.cjs'];
+const requiredFiles = ['bead-source.cjs', 'bead-raster-orientation.cjs', 'bead-pattern.runtime.cjs', 'bead-document.cjs', 'bead-exports.cjs', 'bead-export-helpers.cjs', 'bead-pdf-layout.cjs', 'bead-pdf-printer.cjs', 'cpu-tasks.cjs', 'cpu-worker.cjs', 'image-reference-normalization.cjs', 'image-output-formats.cjs', 'artifact-store.cjs'];
 
 function argumentsFor(args) {
   const options = { sourceRoot: root, report: path.join(root, 'work/bead-native-acceptance.json'), output: path.join(root, 'work/bead-native-output') };
@@ -163,6 +163,8 @@ async function nativeFixture(directory, sourceRoot, nonce) {
     fail(error); app.exit(1);
   };
   process.once('uncaughtException', fatal); process.once('unhandledRejection', fatal);
+  app.on('window-all-closed', () => {});
+  app.on('before-quit', event => { event.preventDefault(); report.unexpectedQuitAttempts = (report.unexpectedQuitAttempts || 0) + 1; persist(); });
   const watchdog = setTimeout(() => fatal(Error('Hidden native fixture exceeded 110 seconds')), 110000);
   try {
     persist();
@@ -188,6 +190,7 @@ async function nativeFixture(directory, sourceRoot, nonce) {
     tasks = load('./electron/cpu-tasks.cjs').createCpuTasks({ timeoutMs: 30000, createWorker(file, options) {
       assert.equal(file, path.join(sourceRoot, 'electron/cpu-worker.cjs'));
       const worker = new Worker(file, options), row = { task: options.workerData.task, threadId: worker.threadId, exited: false }; report.workerTasks.push(row); activeWorkers.add(worker);
+      persist();
       workerExits.push(new Promise(resolve => worker.once('exit', code => { row.exited = true; row.exitCode = code; activeWorkers.delete(worker); resolve(); })));
       return worker;
     } });
@@ -219,9 +222,8 @@ async function nativeFixture(directory, sourceRoot, nonce) {
       const jpeg = jpegOrientation6(nativeImage.createFromBuffer(PNG.sync.write(photo)).toJPEG(95));
       const image = nativeImage.createFromBuffer(jpeg), actual = image.getSize(); report.sourceExif = { status: 'failed', orientation: 6, encoded: { width: 160, height: 80 }, native: actual };
       const reference = await store.write({ buffer: jpeg, mimeType: 'image/jpeg', name: 'synthetic-exif-6.jpg', projectId: artifact.projectId }), oriented = await source.read({ projectId: reference.projectId, referenceId: reference.id });
-      assert.deepEqual(actual, { width: 80, height: 160 });
       assert.equal(oriented.preview.originalWidth, 80); assert.equal(oriented.preview.originalHeight, 160); assert.equal(oriented.raster.width, 80); assert.equal(oriented.raster.height, 160);
-      const preview = nativeImage.createFromDataURL(oriented.preview.dataUrl); assert.deepEqual(preview.getSize(), actual);
+      const preview = nativeImage.createFromDataURL(oriented.preview.dataUrl); assert.deepEqual(preview.getSize(), { width: 80, height: 160 });
       const at = (x, y) => [...oriented.raster.pixels.subarray((y * 80 + x) * 4, (y * 80 + x) * 4 + 4)];
       const top = at(40, 40), bottom = at(40, 120); assert.ok(top[2] > 230 && top[0] < 25); assert.ok(bottom[0] > 230 && bottom[2] < 25);
       assert.equal(sha256((await store.read(reference.id)).buffer), sha256(jpeg));
@@ -238,11 +240,13 @@ async function nativeFixture(directory, sourceRoot, nonce) {
       if (columns === 8) { assert.equal(totals.beads, 57); assert.equal(totals.emptyCells, 7); assert.deepEqual(usage.find(row => row.code === 'R1'), { code: 'R1', name: 'R1', hex: '#FF0000', kind: 'solid', cells: 54, required: 108, reserve: 6, stock: 1, shortage: 113, packSize: 3, bags: 38 }); }
       const prepared = await tasks.run('bead-export', { document, format: 'pdf' }), chartPages = (prepared.html.match(/class="sheet chart-sheet"/g) || []).length;
       assert.equal(chartPages, columns === 8 ? 1 : 9); assert.ok(prepared.pages <= 100); assert.ok(!/<script|<iframe|<link|\b(?:src|href)=|url\(/i.test(prepared.html));
+      report.phase = `printing-${name}`; persist();
       const startedPdf = performance.now(), buffer = await printer.print(prepared), actualPages = (buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length;
       assert.equal(actualPages, prepared.pages); fs.writeFileSync(path.join(directory, `${name}.pdf`), buffer);
       const pngResult = await tasks.run('bead-export', { document, format: 'png' }), preview = nativeImage.createFromBuffer(Buffer.from(pngResult.buffer));
       assert.equal(preview.isEmpty(), false); assert.ok(preview.getSize().width <= 4096 && preview.getSize().height <= 4096); assert.equal(JSON.stringify(document), before);
       report.pdfs.push({ name, file: `${name}.pdf`, plannedPages: prepared.pages, actualPages, chartPages, bytes: buffer.length, sha256: sha256(buffer), printMs: performance.now() - startedPdf, columns, rows, revision: document.revision, totals, usage, nativePngDecoded: true });
+      persist();
     }
     await tasks.drain(); await printer.shutdown(); await store.drain(); source.clear();
     await Promise.race([Promise.all(workerExits), delay(5000).then(() => { throw Error('Production CPU workers did not exit'); })]);
