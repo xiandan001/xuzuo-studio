@@ -98,10 +98,12 @@ function executionSource(sourceRoot, runtime, temporary) {
 
 function isolatedEnvironment(directory, runtime) {
   const env = {};
-  for (const name of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'ComSpec', 'COMSPEC', 'LANG', 'LC_ALL', 'DISPLAY', 'WAYLAND_DISPLAY']) if (process.env[name]) env[name] = process.env[name];
+  const windowsContext = ['SystemDrive', 'OS', 'ALLUSERSPROFILE', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles', 'CommonProgramFiles(x86)', 'CommonProgramW6432', 'PUBLIC', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'USERDNSDOMAIN', 'LOGONSERVER', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'NUMBER_OF_PROCESSORS'];
+  for (const name of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'ComSpec', 'COMSPEC', 'HOME', 'LANG', 'LC_ALL', 'DISPLAY', 'WAYLAND_DISPLAY', 'TZ', ...(process.platform === 'win32' ? windowsContext : [])]) if (process.env[name]) env[name] = process.env[name];
   const profile = path.join(directory, 'profile');
   for (const location of [profile, path.join(profile, 'Roaming'), path.join(profile, 'Local'), path.join(profile, 'cache'), path.join(profile, 'session')]) fs.mkdirSync(location, { recursive: true });
-  Object.assign(env, { TEMP: directory, TMP: directory, HOME: profile, USERPROFILE: profile, APPDATA: path.join(profile, 'Roaming'), LOCALAPPDATA: path.join(profile, 'Local'), XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: path.join(profile, 'cache'), NODE_PATH: path.join(runtime.directory, 'node_modules'), UV_THREADPOOL_SIZE: '2', ELECTRON_ENABLE_LOGGING: '1' });
+  if (process.platform !== 'win32') Object.assign(env, { HOME: profile, XDG_CONFIG_HOME: profile });
+  Object.assign(env, { TEMP: directory, TMP: directory, XDG_CACHE_HOME: path.join(profile, 'cache'), NODE_PATH: path.join(runtime.directory, 'node_modules'), UV_THREADPOOL_SIZE: '2', ELECTRON_ENABLE_LOGGING: '1' });
   return env;
 }
 
@@ -118,7 +120,7 @@ function stopOwnedChild(pid) {
 
 async function launchNative(directory, source, runtime, nonce) {
   return new Promise(resolve => {
-    const child = spawn(runtime.executable, [__filename, '--native-child', directory, source.directory, nonce], { env: isolatedEnvironment(directory, runtime), windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(runtime.executable, [__filename, '--native-child', directory, source.directory, nonce, `--user-data-dir=${path.join(directory, 'profile')}`, `--disk-cache-dir=${path.join(directory, 'profile/cache')}`], { env: isolatedEnvironment(directory, runtime), windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', settled = false;
     child.stdout.on('data', bytes => { stdout = (stdout + bytes.toString('utf8')).slice(-12000); });
     child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString('utf8')).slice(-12000); });
@@ -167,6 +169,9 @@ async function nativeFixture(directory, sourceRoot, nonce) {
     ownsDirectory(directory, nonce); lowerPriority();
     fs.mkdirSync(path.join(directory, 'profile/session'), { recursive: true });
     app.setPath('userData', path.join(directory, 'profile')); app.setPath('sessionData', path.join(directory, 'profile/session')); app.disableHardwareAcceleration();
+    assert.equal(app.getPath('userData'), path.join(directory, 'profile')); assert.equal(app.getPath('sessionData'), path.join(directory, 'profile/session'));
+    assert.equal(app.commandLine.getSwitchValue('user-data-dir'), path.join(directory, 'profile')); assert.equal(app.commandLine.getSwitchValue('disk-cache-dir'), path.join(directory, 'profile/cache'));
+    report.bootstrapIsolation = { userData: true, sessionData: true, diskCache: true, nativeWindowsContext: process.platform === 'win32' };
     global.fetch = () => { report.outboundRequests++; throw Error('The native fixture has no API/network access'); };
     for (const id of ['node:http', 'node:https']) for (const method of ['request', 'get']) require(id)[method] = () => { report.outboundRequests++; throw Error('The native fixture has no HTTP/API access'); };
     app.on('browser-window-created', (_event, window) => {
@@ -293,6 +298,13 @@ async function runProbe(args) {
   try {
     fs.mkdirSync(path.dirname(options.report), { recursive: true }); fs.mkdirSync(options.output, { recursive: true });
     const runtime = dependencyRuntime(), source = executionSource(options.sourceRoot, runtime, temporary); result.sourceMode = source.mode;
+    const environment = isolatedEnvironment(temporary, runtime);
+    assert.equal(Object.keys(environment).some(name => /(?:TOKEN|PASSWORD|SECRET|API_KEY|CREDENTIAL|MODEL|CLOUD)/i.test(name)), false);
+    assert.equal(environment.ELECTRON_RUN_AS_NODE, undefined); assert.equal(environment.NODE_OPTIONS, undefined);
+    for (const key of ['TEMP', 'TMP']) assert.equal(environment[key], temporary);
+    if (process.platform === 'win32') for (const key of ['USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemDrive']) assert.equal(environment[key], process.env[key]);
+    for (const location of ['profile', 'profile/session', 'profile/cache']) assert.equal(fs.statSync(path.join(temporary, location)).isDirectory(), true);
+    result.bootstrap = { environmentValidated: true, osContextPreserved: process.platform === 'win32', credentialsExcluded: true, isolatedDirectoriesExist: true, userDataSwitch: true, diskCacheSwitch: true };
     child = await launchNative(temporary, source, runtime, nonce);
     const nativeReport = fs.existsSync(path.join(temporary, 'report.json')) ? readJson(path.join(temporary, 'report.json')) : { failures: [child.error || `Electron exited ${child.exitCode} without a report: ${child.stderr}`] };
     Object.assign(result, nativeReport, { commit: result.commit, sourceMode: source.mode, requestedSource: options.sourceRoot, exitCode: child.exitCode });
