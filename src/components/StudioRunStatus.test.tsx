@@ -46,6 +46,13 @@ const heading = () => container.querySelector<HTMLElement>('.studio-run-status-h
 const details = () => container.querySelector<HTMLElement>('[role="region"][aria-label="当前任务步骤与结果"]');
 
 describe('工作台长任务详情与摘要操作', () => {
+  it('only resumes an explicitly cancelled local image export without invoking a model or changing fees', async () => {
+    const f = fixture('image', 'cancelled'), before = JSON.stringify(f.ledger);
+    f.run.snapshot.steps[1] = { id: 'export', name: '适配设备壁纸', kind: 'export', inputSource: 'previous', prompt: '', enabled: true, wallpaperTarget: { width: 1080, height: 2400, fit: 'cover' } };
+    await render(f.props); await click('继续本地适配', heading());
+    expect(f.runner.resume).toHaveBeenCalledExactlyOnceWith(f.run.id); expect(f.runner.startLive).not.toHaveBeenCalled(); expect(f.runner.retry).not.toHaveBeenCalled(); expect(JSON.stringify(f.ledger)).toBe(before);
+    f.run.supersededByRunId = 'newer-run'; await render(f.props); expect(heading().textContent).not.toContain('继续本地适配');
+  });
   it('同项目切到任务B时隔离任务A迟到的刷新，不留下禁用或反馈且保留项目展开记忆', async () => {
     const f = fixture('image', 'failed'); f.run.referenceIssue = { sourceStepId: 'images', reason: 'missing' };
     let finish!: () => void, refreshes = 0;

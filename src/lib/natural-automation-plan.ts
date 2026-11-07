@@ -7,6 +7,9 @@ import { withCreationFoundation } from './creation-quality';
 import { CREATION_PROFILES } from './creation-profiles';
 import { documentIllustrationSteps, DOCUMENT_IMAGE_LIMIT, DOCUMENT_REFERENCE_IMAGE_LIMIT } from './document-illustrations';
 import { extractVariables } from './prompt-variables';
+import { parseWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
+import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
+export { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 
 type Capability = NaturalAutomationPlan['steps'][number]['kind'];
 export type NaturalAutomationBindings = Partial<Record<Capability, { modelConfigId?: string; credentialId?: string }>>;
@@ -148,6 +151,7 @@ function calendarOnlyIssue(issue: string): boolean {
 export function naturalAutomationRequestIssues(input: string): string[] {
   if (typeof input !== 'string') return ['请填写有效的文字需求。'];
   const clauses = positiveRequestClauses(input), issues: string[] = [];
+  if (isBeadPatternRequest(input)) issues.push(BEAD_WORKSPACE_NOTICE);
   if (clauses.some(requestsCalendarTrigger)) issues.push(calendarMessage);
   const actionClauses = clauses.filter(value => !/(?:写|制作|生成|起草|编辑|设计).{0,18}(?:文案|草稿|模板|教程|说明|方案|脚本)/.test(value) || /(?:并|再|然后|同时|自动|直接).{0,5}(?:发送|发布|上传|执行|运行)/.test(value)).join('；').replace(/https?:\/\/[^\s<>"'，。；、！？]+/gi, '');
   if (/(?:自动发送|发送|群发|投递|发).{0,8}(?:邮件|短信)|自动发布|(?:发布到|上传到).{0,20}(?:平台|网站|小红书|抖音|公众号|微博|Twitter|YouTube)|(?:生成|制作|剪辑|合成|配音).{0,8}(?:视频|音频|语音|音乐)|(?:转成|转为|转换为).{0,5}(?:语音|音频|视频)|(?:执行|运行).{0,8}(?:脚本|命令|powershell|shell)|(?:监听|监控|监视).{0,8}(?:文件夹|目录)/i.test(actionClauses)) issues.push('此入口尚未支持发送、发布、音视频、脚本执行或目录监听操作，请先调整目标。');
@@ -241,6 +245,11 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   if (plan.trigger.type === 'run-completed' && !configuration.workflows.some(workflow => workflow.id === plan.trigger.sourceWorkflowId && workflow.workspaceId === project.workspaceId && workflow.outputKind === project.kind)) throw Error('来源流程不存在、不属于当前工作区或与项目类型不匹配。');
   if (!['word', 'ppt'].includes(project.kind) && plan.illustrations.mode !== 'none') throw Error('文档配图仅用于Word或PPT，请调整方案的配图设置。');
   const missing = new Set<string>(), select = bindingResolver(configuration, bindings, missing);
+  const wallpaperText = [plan.objective, ...plan.steps.map(step => step.instruction), ...plan.constraints].join('\n');
+  const wallpaperRequested = project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
+  const wallpaperParsed = wallpaperRequested ? parseWallpaperTarget(wallpaperText) : undefined;
+  const wallpaperTarget = wallpaperParsed?.status === 'resolved' ? wallpaperParsed.target : undefined;
+  if (wallpaperRequested && !wallpaperTarget) missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
   const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
   const base = automationRecipe(project.kind, plan.name, { objective: plan.objective, deliverables: [project.kind], acceptance: plan.acceptance, constraints: plan.constraints, knownInputs: (project.referenceFiles || []).filter(usableReference).map(file => file.name) }, configuration as StudioConfiguration, plan.maxRepairs);
   const planner = { ...base.steps[0], ...select('text') }, steps: WorkflowStep[] = [planner];
@@ -250,7 +259,8 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   const imageStep = (kind: 'image-generation' | 'image-editing', name: string, instruction: string) => {
     if (kind === 'image-editing' && latestImage && steps.at(-1)?.kind !== 'vision') opinion();
     if (kind === 'image-editing' && !latestImage && !references.length) missing.add('图片精修：请为项目添加实际参考图片');
-    const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}`, inputSource: 'previous', enabled: true, count: 1, imageSize: 'auto', imageBackground: 'auto', ...select(kind), ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
+    const selection = select(kind), modelId = configuration.models.find(model => model.id === selection.modelConfigId)?.modelId;
+    const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${wallpaperPrompt(wallpaperTarget)}` : ''}`, inputSource: 'previous', enabled: true, count: 1, imageSize: wallpaperTarget ? wallpaperGenerationSize(wallpaperTarget, modelId) : 'auto', imageBackground: wallpaperRequested ? 'opaque' : 'auto', ...(wallpaperRequested ? { imageOutputFormat: 'png' as const } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
     if (kind === 'image-editing') { edits++; if (latestImage) imageOutputs[imageOutputs.lastIndexOf(latestImage)] = step.id; else imageOutputs.push(step.id); }
     else imageOutputs.push(step.id);
     latestImage = step.id; return step;
@@ -291,7 +301,9 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   const sourceId = project.kind === 'image' ? latestImage! : lastText!.id;
   const existingFinalReview = project.kind === 'image' && steps.at(-1)?.kind === 'vision' ? steps.pop() : undefined;
   const reviewer: WorkflowStep = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name, prompt: `本次检查要求：${existingFinalReview.prompt}\n\n${base.steps[2].prompt}` } : {}), ...select(project.kind === 'image' ? 'vision' : 'text'), qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
-  add(reviewer); add({ ...base.steps[3], contentSourceStepId: sourceId }); add(base.steps[4]);
+  const delivery: WorkflowStep = { ...base.steps[3], contentSourceStepId: sourceId, ...(wallpaperRequested ? { name: '适配设备壁纸', wallpaperTarget: wallpaperTarget || null, contentSourceStepId: undefined, contentSourceStepIds: [...imageOutputs] } : {}) };
+  if (wallpaperRequested) { add(delivery); add(reviewer); } else { add(reviewer); add(delivery); }
+  add(base.steps[4]);
   if (steps.length > 40) throw Error('本地展开后的流程超过40步，请减少步骤或配图数量。');
   const workflow = withCreationFoundation({ ...base, id: 'natural-preview', workspaceId: project.workspaceId, updatedAt: '', steps });
   const unfilledVariables = new Set([plan.objective, ...workflow.steps.map(step => step.prompt)].flatMap(extractVariables));

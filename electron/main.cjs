@@ -43,9 +43,9 @@ let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, stud
 let runtimeClosing = false, drainRuntime = async () => undefined;
 const runtimeRequests = new Set();
 let closingWriteFailed = false;
-function trackRuntimeTask(task, write = false) {
+function trackRuntimeTask(task, write = false, cancellationSafe = false) {
   runtimeRequests.add(task);
-  task.then(() => runtimeRequests.delete(task), () => { runtimeRequests.delete(task); if (write && runtimeClosing) closingWriteFailed = true; });
+  task.then(() => runtimeRequests.delete(task), error => { runtimeRequests.delete(task); if (write && runtimeClosing && !(cancellationSafe && error?.name === 'AbortError')) closingWriteFailed = true; });
 }
 const validationRequested = Boolean(process.env.XUZUO_QA_PROFILE && (!app.isPackaged || process.argv.includes('--isolated-validation')));
 if (validationRequested) {
@@ -85,11 +85,12 @@ function registerRuntime(credentials) {
   const cpuTasks = createCpuTasks();
   const workspaceStorage = createWorkspaceStorage({ directory: app.getPath('userData') });
   let projectPurge;
-  const artifactStore = createArtifactStore({ directory: path.join(app.getPath('userData'), 'artifacts-v1'), workspaceStorage, renderOffice: input => cpuTasks.run('office', input), convertImage: buffer => { const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('这张图像无法转换为 Office 所需的 PNG，请先检查原文件。'); return image.toPNG(); } });
+  const artifactStore = createArtifactStore({ directory: path.join(app.getPath('userData'), 'artifacts-v1'), workspaceStorage, renderOffice: input => cpuTasks.run('office', input), fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), fitEngineering: (input, options) => cpuTasks.run('engineering', input, options), convertImage: buffer => { const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('这张图像无法转换为 Office 所需的 PNG，请先检查原文件。'); return image.toPNG(); } });
   const thumbnails = createImageThumbnails({ directory: path.join(app.getPath('userData'), 'thumbnail-cache-v1'), nativeImage });
   workspaceStorage.setArtifactMigrator((projectId, destination, options) => artifactStore.migrateProject(projectId, destination, options));
   const editorStore = createEditorStore({ workspaceStorage, artifactStore });
   const spreadsheetStore = createSpreadsheetStore({ workspaceStorage, artifactStore });
+  const beadStore = require('./bead-store.cjs').createBeadStore({ workspaceStorage });
   const assets = createAssetLibrary({ workspaceStorage, artifactStore });
   const builtinAssets = createBuiltinAssets({ workspaceStorage, artifactStore, assetLibrary: assets });
   const assetCategories = createAssetCategories({ workspaceStorage, assetLibrary: assets, builtinAssets });
@@ -97,12 +98,12 @@ function registerRuntime(credentials) {
   const normalizeRasterReference = require('./image-reference-normalization.cjs').createImageReferenceNormalizer({ nativeImage });
   const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl, normalizeRasterReference, directory: app.getPath('userData'), getAvailableRuns: async projectIds => (await liveEngine.snapshot(undefined, { summaryOnly: true, projectIds })).runs });
   const fxRates = createFxRateService({ directory: app.getPath('userData'), fetchImpl });
-  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
+  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, readBeadDocument: projectId => beadStore.read({ projectId }), assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
   const documentArtifactPreview = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
   automaticBilling = createAutomaticBilling({ needsRecalculation: async () => !runtimeClosing && pendingBilling((await liveEngine.snapshot(undefined, { summaryOnly: true })).ledger), recalculate: options => liveEngine.recalculateCosts(options) });
   automaticBilling.start();
   const backupManager = createProjectBackup({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, batchProduction: () => batches, automationProvider: () => automationCenter, receiptProvider: () => modelRuntime });
-  const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, inspectImage: async buffer => {
+  const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, readBeadDocument: projectId => beadStore.read({ projectId }), inspectImage: async buffer => {
     const special = require('./image-output-formats.cjs').imageType(buffer); if (['svg', 'gif'].includes(special.extension)) return { ...require('./image-output-formats.cjs').rasterDimensions(buffer), transparency: 'unknown' };
     const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('实际图像无法解码，请检查源文件。');
     const { width, height } = image.getSize();
@@ -126,6 +127,9 @@ function registerRuntime(credentials) {
     await workspaceStorage.assertProject(input.project.id, input.project.workspaceId);
   };
   const quoteExporter = createCustomerQuoteExporter({ BrowserWindow, artifactStore, workspaceStorage });
+  const beadPrinter = require('./bead-pdf-printer.cjs').createBeadPdfPrinter({ BrowserWindow });
+  const beads = require('./bead-service.cjs').createBeadService({ workspaceStorage, artifactStore, nativeImage, cpuTasks, dialog, store: beadStore, getWindow: () => mainWindow, printPdf: (input, options) => beadPrinter.print(input, options), onChanged: projectId => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('runtime:project-files-changed', { projectId }); } catch { /* Completed files remain available if the renderer is closing. */ } }, onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.document.title, kind: 'image', artifacts: input.artifacts, beadExport: input.beadExport }); } });
+  const exportWallpaper4K = require('./local-wallpaper-export.cjs').createLocalWallpaperExporter({ artifactStore, fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.artifact.name, kind: 'image', artifacts: [input.artifact], wallpaperExport: { sourceArtifactId: input.sourceArtifactId, sourceSha256: input.sourceSha256, target: input.target } }); } });
   automationCenter = createAutomationCenter({ directory: app.getPath('userData'), liveEngine, onChanged: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automation:changed'); }, assertAdmission: async project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }), control: async input => {
     if (!['resume', 'continue', 'retry'].includes(input.action)) return liveEngine.control(input);
     if (!input.project) throw new Error('请先恢复任务所属项目。');
@@ -147,15 +151,17 @@ function registerRuntime(credentials) {
   const automationPlanning = createAutomationPlanning({ directory: app.getPath('userData'), liveEngine, automationCenter, credentials, assertAdmission: project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }) });
   const handle = (name, action) => ipcMain.handle(`runtime:${name}`, (event, input) => {
     if (!trustedSender(event)) throw new Error('此页面无权执行本机模型任务。');
-    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
-    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs'].includes(name)) await projectPurge.ready; return action(input); });
-    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name));
+    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
+    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs', 'bead-export-recovery', 'bead-cancel'].includes(name)) await projectPurge.ready; return action(input); });
+    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-'));
     return task;
   });
   const officePreview = registerOfficePreviewHandlers({ handle, dialog, getWindow: () => mainWindow, artifactStore, directory: path.join(app.getPath('userData'), 'office-preview-v1'), withProjectWrite, shell, trackWrite: task => trackRuntimeTask(task, true) });
   drainRuntime = async () => {
     runtimeClosing = true;
     studioDialogs.cancelPickers();
+    await beads.prepareClose();
+    await beadPrinter.drain();
     await officePreview.shutdown();
     await automaticBilling.stop();
     await projectPurge.drain();
@@ -314,6 +320,8 @@ function registerRuntime(credentials) {
     if (!location || relocatingProjects.has(projectId)) throw new Error('请先为当前工作区绑定文件夹，或等待目录移动完成。');
     await workspaceStorage.assertProject(projectId, location.workspaceId); return location;
   };
+  for (const [name, method] of [['source', 'source'], ['read', 'read'], ['history', 'history'], ['restore', 'restore'], ['generate', 'generate'], ['save', 'save'], ['export', 'export'], ['import-palette', 'importPalette'], ['import-document', 'importDocument'], ['cancel', 'cancel'], ['export-recovery', 'exportRecovery']]) handle(`bead-${name}`, input => ['generate', 'save', 'restore', 'export', 'import-document'].includes(name) ? withProjectWrite(input?.projectId, () => beads[method](input)) : beads[method](input));
+  handle('export-wallpaper-4k', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); return exportWallpaper4K(input); }));
   for (const action of ['load', 'save', 'history', 'loadVersion']) handle(`editor-${action}`, input => { const execute = async () => { await editorProject(input?.projectId); return editorStore[action](input); }; return action === 'save' ? withProjectWrite(input?.projectId, execute) : execute(); });
   handle('editor-restore', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); return editorStore.restore(input); }));
   handle('editor-export', input => withProjectWrite(input?.projectId, async () => {

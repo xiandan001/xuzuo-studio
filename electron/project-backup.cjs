@@ -8,7 +8,12 @@ const { validateRecords } = require('./run-history-store.cjs');
 const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset-categories.cjs');
 const { purgedProjectAudit } = require('./backup-project-audits.cjs');
 const APP_VERSION = require('../package.json').version;
-const controlledPath = relative => { const parts = relative.split('/'); return relative.endsWith('.json') && (parts.includes('.xuzuo') || parts.at(-1) === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(parts.at(-1))); };
+const controlledPath = relative => {
+  const parts = relative.split('/'), basename = parts.at(-1);
+  const beadRecovery = /^bead-before-restore-[a-f0-9-]{36}\.json$/i.test(basename) || parts.at(-2) === 'bead-revisions-v1' && /^index-invalid-[a-f0-9-]{36}\.json$/i.test(basename);
+  if (parts.includes('.xuzuo') && beadRecovery) return false;
+  return relative.endsWith('.json') && (parts.includes('.xuzuo') || basename === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(basename));
+};
 
 function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, automationProvider, receiptProvider, fileSystem = fsDefault, loadModule = require }) {
   const fs = fileSystem, receipts = path.join(path.resolve(directory), 'backup-imports-v1');

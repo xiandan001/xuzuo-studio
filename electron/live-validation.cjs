@@ -2,6 +2,8 @@ const { estimateCost } = require('./live-cost.cjs');
 const { extractReferenceText } = require('./reference-text.cjs');
 const { imageExportSourceError } = require('./image-export-sources.cjs');
 const { validateMarkup } = require('./image-output-formats.cjs');
+const { wallpaperTargetError } = require('./wallpaper-export.cjs');
+const { readEngineeringSource } = require('./engineering-export.cjs');
 
 async function markupPreflightError(step, projectId, inputs, artifactStore, dynamicSource) {
   let markup;
@@ -69,6 +71,21 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (!text(step.name, 100)) addError('请为每个步骤填写名称。', undefined, step.id);
     if (step.budgetCents != null && (!Number.isSafeInteger(step.budgetCents) || step.budgetCents < 0)) addError(`“${step.name}”的金额上限无效，请填写非负金额或留空。`, 'budgetCents', step.id);
     if (step.role !== undefined && !['planner', 'producer', 'reviewer'].includes(step.role)) addError(`“${step.name}”的职责无效。`, undefined, step.id);
+    if (step.wallpaperTarget !== undefined) {
+      const issue = wallpaperTargetError(step.wallpaperTarget);
+      if (issue) addError(`“${step.name}”：${issue}`, 'wallpaperTarget', step.id);
+      if (step.kind !== 'export' || project.kind !== 'image') addError(`“${step.name}”：壁纸目标仅能用于图片项目的本地导出步骤。`, 'wallpaperTarget', step.id);
+      if (!Array.isArray(step.contentSourceStepIds) || !step.contentSourceStepIds.length) addError(`“${step.name}”：壁纸需要明确选择前面的实际PNG制作步骤。`, 'inputSource', step.id);
+      else if (step.contentSourceStepIds.some(id => { const source = workflow.steps.find(item => item.id === id); return source && (source.imageOutputFormat ?? 'png') !== 'png'; })) addError(`“${step.name}”：壁纸制作步骤需要输出静态PNG，请先切换格式，未调用模型。`, 'imageOutputFormat', step.id);
+    }
+    if (step.engineeringReferenceId !== undefined) {
+      if (step.wallpaperTarget !== undefined || step.kind !== 'export' || project.kind !== 'image') addError(`“${step.name}”：工程原图仅用于图片项目的本地导出，不能同时选择壁纸。`, 'engineeringReferenceId', step.id);
+      try { await readEngineeringSource(id => artifactStore.read(id), { projectId: project.id, referenceId: step.engineeringReferenceId, attachmentIds: request.attachmentIds }); }
+      catch (error) { addError(`“${step.name}”：${error.message}`, 'engineeringReferenceId', step.id); }
+      const sourceIds = step.contentSourceStepIds;
+      if (!Array.isArray(sourceIds) || !sourceIds.length) addError(`“${step.name}”：请选择本轮图片编辑成功生成的PNG步骤。`, 'inputSource', step.id);
+      else if (sourceIds.some(id => { const source = workflow.steps.find(item => item.id === id); return !source || source.kind !== 'image-editing' || source.inputSource !== 'project' || source.imageSourceStepId !== undefined || source.imageMarkupId === step.engineeringReferenceId || (source.imageOutputFormat ?? 'png') !== 'png'; })) addError(`“${step.name}”：工程图片需要以本次首图为主画布进行PNG精修，不能采用纯文字生图或动态来源。`, 'inputSource', step.id);
+    }
     if (step.qualityGate) {
       const policy = step.qualityGate;
       if (step.role !== 'reviewer' || !['text', 'vision'].includes(step.kind) || !Number.isSafeInteger(policy.maxRepairs) || policy.maxRepairs < 0 || policy.maxRepairs > 3 || policy.minScore !== undefined && (!Number.isFinite(policy.minScore) || policy.minScore < 0 || policy.minScore > 100)) addError(`“${step.name}”的独立检查参数无效。`, undefined, step.id);

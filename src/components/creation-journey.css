@@ -170,3 +170,6 @@ html[data-app-theme="dark"] .creation-journey{--chat-user-bg:#2167ec;--chat-user
 .creation-journey .home-chat-assistant .creation-production{background:var(--chat-assistant-bg);border-color:var(--chat-assistant-border)}
 .creation-journey .home-chat-assistant .home-plan{background:var(--chat-assistant-bg);border-color:var(--chat-assistant-border)}
 .creation-production-stage{font-size:12px;font-weight:600;color:var(--ui-fg-secondary);margin-bottom:5px}
+.home-bead-entry{display:flex;align-items:center;gap:16px;padding:18px 22px;margin:16px 0;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface);box-shadow:0 3px 12px #0000000a;flex-shrink:0}
+.home-bead-entry>svg{color:var(--ui-accent);flex-shrink:0}.home-bead-entry>div{flex:1;min-width:0}.home-bead-entry p{font-size:14px;line-height:1.7;margin:6px 0 0;color:var(--ui-fg-secondary)}.home-bead-entry>button{flex-shrink:0}
+@media(max-width:700px){.home-bead-entry{flex-wrap:wrap;padding:16px}.home-bead-entry>button{margin-left:auto}}

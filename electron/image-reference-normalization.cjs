@@ -5,7 +5,7 @@ const MAX_PIXELS = 8000000;
 const MAX_SIDE = 8192;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 function invalid(message) { const error = new Error(message); error.code = 'INVALID_IMAGE_INPUT'; return error; }
-function dimensionsAllowed(size) { return Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0 && size.width <= MAX_SIDE && size.height <= MAX_SIDE && size.width * size.height <= MAX_PIXELS; }
+function dimensionsAllowed(size, maxPixels = MAX_PIXELS) { return Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0 && size.width <= MAX_SIDE && size.height <= MAX_SIDE && size.width * size.height <= maxPixels; }
 
 function candidate(bytes) {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return 'png';
@@ -33,21 +33,27 @@ function staticPng(bytes) {
   throw invalid('PNG缺少完整结束标记，请重新导入原图。');
 }
 
+function readRasterReferenceSize(bytes) {
+  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_BYTES) throw invalid('参考图为空或超过32MB，未进行本地修复。');
+  const kind = candidate(bytes);
+  if (kind === 'png') staticPng(bytes);
+  if (kind === 'webp' && bytes.toString('ascii', 12, 16) === 'VP8X' && bytes[20] & 2) throw invalid('动画WebP不能作为静态参考图自动修复，请先另存静态图片。');
+  try { return rasterDimensions(bytes); } catch { throw invalid('无法识别参考图实际尺寸，请重新导入原图。'); }
+}
+
 function createImageReferenceNormalizer({ nativeImage }) {
   return async function normalizeRasterReference(input) {
     if (!input || !Buffer.isBuffer(input.buffer) || !input.buffer.length || input.buffer.length > MAX_BYTES) throw invalid('参考图为空或超过32MB，未进行本地修复。');
-    const bytes = input.buffer, kind = candidate(bytes);
-    if (kind === 'png') staticPng(bytes);
-    if (kind === 'webp' && bytes.toString('ascii', 12, 16) === 'VP8X' && bytes[20] & 2) throw invalid('动画WebP不能作为静态参考图自动修复，请先另存静态图片。');
-    let expected;
-    try { expected = rasterDimensions(bytes); } catch { throw invalid('无法识别参考图实际尺寸，请重新导入原图。'); }
-    if (!dimensionsAllowed(expected)) throw invalid('参考图超过800万像素或单边8192像素，请先缩小图片。');
+    if (input.maxPixels !== undefined && ![MAX_PIXELS, 16000000].includes(input.maxPixels)) throw invalid('参考图本地处理像素上限无效。');
+    const maxPixels = input.maxPixels ?? MAX_PIXELS;
+    const bytes = input.buffer, expected = readRasterReferenceSize(bytes);
+    if (!dimensionsAllowed(expected, maxPixels)) throw invalid(`参考图超过${maxPixels === MAX_PIXELS ? '800万' : '1600万'}像素或单边8192像素，请先缩小图片。`);
     let image, actual, buffer;
     try {
       image = nativeImage.createFromBuffer(bytes);
       if (image.isEmpty()) throw Error('empty');
       actual = image.getSize();
-      if (!dimensionsAllowed(actual) || actual.width !== expected.width || actual.height !== expected.height) throw Error('dimensions');
+      if (!dimensionsAllowed(actual, maxPixels) || actual.width !== expected.width || actual.height !== expected.height) throw Error('dimensions');
       buffer = image.toPNG();
     } catch { throw invalid('参考图无法完整解码为静态图片，请重新导入或另存原图。'); }
     if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > MAX_BYTES) throw invalid('本地修复后的PNG为空或超过32MB，请先缩小原图。');
@@ -59,4 +65,4 @@ function createImageReferenceNormalizer({ nativeImage }) {
   };
 }
 
-module.exports = { createImageReferenceNormalizer };
+module.exports = { createImageReferenceNormalizer, readRasterReferenceSize };

@@ -1,0 +1,19 @@
+Pinned bead palette data
+
+Copyright (c) 2026 HansBug. MIT Data licence: pindou-color-data-MIT.txt
+Repository: https://github.com/HansBug/pindou-color-data
+Commit: 178dafbc9e77d3de556550dbd058270200129186
+
+Palette: mard-221-hansbug-178dafb
+Source: https://github.com/HansBug/pindou-color-data/blob/178dafbc9e77d3de556550dbd058270200129186/mard-221-alfonse-doudou/colors.json
+Source SHA-256: 556a7e0098c0055bde47f78d430cc7d36cb3788c235f0238e6a610f64a46b0bf
+Snapshot: hansbug-mard221-pinned.json
+社区参考屏幕色值，非品牌官方 RGB。固定 HansBug 版本 178dafbc（2026-05-19）；色号与 RGB 原样保留，不与其他来源混用。源数据将 H1 记为不透明 #FFFFFF，未标注透明材质，此版本按源字段保留，不凭色号推断实物材质。
+
+Palette: artkal-m221-hansbug-178dafb
+Source: https://github.com/HansBug/pindou-color-data/blob/178dafbc9e77d3de556550dbd058270200129186/artkal-m-221-official/colors.json
+Source SHA-256: 82a6f68b121741b2721ea0f7b1e2a5bcc03aa64c2d2e50d755d17a4a6700c17b
+Snapshot: hansbug-artkal-m221-pinned.json
+220 条数值 RGB 已与 Artkal 官方 2025 M 系列 PDF 逐项核对，全部一致；RGB 仍是屏幕参考。MH1 仅有官方 Transparent 标记、没有官方 RGB，白色显示占位来自上游整理，必须手动选择且仍按一颗珠统计。固定 HansBug 178dafbc（2026-05-19）。官方源：https://cdn.shopify.com/s/files/1/1323/8195/files/M_MINI_Beads_RGB_Color_Chart_2025.pdf?v=1760661747
+
+The Artkal official RGB PDF numeric entries were independently compared: 220/220 match. MH1 has no official numeric RGB and remains manual-only; its display placeholder is not an official colour measurement. MARD is community reference data, not manufacturer endorsement.

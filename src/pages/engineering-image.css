@@ -1,0 +1,3 @@
+.engineering-mode-heading{display:flex;align-items:center;justify-content:center;gap:8px;min-height:39px;color:var(--ui-fg);font-size:15px;font-weight:650}
+.engineering-image-summary{display:grid;gap:7px;min-width:0;padding:13px 14px;margin:0 0 14px;border:1px solid var(--ui-border);border-radius:11px;background:var(--ui-surface-subtle);box-shadow:var(--ui-shadow-sm);color:var(--ui-fg)}
+.engineering-image-summary>strong{font-size:14px;line-height:1.6;overflow-wrap:anywhere}.engineering-image-summary>p{margin:0;font-size:13px;line-height:1.8;color:var(--ui-fg-secondary)}.engineering-image-summary>small{font-size:12px;line-height:1.7;color:var(--ui-fg-muted)}.engineering-image-summary>.ig-link{justify-self:start;font-size:13px;line-height:1.7}

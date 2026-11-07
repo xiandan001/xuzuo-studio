@@ -135,7 +135,7 @@ export interface PageProps {
   onPromptApplied: (token: string) => void;
   onSavePrompt: (draft: PromptDraft, id?: string) => void;
   onManagePrompt?: (id: string, action: 'archive' | 'restore' | 'trash' | 'favorite' | 'unfavorite') => void;
-  onUsePrompt: (template: PromptTemplate, resolvedContent: string) => void;
+  onUsePrompt: (template: PromptTemplate, resolvedContent: string, targetProjectId?: string) => void;
   onMoveProject: (projectId: string, workspaceId: string, changes?: import('./lib/project-move').ProjectMoveChanges) => Promise<boolean>;
   taskProgress?: Record<string, number>;
   projects: Project[];
@@ -158,11 +158,12 @@ export interface PageProps {
   onCreateProject: (kind?: ProjectKind, options?: { onCreated?: (project: Project) => void; onCancelled?: (error?: string) => void; initial?: { name?: string; description?: string }; quick?: boolean }) => void;
   onUpdateProject: (id: string, changes: Partial<Project>) => void;
   onProjectDelivered?: (projectId: string, receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>;
-  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: ImageOutputOptions & { prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => void;
+  onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: ImageOutputOptions & { beadBaseRequestId?: string; engineeringEnabled?: boolean; engineeringReferenceId?: string; wallpaperTarget?: import('./wallpaper-types').WallpaperTarget; prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => boolean | void;
   onExport: (projectId?: string, draft?: { title: string; text: string }) => void;
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  beads?: import('./bead-types').BeadBridge;
   projectPurge?: import('./project-purge-types').ProjectPurgeBridge;
   automationPlanning?: import('./natural-automation-types').AutomationPlanningBridge;
   officePreview?: import('./office-preview-types').OfficePreviewBridge;

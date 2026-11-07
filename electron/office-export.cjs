@@ -32,9 +32,11 @@ function usedImageIds(document) {
   const positions = document.kind === 'word' ? document.blocks.filter(block => block.type === 'image') : document.kind === 'ppt' ? document.slides.filter(slide => ['image-right', 'image-full'].includes(slide.layout)) : [];
   return [...new Set(positions.map(item => item.imageId).filter(Boolean))];
 }
-function createOfficeExporter({ writeArtifact, readArtifact, loadModule = require, convertImage, renderOffice }) {
+function createOfficeExporter({ writeArtifact, readArtifact, loadModule = require, convertImage, renderOffice, fitWallpaper, fitEngineering }) {
   return async input => {
     if (!input || !['ppt', 'word', 'excel', 'image'].includes(input.kind)) throw new Error('请选择受支持的实际导出格式。');
+    if (input.engineeringReferenceId !== undefined) return require('./engineering-export.cjs').createEngineeringExporter({ writeArtifact, readArtifact, fitEngineering })(input);
+    if (input.wallpaperTarget !== undefined) return require('./wallpaper-export.cjs').createWallpaperExporter({ writeArtifact, readArtifact, fitWallpaper })(input);
     if (input.kind === 'image') {
       const content = parseContent(input.text ?? '', input.title), assets = input.assets ?? [];
       if (!Array.isArray(assets) || assets.length > 20) throw new Error('图像导出最多支持 20 份产物。');

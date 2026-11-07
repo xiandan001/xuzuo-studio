@@ -22,6 +22,8 @@ import { automationProjectAvailability } from '../lib/automation-project-availab
 import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 import { useRememberedString } from '../hooks/useRememberedString';
 import { HOME_CREATION_KINDS, homeCreationPlanningInput } from '../lib/home-creation';
+import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from '../lib/bead-intent';
+import { HomeBeadEntry } from './HomeBeadEntry';
 import './creation-journey.css';
 
 const kindIcons = { image: Image, word: FileText, ppt: Presentation, excel: FileSpreadsheet };
@@ -36,6 +38,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
   const inputKey = `xuzuo-home-chat-input-v1:${props.workspaceId}:${conversationId}`;
   const [input, setInput] = useState(() => { try { return localStorage.getItem(inputKey) || ''; } catch { return ''; } });
   const [folderPending, setFolderPending] = useState(false), [folderVersion, setFolderVersion] = useState(0);
+  const [beadRequest, setBeadRequest] = useState(() => [...chat.conversation.messages].reverse().find(message => message.role === 'user' && isBeadPatternRequest(message.text))?.text || '');
   const [referenceBusy, setReferenceBusy] = useState(false), importingReferences = useRef(false);
   const [costSyncVersion, setCostSyncVersion] = useState(0), [linkedJobRuns, setLinkedJobRuns] = useState<HomeLinkedJobRun[]>([]);
   const [checkedCostRules, setCheckedCostRules] = useState<string[]>([]), [costSyncIssue, setCostSyncIssue] = useState(false);
@@ -141,6 +144,12 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
       cancelFolder();
     }
     readGeneration.current++;
+    if (isBeadPatternRequest(text)) {
+      if (!append('user', 'status', text)) return;
+      setBeadRequest(text); setText(''); setLocalError('');
+      append('system', 'status', BEAD_WORKSPACE_NOTICE);
+      return;
+    }
     const command = homeChatCommand(text);
     if (command) {
       if (!append('user', 'status', text)) return; setText('');
@@ -262,6 +271,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
       {planning.active && <div className="home-chat-pending" role="status"><LoaderCircle size={17} className="spin" />正在整理目标和制作步骤…<button type="button" className="text-button" onClick={() => { void stopPlanning(); }}><Square size={13} />停止</button></div>}
     </div></div>}
     {(localError || chat.issue || session.store.issue || session.store.recovery.error) && <div className="home-chat-alert" role="alert">{localError || chat.issue || session.store.issue || session.store.recovery.error}{productionBusy && localError && <button type="button" className="text-button" onClick={() => props.navigate('activity', productionBusy.projectId)}>查看上一轮任务</button>}{chat.issue && <button type="button" className="text-button" onClick={() => { void chat.recoverAndStart().catch(cause => setLocalError(cause instanceof Error ? cause.message : '对话未能恢复。')); }}>导出原记录并新建对话</button>}</div>}
+    {beadRequest && <HomeBeadEntry props={props} projectId={session.project?.id} request={beadRequest} />}
     {folderPending && <p className="home-chat-pending" role="status">先选择这段对话的本地保存文件夹。需求会保留，取消不会调用 AI。</p>}
     {billingOwnerPurged && !targetPurged && <p className="creation-owner-note">原规划项目已永久删除；当前作品可继续制作，新的 AI 需求请新建对话。</p>}
     <HomeAutomationComposer props={props} session={session} blocked={blocked || !!targetPurged} input={input} onText={setText} textareaRef={textarea} onSend={send} kind={kind} onKind={value => { inputVersion.current++; setFormat(value); }} onReferences={() => { void addReferences(); }} referenceCount={session.project?.referenceFiles?.length} productionOpen={productionOpen} onProductionOpen={setProductionOpen} destination={destination} needsFolder={!session.project} cost={costs.entries.length ? summarizeCosts(costs.entries) : undefined} costPending={!!costs.pendingRuleIds.length || !!session.readiness.dispatchUnknown || costSyncIssue} onSyncCosts={() => { setCostSyncVersion(value => value + 1); void session.readiness.readDispatch(); }}>

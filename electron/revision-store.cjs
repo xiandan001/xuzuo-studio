@@ -6,7 +6,9 @@ const snapshotName = /^revision-([1-9]\d*)-([a-f0-9]{64})(?:-[a-f0-9-]+)?\.json$
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const sameRaw = (left, right) => Buffer.isBuffer(left) && Buffer.isBuffer(right) ? left.equals(right) : left === right;
 
-function createRevisionStore({ fileSystem: fs, location, prefix, validateRecord, maxBytes }) {
+function createRevisionStore({ fileSystem: fs, location, prefix, validateRecord, maxBytes, maxRevisions }) {
+  let retentionError;
+  if (maxRevisions !== undefined && (!Number.isSafeInteger(maxRevisions) || maxRevisions < 1)) throw Error('自动保存记录数量必须为正整数。');
   async function area(projectId, create = false) {
     const place = await location(projectId), directory = path.join(place.directory, `${prefix}-revisions-v1`);
     try { await fs.lstat(directory); } catch (error) { if (error.code === 'ENOENT' && !create) return { ...place, snapshotDirectory: directory, absent: true }; if (error.code !== 'ENOENT') throw error; }
@@ -117,9 +119,31 @@ function createRevisionStore({ fileSystem: fs, location, prefix, validateRecord,
     try { await location(projectId); if (!sameRaw(await readOriginal(), originalRaw)) throw new Error('编辑源已在另一处更新，未覆盖原稿。'); await fs.rename(temporary, place.filename); }
     catch (error) { await fs.unlink(temporary).catch(() => undefined); throw error; }
     await put(projectId, record, true);
+    if (maxRevisions !== undefined) {
+      try { await pruneCommitted(projectId); retentionError = undefined; }
+      catch (error) { retentionError = error.message || '自动保存记录暂未清理，当前版本已保存。'; }
+    }
     return record;
   }
+  async function pruneCommitted(projectId) {
+    const place = await area(projectId); if (place.absent) return;
+    const index = await indexAt(place, projectId);
+    const committed = index.entries.filter(entry => entry.committed).sort((a, b) => b.revision - a.revision), removed = committed.slice(maxRevisions);
+    if (!removed.length) return;
+    const obsolete = new Set(removed.map(entry => entry.fileName));
+    await replaceIndex(place, projectId, index, index.entries.filter(entry => !obsolete.has(entry.fileName)), index.highWater);
+    for (const entry of removed) {
+      const match = snapshotName.exec(entry.fileName), filename = path.resolve(place.snapshotDirectory, entry.fileName);
+      if (!match || Number(match[1]) !== entry.revision || match[2] !== entry.hash || path.dirname(filename) !== path.resolve(place.snapshotDirectory)) throw Error('自动保存记录路径无效，未清理文件。');
+      try {
+        await checkedDirectory(fs, place.snapshotDirectory);
+        const content = JSON.parse(await ordinary(filename));
+        if (content.projectId !== projectId || content.hash !== entry.hash || hash(JSON.stringify(content.record)) !== entry.hash) throw Error('自动保存记录校验不一致，未删除。');
+        await fs.unlink(filename);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
   async function raw(projectId, restore = false) { const place = await location(projectId); try { return await ordinary(place.filename, restore ? 100 * 1024 * 1024 : maxBytes, restore); } catch (error) { if (error.code === 'ENOENT') return undefined; throw new Error(`${prefix === 'workbook' ? '工作簿编辑源' : '编辑源文件'}无法安全读取，原文件已保留，请检查独立历史版本。`); } }
-  return { list, commit, raw, async nextRevision(projectId, current = 0) { const found = await inspect(projectId, null); return Math.max(found.highWater, current) + 1; } };
+  return { list, commit, raw, retentionStatus: () => ({ error: retentionError }), async nextRevision(projectId, current = 0) { const found = await inspect(projectId, null); return Math.max(found.highWater, current) + 1; } };
 }
 module.exports = { createRevisionStore };

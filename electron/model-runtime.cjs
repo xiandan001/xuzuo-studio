@@ -65,13 +65,15 @@ function referenceInputError(file, detail, context) {
   const name = typeof file?.name === 'string' ? file.name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 160) : '未命名图片';
   return failure('INVALID_IMAGE_INPUT', `参考图“${name}”${detail} 请重新导入或在工作台重新准备该参考图；本次未向模型服务发送请求。`, context);
 }
-async function loadImageMarkup(request, files, artifactStore, context, normalizeRasterReference) {
+async function loadImageMarkup(request, files, artifactStore, context, normalizeRasterReference, engineeringReferenceId) {
+  if (engineeringReferenceId !== undefined && (request.kind !== 'image-editing' || request.attachments[0]?.id !== engineeringReferenceId || files[0]?.id !== engineeringReferenceId || files[0]?.projectId !== request.projectId)) throw failure('INVALID_IMAGE_INPUT', '工程主原图不属于本次首个参考附件，未向模型发送请求。', context);
   if (request.kind !== 'image-editing') return undefined;
   const blocked = files.find(file => ['image/gif', 'image/svg+xml'].includes(file.mimeType));
   if (blocked) throw referenceInputError(blocked, '不是静态 PNG/JPEG/WebP 原图。请先将 SVG 转为 PNG 参考；本应用生成的 GIF 请使用“继续修改动画”准备参考帧。', context);
   let total = files.reduce((sum, file) => sum + file.buffer.length, 0);
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
+    const maxPixels = engineeringReferenceId !== undefined && engineeringReferenceId === file.id ? 16000000 : 8000000;
     if (!file.mimeType.startsWith('image/')) continue;
     let actual;
     try { actual = imageType(file.buffer); } catch { /* A known raster with a wrong extension or harmless trailer can be prepared locally below. */ }
@@ -80,7 +82,7 @@ async function loadImageMarkup(request, files, artifactStore, context, normalize
     if (typeof normalizeRasterReference !== 'function') throw referenceInputError(file, '真实格式与文件名或登记类型不一致，或图片不完整。请使用新版应用本地准备为规范 PNG。', context);
     progress(context, 'preparing', `正在本地免费准备参考图“${file.name}”，此步骤不调用模型。`);
     let prepared;
-    try { prepared = await normalizeRasterReference({ buffer: file.buffer, mimeType: file.mimeType }); }
+    try { prepared = await normalizeRasterReference({ buffer: file.buffer, mimeType: file.mimeType, ...(maxPixels === 16000000 ? { maxPixels } : {}) }); }
     catch (cause) { throw referenceInputError(file, cause?.code === 'INVALID_IMAGE_INPUT' && typeof cause.message === 'string' ? cause.message : '无法完整解码为静态图片。', context); }
     ensureActive(context);
     const buffer = prepared?.buffer instanceof Uint8Array ? Buffer.from(prepared.buffer) : undefined;
@@ -88,7 +90,7 @@ async function loadImageMarkup(request, files, artifactStore, context, normalize
     try {
       if (!buffer?.length || buffer.length > MAX_ATTACHMENT_BYTES || prepared.mimeType !== 'image/png' || imageType(buffer).mimeType !== 'image/png') throw Error('png');
       dimensions = rasterDimensions(buffer);
-      if (dimensions.width !== prepared.width || dimensions.height !== prepared.height || dimensions.width * dimensions.height > 8000000) throw Error('dimensions');
+      if (dimensions.width !== prepared.width || dimensions.height !== prepared.height || dimensions.width * dimensions.height > maxPixels) throw Error('dimensions');
     } catch { throw referenceInputError(file, '本地准备未返回完整且尺寸有效的 PNG。', context); }
     total += buffer.length - file.buffer.length;
     if (total > 80 * 1024 * 1024) throw referenceInputError(file, '准备后的参考图总量超过80MB，请减少参考数量或缩小图片。', context);
@@ -111,13 +113,13 @@ async function loadImageMarkup(request, files, artifactStore, context, normalize
 function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch, directory, getAvailableRuns, normalizeRasterReference }) {
   if (typeof credentialStore?.withSecret !== 'function' || typeof artifactStore?.read !== 'function' || typeof artifactStore?.write !== 'function' || typeof fetchImpl !== 'function') throw new TypeError('模型执行器缺少凭证库、文件库或网络接口。');
 
-  async function execute(input, { signal, onProgress } = {}) {
+  async function execute(input, { signal, onProgress, engineeringReferenceId } = {}) {
     const request = validateRequest(input);
     const context = createContext(signal, onProgress, request.kind === 'video-generation' ? VIDEO_TIMEOUT_MS : undefined);
     try {
       ensureActive(context);
       const files = request.kind === 'video-generation' && request.options.existingTaskId ? [] : await loadAttachments(request, artifactStore, context);
-      const markup = await loadImageMarkup(request, files, artifactStore, context, normalizeRasterReference);
+      const markup = await loadImageMarkup(request, files, artifactStore, context, normalizeRasterReference, engineeringReferenceId);
       const saveArtifact = async value => { ensureActive(context); return artifactStore.write({ runId: request.runId, projectId: request.projectId, ...value }); };
       return await credentialStore.withSecret(request.credentialId, request.connection.id, async secret => {
         context.secret = secret;

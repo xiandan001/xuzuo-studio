@@ -466,7 +466,9 @@ export default function App() {
     if (currentRuns.some(run => run.mode !== 'live' || run.status !== 'waiting-review')) { notify('项目正在执行或已暂停，请在当前任务中继续、等待或取消后再生成。', 'info'); return; }
     const replaceWaitingReviewRunId = currentRuns.find(run => run.mode === 'live' && run.status === 'waiting-review')?.id;
     const kind = parameters?.capability || (project.kind === 'image' ? action === 'AI 复核' ? 'vision' : action === 'AI 精修' ? 'image-editing' : 'image-generation' : 'text');
-    const id = `quick-${project.id}-${kind}-${action === '初次生成' ? 'create' : action === '重新生成' ? 'regenerate' : action === 'AI 精修' ? 'refine' : 'review'}${parameters?.documentImages ? `-illustrated-${parameters.documentImages.mode}` : ''}`;
+    if (parameters?.engineeringEnabled && (!parameters.engineeringReferenceId || parameters.attachmentIds?.[0] !== parameters.engineeringReferenceId || kind !== 'image-editing')) { notify('工程P图请先上传或选择至少一张静态原图，并明确修改要求。', 'error'); return; }
+    if (parameters?.beadBaseRequestId && (!/^[A-Za-z0-9-]{1,60}$/.test(parameters.beadBaseRequestId) || kind !== 'image-editing' || !parameters.attachmentIds?.length || parameters.wallpaperTarget || parameters.engineeringEnabled)) { notify('拼豆AI底图整理需要本次上传的静态原图，请重新选择底图。', 'error'); return; }
+    const id = parameters?.beadBaseRequestId ? `quick-${project.id}-bead-base` : `quick-${project.id}-${kind}-${action === '初次生成' ? 'create' : action === '重新生成' ? 'regenerate' : action === 'AI 精修' ? 'refine' : 'review'}${parameters?.documentImages ? `-illustrated-${parameters.documentImages.mode}` : ''}${parameters?.wallpaperTarget ? '-wallpaper' : ''}${parameters?.engineeringEnabled ? '-engineering' : ''}`;
     const existing = configuration.workflows.find(flow => flow.id === id);
     const models = configuration.models.filter(item => !item.demo && item.enabled && item.capabilities.includes(kind) && configuration.connections.some(connection => connection.id === item.connectionId && connection.enabled && !connection.demo));
     const model = studioModel(models, parameters?.modelConfigId || existing?.steps[0]?.modelConfigId);
@@ -477,10 +479,10 @@ export default function App() {
     const prompt = creationPrompt(project.kind, corePrompt, action === 'AI 复核' ? 'vision' : kind, { imageSize: parameters?.imageSize, imageBackground: parameters?.imageBackground, hasReferences: Boolean(parameters?.attachmentIds?.length) });
     const previousLimit = existing?.steps[0]?.maxOutputTokens;
     const maxOutputTokens = kind === 'text' && project.kind !== 'image' && action !== 'AI 复核' ? previousLimit && previousLimit !== 4096 ? previousLimit : CREATION_PROFILES[project.kind].outputTokens : previousLimit || 4096;
-    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, ...pickImageOutputOptions(parameters), count, imageSize: parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
-    const tail = quickWorkflowTail(project.kind, kind, action, parameters?.documentImages ? undefined : quickImageWorkflowTail(existing?.steps));
+    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, ...pickImageOutputOptions(parameters), ...(parameters?.beadBaseRequestId ? { beadBaseRequestId: parameters.beadBaseRequestId } : {}), count, imageSize: parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
+    const tail = parameters?.beadBaseRequestId ? [] : quickWorkflowTail(project.kind, kind, action, parameters?.documentImages ? undefined : quickImageWorkflowTail(existing?.steps));
     let steps: WorkflowStep[];
-    try { steps = quickImageWorkflowSteps(firstStep, tail); }
+    try { steps = quickImageWorkflowSteps(firstStep, tail, parameters?.wallpaperTarget, parameters?.engineeringReferenceId); }
     catch (cause) { notify(cause instanceof Error ? cause.message : '图片数量无效。', 'error'); return; }
     if (parameters?.documentImages) {
       if (!['word', 'ppt'].includes(project.kind) || kind !== 'text') { notify('图文生成仅用于 Word 和 PPT 正文。', 'error'); return; }
@@ -493,6 +495,7 @@ export default function App() {
     const previousImages = projectImageContent(workflowRunner.runs, projectId, workflowRunner.trashedArtifacts).images.slice(0, 1).map(item => item.id);
     const input = parameters?.input?.trim() || (['image-generation', 'image-editing'].includes(kind) ? '按当前提示词和参考文件执行。' : project.description || '按当前提示词执行。');
     setGenerationIntent({ token: crypto.randomUUID(), workflowId: id, projectId, input, replaceWaitingReviewRunId, attachmentIds: parameters?.attachmentIds !== undefined ? parameters.attachmentIds : ['image-editing', 'vision'].includes(kind) ? previousImages : [] });
+    return true;
   };
   const onUseStudioAction: PageProps['onUseStudioAction'] = (id, projectId, input, attachmentIds) => {
     const action = configuration.studioActions.find(item => item.id === id && item.enabled);
@@ -624,10 +627,11 @@ export default function App() {
     setActiveId(project.id); setView(project.kind === 'image' ? 'images' : 'documents');
     setPromptToApply({ token: crypto.randomUUID(), projectId: project.id, category: intent.template.category, content: intent.content, mode: intent.template.mode, imagePreset: intent.template.imagePreset });
   };
-  const onUsePrompt = (template: PromptTemplate, content: string) => {
+  const onUsePrompt: PageProps['onUsePrompt'] = (template, content, targetProjectId) => {
     if (!template.builtin) setCustomPrompts(items => items.map(item => item.id === template.id && item.workspaceId === workspaceId ? { ...item, lastUsedAt: new Date().toISOString() } : item));
     const kind = template.category === 'general' ? projects.find(item => item.id === activeId)?.kind || 'ppt' : template.category;
-    const project = projects.find(item => item.id === activeId && item.kind === kind) || projects.find(item => item.kind === kind);
+    const project = targetProjectId ? projectsRef.current.find(item => item.id === targetProjectId && item.workspaceId === workspaceIdRef.current && item.kind === kind && !item.trashedAt) : projects.find(item => item.id === activeId && item.kind === kind) || projects.find(item => item.kind === kind);
+    if (targetProjectId && !project) { notify('目标项目已不可用，请重新选择当前工作区中的项目。', 'error'); return; }
     if (project) { applyPrompt(project, { template, content }); notify('提示词已填入工作台，可继续修改；尚未生成或计费。'); }
     else { void beginProject(kind, { template, content }); }
   };

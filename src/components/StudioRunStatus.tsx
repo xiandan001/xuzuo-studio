@@ -9,6 +9,7 @@ import { runCostRecords, summarizeCosts } from '../lib/cost-display';
 import { WorkflowRunCard } from './WorkflowRunCard';
 import { openStudioTool } from '../lib/studio-commands';
 import { TaskRunActions } from './TaskRunActions';
+import { canResumeLocalImageExport } from '../lib/local-image-export';
 import './studio-run.css';
 
 export function StudioRunStatus({ props }: { props: PageProps }) {
@@ -28,6 +29,7 @@ export function StudioRunStatus({ props }: { props: PageProps }) {
       <div><strong>{run.retryStepOnly && run.status === 'complete' ? '单步重试已完成' : labels[run.status]}</strong><p>{run.mode === 'live' ? '本次调用花费 ' : '本次模拟费用 '}<CostTotal summary={cost} /></p></div>
       <div className="studio-run-status-actions">
         <TaskRunActions run={run} runner={props.workflowRunner} notify={props.notify} />
+        {canResumeLocalImageExport(run) && <button type="button" className="btn btn-primary" title="不调用模型，不新增API费用" onClick={() => props.workflowRunner.resume(run.id)}>继续本地适配</button>}
         {run.referenceIssue && <button type="button" className="btn btn-secondary" title="定位已有来源文件，不调用模型" onClick={() => { setExpanded(true); setReferenceRequest(previous => ({ runId: run.id, sequence: (previous?.sequence || 0) + 1 })); }}><FolderOpen size={16} />查看来源文件</button>}
         {run.status === 'waiting-review' && <button className="btn btn-primary" onClick={() => editableReview ? openStudioTool({ workspaceId: props.workspaceId, projectId: run.projectId, tool: 'delivery' }) : props.workflowRunner.resume(run.id)}><Check size={16} />{editableReview ? '编辑并交付' : '已检查，继续'}</button>}
         {run.status === 'running' && <><button className="btn btn-secondary" disabled={run.pauseRequested} onClick={() => props.workflowRunner.pause(run.id)}><CirclePause size={16} />暂停</button><button className="btn btn-ghost" onClick={() => props.workflowRunner.cancel(run.id)}><Square size={14} />取消</button></>}

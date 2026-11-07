@@ -14,6 +14,7 @@ const TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.gif': 'image/gif',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.mp4': 'video/mp4',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.zip': 'application/zip',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pdf': 'application/pdf',
 };
@@ -47,7 +48,7 @@ function metadata(entry, directory) {
 
 function validId(value) { return typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value); }
 
-function createArtifactStore({ directory, loadModule = require, convertImage, renderOffice, fileSystem = defaultFileSystem, workspaceStorage }) {
+function createArtifactStore({ directory, loadModule = require, convertImage, renderOffice, fitWallpaper, fitEngineering, fileSystem = defaultFileSystem, workspaceStorage }) {
   const fs = fileSystem;
   const root = path.resolve(directory);
   const filesDirectory = path.join(root, 'files');
@@ -207,9 +208,12 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
   }
 
   async function write(input) {
+    const active = () => { if (input?.signal?.aborted) throw Object.assign(new Error('文件保存已取消，原文件与费用保留。'), { name: 'AbortError' }); };
+    active();
     // Resolve pending workspace transitions before entering the artifact queue.
     const storageDirectory = workspaceStorage ? await workspaceStorage.projectDirectory(input?.projectId) : undefined;
     return serial(async () => {
+      active();
       if (!input || typeof input.mimeType !== 'string' || !Object.values(TYPES).includes(input.mimeType)) throw new Error('不支持这个产物文件类型。');
       if ((input.text !== undefined) === (input.buffer !== undefined)) throw new Error('写入产物时，请只提供文本或二进制内容中的一种。');
       if (input.text !== undefined && typeof input.text !== 'string') throw new Error('产物文本格式无效。');
@@ -226,6 +230,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       const entry = { id, name, mimeType: input.mimeType, bytes: buffer.length, sha256: createHash('sha256').update(buffer).digest('hex'), kind: kindFor(input.mimeType), createdAt: new Date().toISOString(), fileName: `${id}-${name}`, ...(input.runId ? { runId: String(input.runId) } : {}), ...(input.projectId ? { projectId: String(input.projectId) } : {}), ...(storageDirectory ? { storageDirectory } : {}), ...(provenance ? { provenance } : {}) };
       const location = await managedFor(entry);
       await location.ensureArea('files', true);
+      active();
       const filename = path.join(storageDirectory ? path.join(storageDirectory, 'files') : filesDirectory, entry.fileName);
       await fs.writeFile(filename, buffer, { flag: 'wx' });
       try { await persistManifest([...entries, entry]); }
@@ -338,7 +343,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
 
   async function exportOffice(input) {
     const { createOfficeExporter } = require('./office-export.cjs');
-    return createOfficeExporter({ writeArtifact: write, readArtifact: read, loadModule, convertImage, renderOffice })(input);
+    return createOfficeExporter({ writeArtifact: write, readArtifact: read, loadModule, convertImage, renderOffice, fitWallpaper, fitEngineering })(input);
   }
 
   function migrateProject(projectId, destination, { rebase = false } = {}) {

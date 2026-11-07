@@ -24,7 +24,7 @@ function sourceUses(run, remaining) {
     }
     if (run.snapshot.outputKind !== 'image' || step.kind !== 'export') continue;
     const ids = Array.isArray(step.contentSourceStepIds) ? step.contentSourceStepIds : step.contentSourceStepIds !== undefined ? [] : step.contentSourceStepId ? [step.contentSourceStepId] : before.filter(item => ['image-generation', 'image-editing'].includes(item.kind)).map(item => item.id);
-    for (const id of ids) add(id, 'delivery');
+    for (const id of ids) add(id, step.engineeringReferenceId !== undefined ? 'engineering' : step.wallpaperTarget !== undefined ? 'wallpaper' : 'delivery');
   }
   return uses;
 }
@@ -52,7 +52,9 @@ async function validateResumeImageSources(run, remaining, artifactStore) {
       try { file = await artifactStore.read(picture.id); } catch (cause) { await unreadableReference(artifactStore, step, picture, cause); }
       if (file.projectId !== run.projectId) throw referenceError(step, picture, 'foreign-project', '不属于当前项目。请返回工作台重新选择本项目的文件；如需跨项目使用，请从素材库重新加入。');
       const raster = purposes.has('illustration') || purposes.has('editing');
-      const allowed = raster ? RASTER : DELIVERABLE;
+      const allowed = purposes.has('wallpaper') || purposes.has('engineering') ? new Set(['image/png']) : raster ? RASTER : DELIVERABLE;
+      if (purposes.has('engineering') && file.mimeType !== 'image/png') throw referenceError(step, picture, 'unsupported-format', '不能作为工程适配的PNG编辑结果，原图与费用保留；未重新调用模型。');
+      if (purposes.has('wallpaper') && file.mimeType !== 'image/png') throw referenceError(step, picture, 'unsupported-format', '不能作为壁纸PNG原图，请重新选择静态PNG制作步骤；未重新调用模型。');
       if (!allowed.has(file.mimeType)) throw referenceError(step, picture, 'unsupported-format', purposes.has('editing') ? '不能直接作为精修原图，接口只接受 PNG/JPEG/WebP。本应用生成的动图请使用“继续修改动画”重新准备；外部 GIF 请先转换为静态图片。' : raster ? '不能作为 Office 配图，请返回文档工作台重新选择 PNG/JPEG/WebP 插图。' : '不是可交付的 PNG/JPEG/WebP/SVG/GIF 图像，请重新选择输出步骤或重新制作。');
       try { if (imageType(file.buffer).mimeType !== file.mimeType) throw Error('mime mismatch'); }
       catch { throw referenceError(step, picture, 'unsupported-format', '实际图片内容与登记格式不一致或已损坏。请恢复原图，或返回工作台重新导入并选择。'); }

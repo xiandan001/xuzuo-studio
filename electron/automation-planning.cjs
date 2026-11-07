@@ -144,6 +144,10 @@ function createAutomationPlanning({ directory, liveEngine, automationCenter, cre
     start(input) {
       if (closing) return Promise.reject(Error('应用正在退出，未开始新的AI规划。'));
       if (!input || !['id', 'workspaceId', 'projectId', 'modelConfigId', 'credentialId'].every(key => validId(input[key])) || typeof input.input !== 'string' || !input.input.trim() || input.input.length > 20000) return Promise.reject(Error('请提供有效的项目、文本模型、Key和不超过2万字的需求。'));
+      try {
+        const { BEAD_WORKSPACE_NOTICE } = require('./natural-automation-plan.runtime.cjs');
+        if (requestIssues(input.input).includes(BEAD_WORKSPACE_NOTICE)) return Promise.reject(Error(BEAD_WORKSPACE_NOTICE));
+      } catch (error) { return Promise.reject(error); }
       let options; try { options = contextOptions(input); } catch (error) { return Promise.reject(error); }
       const request = { ...Object.fromEntries(['id', 'workspaceId', 'projectId', 'modelConfigId', 'credentialId', 'input'].map(key => [key, input[key]])), ...options };
       const existing = pending.get(request.id); if (existing) return existing.fingerprint === hash(request) ? existing.task : Promise.reject(Error('同一规划编号仍在执行且输入已变化。'));

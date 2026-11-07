@@ -1,5 +1,10 @@
 const { parentPort, workerData } = require('node:worker_threads');
 async function run() {
+  if (workerData.task === 'bead') return require('./bead-pattern.runtime.cjs').createBeadPattern(workerData.input.raster, workerData.input.settings, workerData.input.palette);
+  if (workerData.task === 'bead-export') return require('./bead-exports.cjs').createBeadExport(workerData.input);
+  if (workerData.task === 'bead-bundle') return require('./bead-exports.cjs').createBeadBundle(workerData.input);
+  if (workerData.task === 'wallpaper') return require('./wallpaper-worker.cjs').fitWallpaperPng(workerData.input);
+  if (workerData.task === 'engineering') return require('./wallpaper-worker.cjs').fitEngineeringPng(workerData.input);
   if (workerData.task === 'office') return require('./office-render.cjs').renderOffice(workerData.input);
   if (workerData.task === 'image-alpha') {
     const { bitmap, width, height } = workerData.input;

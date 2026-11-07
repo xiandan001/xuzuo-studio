@@ -70,7 +70,26 @@ jobs:
         run: node scripts/measure-recovery-storage.mjs
       # Native decoding is verified without opening a window or calling a provider.
       - name: Verify native image reference normalization
-        run: node scripts/verify-image-reference-normalization.cjs
+        run: node scripts/verify-image-reference-normalization.cjs --engineering-large
+      - name: Verify exact wallpaper device matrix
+        run: node scripts/verify-wallpaper-matrix.mjs --full
+      - name: Verify native bead files and printed PDF
+        run: node scripts/verify-bead-native.cjs
+      - name: Retain native output verification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: xuzuo-native-output-evidence-${{ github.sha }}
+          archive: true
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            work/wallpaper-matrix-full.json
+            work/image-reference-normalization-native.json
+            work/bead-native-acceptance.json
+            work/bead-native-output/*.pdf
+            work/bead-native-output/*.png
       - name: Build Windows drive helper
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
@@ -103,7 +122,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.1.8/full-install-lifecycle.json
+            outputs/release-v2.2.0/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -113,8 +132,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.1.8/Xuzuo-Studio-Setup-2.1.8.exe
-            outputs/release-v2.1.8/Xuzuo-Studio-Setup-2.1.8.exe.blockmap
-            outputs/release-v2.1.8/Xuzuo-Studio-Setup-2.1.8.manifest.json
-            outputs/release-v2.1.8/latest.yml
-            outputs/release-v2.1.8/package-verification.json
+            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.exe
+            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.exe.blockmap
+            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.manifest.json
+            outputs/release-v2.2.0/latest.yml
+            outputs/release-v2.2.0/package-verification.json

@@ -73,7 +73,8 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
       if (invalidBudget || project.budgetCents != null && project.costCents + costCents > project.budgetCents || step.budgetCents != null && step.budgetCents < costCents) { if (!update(run.id, { status: 'paused' })) return; projectStatus(project.id, 'paused'); if (project.workspaceId === currentOptions.workspaceId) currentOptions.notify(invalidBudget ? '金额上限无效，流程已暂停；请填写非负金额或留空。' : '当前步骤预算不足，流程已暂停；已发生费用保留。', 'error'); continue; }
       const model = currentOptions.configuration.models.find(item => item.id === step.modelConfigId);
       const modelLabel = model ? `${model.name} · ${model.modelId} · 模拟` : '人工步骤';
-      const attempt: WorkflowAttempt = { id: crypto.randomUUID(), stepId: step.id, stepName: step.name, modelLabel, status: isModelStep(step) ? 'running' : step.kind === 'manual-review' ? 'waiting-review' : 'complete', costCents, input, prompt: resolvePrompt(step.prompt, run.variables).content, action: workflowStepAction(step, Boolean(run.retryStepOnly)), summary: step.kind === 'manual-review' ? '等待你检查上一步模拟结果，确认后继续。' : step.kind === 'export' ? '交付检查示意完成，可在项目中导出交互草稿；尚未生成真实 Office 文件。' : '正在模拟处理，不调用 API。' };
+      const action = workflowStepAction(step, Boolean(run.retryStepOnly));
+      const attempt: WorkflowAttempt = { id: crypto.randomUUID(), stepId: step.id, stepName: step.name, modelLabel, status: isModelStep(step) ? 'running' : step.kind === 'manual-review' ? 'waiting-review' : 'complete', costCents, input, prompt: resolvePrompt(step.prompt, run.variables).content, action, summary: step.kind === 'manual-review' ? '等待你检查上一步模拟结果，确认后继续。' : step.kind === 'export' ? '交付检查示意完成，可在项目中导出交互草稿；尚未生成真实 Office 文件。' : '正在模拟处理，不调用 API。' };
       if (!isModelStep(step)) {
         if (!update(run.id, { attempts: [...run.attempts, attempt], status: step.kind === 'manual-review' ? 'waiting-review' : 'running', stepIndex: step.kind === 'manual-review' ? run.stepIndex : run.stepIndex + 1 })) return;
         if (step.kind === 'manual-review') projectStatus(project.id, 'review');
@@ -83,7 +84,7 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
       const credentialValid = !step.credentialId || currentOptions.configuration.credentials.some(item => item.id === step.credentialId && item.enabled && item.connectionId === model?.connectionId);
       if (!model?.enabled || !connection?.enabled || !model.capabilities.includes(step.kind) || !credentialValid) { if (!update(run.id, { status: 'paused' })) return; projectStatus(project.id, 'paused'); if (project.workspaceId === currentOptions.workspaceId) currentOptions.notify('模型、连接或凭证配置已变化，流程暂停；请检查后继续。', 'error'); continue; }
       if (!update(run.id, { attempts: [...run.attempts, attempt] })) return;
-      const entry: LedgerEntry = { id: crypto.randomUUID(), projectId: project.id, projectName: project.name, action: attempt.action, model: `${run.workflowName} / ${step.name} / ${modelLabel}`, costCents, time: new Date().toLocaleString('zh-CN'), status: 'processing', quantity: 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id };
+      const entry: LedgerEntry = { id: crypto.randomUUID(), projectId: project.id, projectName: project.name, action, model: `${run.workflowName} / ${step.name} / ${modelLabel}`, costCents, time: new Date().toLocaleString('zh-CN'), status: 'processing', quantity: 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id };
       currentOptions.setLedger(items => [entry, ...items]);
       currentOptions.setProjects(items => items.map(item => item.id === project.id ? { ...item, costCents: item.costCents + costCents, status: 'processing' } : item));
     }

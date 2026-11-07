@@ -34,7 +34,7 @@ function latestBefore(run, index) {
 function validResults(run) {
   return run.snapshot.steps.filter(step => step.enabled && modelStep(step)).map(step => run.attempts.filter(attempt => attempt.stepId === step.id && attempt.status === 'complete').at(-1)).filter(Boolean);
 }
-function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined }) {
+function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, readBeadDocument, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined }) {
   const historyStore = createRunHistoryStore({ directory, fileSystem });
   const records = new Map();
   const controllers = new Map();
@@ -219,18 +219,21 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             const results = validResults(run).filter(item => run.snapshot.steps.findIndex(candidate => candidate.id === item.stepId) < run.stepIndex);
             const textResult = step.contentSourceStepId ? results.find(item => item.stepId === step.contentSourceStepId) : [...results].reverse().find(item => item.summary && run.snapshot.steps.some(source => source.id === item.stepId && !['planner', 'reviewer'].includes(source.role) && ['text', 'transcription'].includes(source.kind)));
             const assets = imageExportAssets(run, step, results) || (record.request.project.kind === 'image' && step.contentSourceStepId ? results.filter(item => item.stepId === step.contentSourceStepId).flatMap(item => item.artifacts || []) : [...results.flatMap(item => item.artifacts || []), ...context.attachments]).filter(item => item.kind === 'image');
+            if (step.wallpaperTarget !== undefined) attempt.sourceArtifactIds = assets.map(file => file.id);
+            if (step.engineeringReferenceId !== undefined) { attempt.sourceArtifactIds = assets.map(file => file.id); attempt.engineeringSource = await require('./engineering-export.cjs').readEngineeringSource(id => artifactStore.read(id), { projectId: run.projectId, referenceId: step.engineeringReferenceId, attachmentIds: record.request.attachmentIds }); }
             if (record.request.project.kind === 'image' && step.contentSourceStepId && !assets.length) throw Error('所选最终图片步骤没有可交付的实际图片，未改用历史初稿。');
             const body = record.request.project.kind === 'image' ? `图像交付：${record.request.project.name}。实际图片见本项目已生成产物；交付前核对尺寸、文字和使用范围。` : step.contentSourceStepId ? textResult?.summary || '' : step.inputSource === 'project' ? context.input : textResult?.summary || context.input;
             const media = results.flatMap(item => item.artifacts || []).filter(item => ['audio', 'video'].includes(item.kind));
             if (record.request.project.kind === 'image' && !assets.length) attempt.artifacts = [await artifactStore.write({ name: `${record.request.project.name}-实际结果.md`, mimeType: 'text/markdown', text: body, runId: run.id, projectId: run.projectId }), ...media];
-            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId }), ...media];
+            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId, ...(step.wallpaperTarget !== undefined ? { wallpaperTarget: step.wallpaperTarget, signal: controller.signal } : {}), ...(step.engineeringReferenceId !== undefined ? { engineeringReferenceId: step.engineeringReferenceId, engineeringSource: attempt.engineeringSource, attachmentIds: record.request.attachmentIds, signal: controller.signal } : {}) }), ...media];
             if (!attempt.artifacts.length) throw new Error('交付步骤没有产生文件。');
-            attempt.summary = `已生成 ${attempt.artifacts.length} 份实际交付文件，请打开检查。`;
+            attempt.summary = attempt.engineeringSource ? `已按主原图 ${attempt.engineeringSource.width} × ${attempt.engineeringSource.height} 保存 ${attempt.artifacts.length} 张工程图片，原图和付费编辑结果保留；请对照检查细节。` : step.wallpaperTarget ? `已在本地适配 ${attempt.artifacts.length} 张 ${step.wallpaperTarget.width} × ${step.wallpaperTarget.height} PNG壁纸，原图与调用费用保留。` : `已生成 ${attempt.artifacts.length} 份实际交付文件，请打开检查。`;
           } else {
             const model = record.request.models.find(item => item.id === step.modelConfigId);
             const connection = record.request.connections.find(item => item.id === model?.connectionId);
             const recoveringQuery = recovered && ledgerFor(record, attempt)?.queryOnly;
             const previousTask = (!recovered || recoveringQuery) && step.kind === 'video-generation' && connection.providerId === 'siliconflow' && !run.retryStepOnly ? run.attempts.filter(item => item.id !== attempt.id).findLast(item => item.stepId === step.id && item.providerRequestId && ['failed', 'cancelled'].includes(item.status) && !ledgerFor(record, item)?.queryOnly) : undefined;
+            const engineeringReferenceId = step.kind === 'image-editing' && typeof record.request.attachmentIds[0] === 'string' && run.snapshot.steps.some(item => item.enabled && item.kind === 'export' && item.engineeringReferenceId === record.request.attachmentIds[0] && item.contentSourceStepIds?.includes(step.id)) ? record.request.attachmentIds[0] : undefined;
             if (recoveringQuery && !previousTask) throw Object.assign(new Error('原视频计费记录缺失'), { publicMessage: '无法核对原视频任务的计费记录，未重新生成；请先检查原任务与费用。', requestStarted: false });
             const fx = await fxRates?.get(attempt.startedAt);
             const estimate = estimateCost(model, step, `${attempt.prompt}\n${context.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt, fx });
@@ -239,7 +242,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             const entry = recovered ? ledgerFor(record, attempt) : { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
             if (previousTask) { entry.queryOnly = true; entry.costState = 'not-incurred'; attempt.costState = 'not-incurred'; }
             if (!recovered) record.ledger.push(entry); mark(record); await persist();
-            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { maxOutputTokens: step.maxOutputTokens || 2048, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, onProgress: progress => {
+            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { maxOutputTokens: step.maxOutputTokens || 2048, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, ...(engineeringReferenceId ? { engineeringReferenceId } : {}), onProgress: progress => {
               if (attempt.status !== 'running') return;
               attempt.summary = progress.message || '模型正在处理。'; revision++; changedAt.set(run.id, revision);
               if (progress.providerRequestId && attempt.providerRequestId !== progress.providerRequestId) {
@@ -451,9 +454,22 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       mark(record);
       try { await persist(); } catch (error) { record.run = previous; mark(record); throw error; }
     },
-    async recordLocalExport({ projectId, workspaceId, name, kind, sourceRevision, artifacts, sourceArtifactIds = [] }) {
+    async recordLocalExport({ projectId, workspaceId, name, kind, sourceRevision, artifacts, sourceArtifactIds = [], beadExport, wallpaperExport }) {
       return mutateProject(projectId, async () => {
         await ready;
+        if (kind === 'image') {
+          if (!projectId || !workspaceId || typeof name !== 'string' || !name.trim() || name.length > 160 || !Array.isArray(artifacts) || !artifacts.length) throw Error('本地图像导出记录无效，已生成文件保留。');
+          const id = artifacts[0]?.runId;
+          const validated = await require('./local-image-proof.cjs').createLocalImageProof({ artifactStore, readBeadDocument }).validate({ projectId, runId: id, artifacts, beadExport, wallpaperExport });
+          if (records.has(id)) { if (JSON.stringify(records.get(id).run.localImageProof) !== JSON.stringify(validated.proof)) throw Error('本地导出编号已对应另一份内容，未覆盖已有任务。'); return structuredClone(records.get(id).run); }
+          const timestamp = now(), label = validated.proof.kind === 'bead' ? '本地拼豆' : '本地4K适配';
+          const step = { id: `${id}-export`, name: `保存${label}成品`, kind: 'export', prompt: '', inputSource: 'project', enabled: true, ...(validated.proof.kind === 'wallpaper-4k' ? { wallpaperTarget: validated.proof.wallpaperExport.target } : {}) };
+          const project = { id: projectId, workspaceId, name, kind: 'image', costCents: 0 }, workflow = { id, workspaceId, name: `${name} · ${label}`, outputKind: 'image', steps: [step], updatedAt: timestamp };
+          const run = { id, mode: 'live', workspaceId, projectId, workflowId: id, workflowName: workflow.name, snapshot: workflow, status: 'complete', stepIndex: 1, variables: {}, input: '', createdAt: timestamp, updatedAt: timestamp, sourceRevision: validated.sourceRevision, localImageProof: validated.proof, attempts: [{ id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: label, status: 'complete', costCents: 0, costState: 'not-incurred', summary: validated.summary, input: '', prompt: '', action: '本地导出', artifacts, sourceRevision: validated.sourceRevision }] };
+          records.set(id, { run, request: { project, workflow, connections: [], models: [], variables: {}, input: '', attachmentIds: [] }, ledger: [], legacyBaseCostCents: 0 }); mark(records.get(id));
+          try { await persist(); } catch (error) { records.delete(id); throw error; }
+          return structuredClone(run);
+        }
         if (!projectId || !workspaceId || !['ppt', 'word', 'excel'].includes(kind) || !Number.isSafeInteger(sourceRevision) || !Array.isArray(artifacts) || !artifacts.length || artifacts.some(artifact => artifact.projectId !== projectId)) throw new Error('编辑导出记录无效，文件仍保留在项目目录。');
         const id = artifacts[0].runId || randomUUID(), timestamp = now();
         if (records.has(id)) return structuredClone(records.get(id).run);
@@ -508,7 +524,11 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           const index = nextRun.snapshot.steps.findIndex(step => step.id === stepId && modelStep(step));
           if (index < 0) throw new Error('请选择可重试的模型步骤。');
           nextRun.stepIndex = index; nextRun.retryStepOnly = true;
-        } else if (!(['resume', 'continue'].includes(action) && ['paused', 'failed', 'interrupted'].includes(run.status))) throw new Error('当前状态不能执行这个操作。');
+        } else {
+          const current = nextRun.snapshot.steps[nextRun.stepIndex];
+          const cancelledLocalExport = run.status === 'cancelled' && !run.supersededByRunId && current?.kind === 'export' && (current.wallpaperTarget !== undefined || current.engineeringReferenceId !== undefined);
+          if (!(['resume', 'continue'].includes(action) && (['paused', 'failed', 'interrupted'].includes(run.status) || cancelledLocalExport))) throw new Error('当前状态不能执行这个操作。');
+        }
         if ([...records.values()].some(item => item !== record && item.run.projectId === run.projectId && ACTIVE.has(item.run.status))) throw new Error('项目已有其它真实任务。');
         nextRequest.workflow = nextRun.snapshot;
         const nextBaseline = project ? Math.max(record.legacyBaseCostCents || 0, project.costCents - projectLedgerCost(project.id)) : record.legacyBaseCostCents || 0;

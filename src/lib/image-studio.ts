@@ -6,13 +6,17 @@ import { effectiveImageOptions, readImageOutputOptions } from './image-output-op
 import type { ImageOutputOptions } from '../image-options-types';
 import { BUILTIN_IMAGE_USE_TEMPLATES, IMAGE_PRESETS, IMAGE_SIZES, imageUseTemplateSnapshot, useTemplateDraftError } from './image-use-templates';
 import type { ImageUseTemplateSnapshot } from './image-use-templates';
+import type { WallpaperTarget } from '../wallpaper-types';
+import { readWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
+import { engineeringImagePrompt } from './engineering-image';
 export { IMAGE_PRESETS, IMAGE_SIZES, PRESET_PROMPTS } from './image-use-templates';
 
 export type ImageMode = 'create' | 'refine';
 export type ImageBackground = 'auto' | 'opaque' | 'transparent';
 export const MAX_IMAGE_REFERENCES = 12;
 export function imageCreationDescription(prompt: string): string {
-  const marker = '\n\n【用户本次要求】\n', position = prompt.indexOf(marker);
+  const markers = ['\n\n【用户本次要求】\n', '\n\n【本次用户编辑要求】\n'];
+  const marker = markers.reduce((latest, candidate) => prompt.lastIndexOf(candidate) > prompt.lastIndexOf(latest) ? candidate : latest), position = prompt.lastIndexOf(marker);
   return (position >= 0 ? prompt.slice(position + marker.length) : prompt.split('\n\n【成品与交付要求】')[0]).trim();
 }
 export interface ImageReference { id: string; name: string; }
@@ -35,6 +39,8 @@ export interface ImageDraft {
   galleryBaseId?: string;
   imageOptions?: ImageOutputOptions;
   markupSourceId?: string;
+  wallpaperEnabled?: boolean;
+  wallpaperTarget?: WallpaperTarget;
 }
 
 export const imageDraftKey = (projectId: string) => `xuzuo-image-draft-v1-${projectId}`;
@@ -71,6 +77,8 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
       ...(readAnimationReference(value.animationReference, references) ? { animationReference: readAnimationReference(value.animationReference, references) } : {}),
       ...(value.referenceDrafts ? { referenceDrafts: { create: { references: readReferences(value.referenceDrafts.create?.references) }, refine: readReferenceDraft(value.referenceDrafts.refine) } } : {}),
       ...(value.imageOptions ? { imageOptions: readImageOutputOptions(value.imageOptions) } : {}),
+      ...(typeof value.wallpaperEnabled === 'boolean' ? { wallpaperEnabled: value.wallpaperEnabled } : value.preset === '壁纸' ? { wallpaperEnabled: true } : {}),
+      ...(readWallpaperTarget(value.wallpaperTarget) ? { wallpaperTarget: readWallpaperTarget(value.wallpaperTarget) } : {}),
       ...(typeof value.markupSourceId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.markupSourceId) ? { markupSourceId: value.markupSourceId } : {}),
       ...(typeof value.galleryBaseId === 'string' && references.length > 0 && references[0].id === value.galleryBaseId ? { galleryBaseId: value.galleryBaseId } : {}),
     };
@@ -114,12 +122,19 @@ export function importImageReferences(draft: ImageDraft, added: ImageReference[]
   return updateImageDraft(draft, { references, galleryBaseId });
 }
 
-export function imageArtifactTarget(runs: WorkflowRun[], projectId: string, artifact: ArtifactMetadata | undefined): { size?: string; background?: ImageBackground } {
+export function imageArtifactTarget(runs: WorkflowRun[], projectId: string, artifact: ArtifactMetadata | undefined): { size?: string; background?: ImageBackground; wallpaperTarget?: WallpaperTarget; engineeringReferenceId?: string } {
   if (!artifact || artifact.projectId && artifact.projectId !== projectId) return {};
   const recent = runs.filter(run => run.projectId === projectId && run.mode === 'live').slice().sort((a, b) => Number(b.id === artifact.runId) - Number(a.id === artifact.runId) || (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
   for (const run of recent) for (const attempt of run.attempts) {
     if (attempt.status !== 'complete' || !attempt.artifacts?.some(item => item.id === artifact.id)) continue;
-    const step = run.snapshot.steps.find(item => item.id === attempt.stepId && ['image-generation', 'image-editing'].includes(item.kind));
+    const owner = run.snapshot.steps.find(item => item.id === attempt.stepId);
+    if (owner?.kind === 'export' && owner.engineeringReferenceId && attempt.engineeringSource?.referenceId === owner.engineeringReferenceId && artifact.mimeType === 'image/png') {
+      const source = attempt.engineeringSource;
+      if (Number.isInteger(source.width) && Number.isInteger(source.height) && source.width >= 64 && source.height >= 64 && source.width <= 8192 && source.height <= 8192 && source.width * source.height <= 16000000) return { engineeringReferenceId: source.referenceId, size: `${source.width}x${source.height}`, background: 'auto' };
+    }
+    const wallpaperTarget = owner?.kind === 'export' ? readWallpaperTarget(owner.wallpaperTarget) : undefined;
+    if (wallpaperTarget && artifact.mimeType === 'image/png') return { wallpaperTarget, size: `${wallpaperTarget.width}x${wallpaperTarget.height}`, background: 'opaque' };
+    const step = owner && ['image-generation', 'image-editing'].includes(owner.kind) ? owner : undefined;
     if (step) return { ...(typeof step.imageSize === 'string' && /^(?:auto|\d{2,5}x\d{2,5})$/.test(step.imageSize) ? { size: step.imageSize } : {}), ...(['auto', 'opaque', 'transparent'].includes(step.imageBackground || '') ? { background: step.imageBackground as ImageBackground } : {}) };
   }
   return {};
@@ -133,25 +148,31 @@ export function imageReferenceIds(mode: ImageMode, references: ImageReference[],
 export const imageCapability = (mode: ImageMode, referenceIds: string[]) => mode === 'refine' || referenceIds.length ? 'image-editing' as const : 'image-generation' as const;
 
 export function selectImageUseTemplate(draft: ImageDraft, template: ImageUseTemplateSnapshot): ImageDraft {
-  return { ...draft, preset: template.id, presetSnapshot: imageUseTemplateSnapshot(template), size: template.size, background: template.background };
+  const wallpaper = template.id === '壁纸', engineering = template.id === '工程P图';
+  return { ...draft, preset: template.id, presetSnapshot: imageUseTemplateSnapshot(template), size: template.size, background: template.background, ...((wallpaper || draft.wallpaperEnabled !== undefined) ? { wallpaperEnabled: wallpaper } : {}), ...(engineering ? { galleryBaseId: undefined } : {}), ...((wallpaper || engineering) ? { imageOptions: { imageOutputFormat: 'png' as const, imageQuality: draft.imageOptions?.imageQuality || 'high' as const }, animationReference: undefined } : {}) };
 }
 export function imageDraftPurpose(draft: ImageDraft): ImageUseTemplateSnapshot | undefined {
   return BUILTIN_IMAGE_USE_TEMPLATES.find(item => item.id === draft.preset) || draft.presetSnapshot;
 }
 export function imageMissingReferences(draft: ImageDraft, selectedImageId?: string): number {
+  if (!draft.wallpaperEnabled && draft.preset === '工程P图') return Math.max(0, 1 - draft.references.length);
   const minimum = draft.mode === 'refine' ? 1 : imageDraftPurpose(draft)?.minReferences || 0;
   return Math.max(0, minimum - imageReferenceIds(draft.mode, draft.references, selectedImageId).length);
 }
 
 export function imageTaskRequest(draft: ImageDraft, selectedImageId?: string, modelId?: string) {
-  const animation = draft.mode === 'refine' ? draft.animationReference : undefined;
+  const target = draft.wallpaperEnabled ? readWallpaperTarget(draft.wallpaperTarget) : undefined;
+  const engineering = !draft.wallpaperEnabled && draft.preset === '工程P图';
+  const animation = draft.mode === 'refine' && !draft.wallpaperEnabled && !engineering ? draft.animationReference : undefined;
   const matchesAnimation = animation && animation.sourceArtifactId === selectedImageId && animation.referenceId === draft.references[0]?.id;
-  const attachmentIds = animation && !matchesAnimation ? [] : imageReferenceIds(draft.mode, draft.references, selectedImageId);
-  const capability = imageCapability(draft.mode, attachmentIds);
-  const prompt = draft.mode === 'refine' ? matchesAnimation ? `【原动画描述，仅供延续参考】\n${animation.prompt}\n\n【本次修改，优先执行】\n${draft.refinePrompt}` : draft.refinePrompt : draft.prompt;
+  const attachmentIds = engineering ? draft.references.map(reference => reference.id) : animation && !matchesAnimation ? [] : imageReferenceIds(draft.mode, draft.references, selectedImageId);
+  const capability = engineering ? 'image-editing' as const : imageCapability(draft.mode, attachmentIds);
+  const inputPrompt = draft.mode === 'refine' ? matchesAnimation ? `【原动画描述，仅供延续参考】\n${animation.prompt}\n\n【本次修改，优先执行】\n${draft.refinePrompt}` : draft.refinePrompt : draft.prompt;
+  const prompt = engineering && inputPrompt.trim() ? engineeringImagePrompt(inputPrompt) : target ? `【壁纸目标】\n${wallpaperPrompt(target)}\n\n【用户本次要求】\n${inputPrompt}` : inputPrompt;
+  const options: ImageOutputOptions = draft.wallpaperEnabled || engineering ? { imageOutputFormat: 'png', imageQuality: draft.imageOptions?.imageQuality, imageComplexity: draft.imageOptions?.imageComplexity, imageMarkupId: draft.imageOptions?.imageMarkupId } : draft.imageOptions || {};
   return {
     count: draft.quantity,
-    parameters: { prompt, input: '', attachmentIds, imageSize: draft.imageOptions?.imageOutputFormat === 'gif' ? 'auto' : draft.size, imageBackground: ['svg', 'gif'].includes(draft.imageOptions?.imageOutputFormat || '') ? 'auto' : imageDraftPurpose(draft)?.background === 'transparent' ? 'transparent' : draft.background, capability, modelConfigId: capability === 'image-editing' ? draft.editingModelId : draft.generationModelId, ...effectiveImageOptions(draft.imageOptions, modelId, capability) },
+    parameters: { prompt, input: '', attachmentIds, ...(target ? { wallpaperTarget: target } : {}), ...(engineering ? { engineeringEnabled: true, engineeringReferenceId: attachmentIds[0] } : {}), imageSize: target ? wallpaperGenerationSize(target, modelId) : engineering ? /^gpt-image-/i.test(modelId || '') ? 'auto' : draft.size === 'auto' ? '1024x1024' : draft.size : options.imageOutputFormat === 'gif' ? 'auto' : draft.size, imageBackground: draft.wallpaperEnabled ? 'opaque' as const : engineering ? 'auto' as const : ['svg', 'gif'].includes(options.imageOutputFormat || '') ? 'auto' : imageDraftPurpose(draft)?.background === 'transparent' ? 'transparent' : draft.background, capability, modelConfigId: capability === 'image-editing' ? draft.editingModelId : draft.generationModelId, ...effectiveImageOptions(options, modelId, capability) },
   };
 }
 

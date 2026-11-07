@@ -43,10 +43,13 @@ export interface GeneratedAnimationReferenceInput { projectId: string; sourceArt
 export interface GeneratedAnimationReference { sourceArtifactId: string; sourceSha256: string; prompt: string; imageOptions: ImageOutputOptions; mimeType: 'image/gif'; width: number; height: number; sourceBytes?: Uint8Array; reference?: ArtifactMetadata; }
 export interface SvgReferenceInput { projectId: string; sourceArtifactId: string; sourceSha256?: string; pngBytes?: Uint8Array; }
 export interface SvgReference { sourceArtifactId: string; sourceSha256: string; mimeType: 'image/svg+xml'; sourceWidth: number; sourceHeight: number; width: number; height: number; sourceBytes?: Uint8Array; reference?: ArtifactMetadata; }
+export interface Wallpaper4KExportInput { projectId: string; sourceArtifactId: string; orientation: 'portrait' | 'landscape'; fit: 'cover' | 'contain'; }
+export interface Wallpaper4KExportResult { artifact: ArtifactMetadata; target: import('./wallpaper-types').WallpaperTarget; locallyAdapted: true; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
   prepareGeneratedAnimationReference?: (input: GeneratedAnimationReferenceInput) => Promise<GeneratedAnimationReference>;
   prepareSvgReference?: (input: SvgReferenceInput) => Promise<SvgReference>;
+  exportWallpaper4K?: (input: Wallpaper4KExportInput) => Promise<Wallpaper4KExportResult>;
   saveImageMarkup?: (input: { projectId: string; sourceArtifactId: string; dataUrl: string }) => Promise<ArtifactMetadata>;
   startChecked?: (input: LiveStartRequest) => Promise<LiveCheckedStartResult>;
   lookupStart?: (input: LiveStartLookup) => Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }>;

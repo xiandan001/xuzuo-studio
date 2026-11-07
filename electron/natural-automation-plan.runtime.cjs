@@ -4,7 +4,7 @@ const factories = {
 "./natural-automation-plan": function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NATURAL_AUTOMATION_SCHEMA = void 0;
+exports.NATURAL_AUTOMATION_SCHEMA = exports.isBeadPatternRequest = exports.BEAD_WORKSPACE_NOTICE = void 0;
 exports.parseNaturalAutomationPlan = parseNaturalAutomationPlan;
 exports.naturalAutomationRequestIssues = naturalAutomationRequestIssues;
 exports.naturalAutomationPreparationNotes = naturalAutomationPreparationNotes;
@@ -16,6 +16,11 @@ const creation_quality_1 = require("./creation-quality");
 const creation_profiles_1 = require("./creation-profiles");
 const document_illustrations_1 = require("./document-illustrations");
 const prompt_variables_1 = require("./prompt-variables");
+const wallpaper_target_1 = require("./wallpaper-target");
+const bead_intent_1 = require("./bead-intent");
+var bead_intent_2 = require("./bead-intent");
+Object.defineProperty(exports, "BEAD_WORKSPACE_NOTICE", { enumerable: true, get: function () { return bead_intent_2.BEAD_WORKSPACE_NOTICE; } });
+Object.defineProperty(exports, "isBeadPatternRequest", { enumerable: true, get: function () { return bead_intent_2.isBeadPatternRequest; } });
 const capabilities = ['text', 'vision', 'image-generation', 'image-editing'];
 const labels = { text: '文字制作', vision: '图片检查', 'image-generation': '图片生成', 'image-editing': '图片精修' };
 const rootKeys = ['version', 'name', 'objective', 'outputKind', 'trigger', 'steps', 'illustrations', 'acceptance', 'constraints', 'maxRepairs', 'questions', 'unsupported'];
@@ -204,6 +209,8 @@ function naturalAutomationRequestIssues(input) {
     if (typeof input !== 'string')
         return ['请填写有效的文字需求。'];
     const clauses = positiveRequestClauses(input), issues = [];
+    if ((0, bead_intent_1.isBeadPatternRequest)(input))
+        issues.push(bead_intent_1.BEAD_WORKSPACE_NOTICE);
     if (clauses.some(requestsCalendarTrigger))
         issues.push(calendarMessage);
     const actionClauses = clauses.filter(value => !/(?:写|制作|生成|起草|编辑|设计).{0,18}(?:文案|草稿|模板|教程|说明|方案|脚本)/.test(value) || /(?:并|再|然后|同时|自动|直接).{0,5}(?:发送|发布|上传|执行|运行)/.test(value)).join('；').replace(/https?:\/\/[^\s<>"'，。；、！？]+/gi, '');
@@ -328,6 +335,12 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     if (!['word', 'ppt'].includes(project.kind) && plan.illustrations.mode !== 'none')
         throw Error('文档配图仅用于Word或PPT，请调整方案的配图设置。');
     const missing = new Set(), select = bindingResolver(configuration, bindings, missing);
+    const wallpaperText = [plan.objective, ...plan.steps.map(step => step.instruction), ...plan.constraints].join('\n');
+    const wallpaperRequested = project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
+    const wallpaperParsed = wallpaperRequested ? (0, wallpaper_target_1.parseWallpaperTarget)(wallpaperText) : undefined;
+    const wallpaperTarget = wallpaperParsed?.status === 'resolved' ? wallpaperParsed.target : undefined;
+    if (wallpaperRequested && !wallpaperTarget)
+        missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
     const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
     const base = (0, automation_recipes_1.automationRecipe)(project.kind, plan.name, { objective: plan.objective, deliverables: [project.kind], acceptance: plan.acceptance, constraints: plan.constraints, knownInputs: (project.referenceFiles || []).filter(usableReference).map(file => file.name) }, configuration, plan.maxRepairs);
     const planner = { ...base.steps[0], ...select('text') }, steps = [planner];
@@ -340,7 +353,8 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
             opinion();
         if (kind === 'image-editing' && !latestImage && !references.length)
             missing.add('图片精修：请为项目添加实际参考图片');
-        const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}`, inputSource: 'previous', enabled: true, count: 1, imageSize: 'auto', imageBackground: 'auto', ...select(kind), ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
+        const selection = select(kind), modelId = configuration.models.find(model => model.id === selection.modelConfigId)?.modelId;
+        const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${(0, wallpaper_target_1.wallpaperPrompt)(wallpaperTarget)}` : ''}`, inputSource: 'previous', enabled: true, count: 1, imageSize: wallpaperTarget ? (0, wallpaper_target_1.wallpaperGenerationSize)(wallpaperTarget, modelId) : 'auto', imageBackground: wallpaperRequested ? 'opaque' : 'auto', ...(wallpaperRequested ? { imageOutputFormat: 'png' } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
         if (kind === 'image-editing') {
             edits++;
             if (latestImage)
@@ -409,8 +423,15 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     const sourceId = project.kind === 'image' ? latestImage : lastText.id;
     const existingFinalReview = project.kind === 'image' && steps.at(-1)?.kind === 'vision' ? steps.pop() : undefined;
     const reviewer = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name, prompt: `本次检查要求：${existingFinalReview.prompt}\n\n${base.steps[2].prompt}` } : {}), ...select(project.kind === 'image' ? 'vision' : 'text'), qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
-    add(reviewer);
-    add({ ...base.steps[3], contentSourceStepId: sourceId });
+    const delivery = { ...base.steps[3], contentSourceStepId: sourceId, ...(wallpaperRequested ? { name: '适配设备壁纸', wallpaperTarget: wallpaperTarget || null, contentSourceStepId: undefined, contentSourceStepIds: [...imageOutputs] } : {}) };
+    if (wallpaperRequested) {
+        add(delivery);
+        add(reviewer);
+    }
+    else {
+        add(reviewer);
+        add(delivery);
+    }
     add(base.steps[4]);
     if (steps.length > 40)
         throw Error('本地展开后的流程超过40步，请减少步骤或配图数量。');
@@ -633,6 +654,387 @@ function resolvePrompt(content, values) {
     const missing = names.filter(name => !valueFor(name));
     const resolved = content.replace(variablePattern(), (placeholder, name) => valueFor(name.trim()) || placeholder);
     return { content: resolved, missing, complete: missing.length === 0 };
+}
+
+},
+"./wallpaper-target": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.wallpaperTargetIssue = wallpaperTargetIssue;
+exports.readWallpaperTarget = readWallpaperTarget;
+exports.searchWallpaperDevices = searchWallpaperDevices;
+exports.parseWallpaperTarget = parseWallpaperTarget;
+exports.wallpaperPrompt = wallpaperPrompt;
+exports.wallpaperGenerationSize = wallpaperGenerationSize;
+const wallpaper_devices_1 = require("../data/wallpaper-devices");
+const image_output_options_1 = require("./image-output-options");
+const MAX_PIXELS = 16_000_000;
+const deviceById = new Map(wallpaper_devices_1.WALLPAPER_DEVICES.map(device => [device.id, device]));
+const targetKeys = new Set(['width', 'height', 'fit', 'deviceId', 'label']);
+function wallpaperTargetIssue(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return '请先选择机型，或输入壁纸的宽×高像素。';
+    if (Object.keys(value).some(key => !targetKeys.has(key)))
+        return '壁纸尺寸设置包含无法识别的内容，请重新选择。';
+    const target = value;
+    if (!Object.hasOwn(value, 'width') || !Object.hasOwn(value, 'height') || !Number.isInteger(target.width) || !Number.isInteger(target.height) || target.width < 64 || target.height < 64 || target.width > 8192 || target.height > 8192)
+        return '宽和高都请输入 64–8192 的整数像素。';
+    if (target.width * target.height > MAX_PIXELS)
+        return '壁纸总像素不能超过 1600 万，请缩小宽或高。';
+    if (!Object.hasOwn(value, 'fit') || !['cover', 'contain'].includes(target.fit))
+        return '请选择填满画面或完整保留，不支持拉伸壁纸。';
+    if (target.label !== undefined && (typeof target.label !== 'string' || !target.label.trim() || target.label.length > 160 || /[\u0000-\u001f\u007f]/.test(target.label)))
+        return '壁纸名称无效，请重新选择设备或输入像素。';
+    if (target.deviceId !== undefined) {
+        if (typeof target.deviceId !== 'string')
+            return '机型信息无效，请重新选择。';
+        const device = deviceById.get(target.deviceId);
+        if (!device || !(target.width === device.width && target.height === device.height || target.width === device.height && target.height === device.width))
+            return '尺寸与所选机型不一致，请重新选择机型，或改为自定义像素。';
+    }
+}
+function readWallpaperTarget(value) {
+    if (wallpaperTargetIssue(value))
+        return;
+    const target = value;
+    return { width: target.width, height: target.height, fit: target.fit, ...(target.deviceId ? { deviceId: target.deviceId } : {}), ...(target.label ? { label: target.label.trim() } : {}) };
+}
+const normalize = (text) => text.normalize('NFKC').toLowerCase().replace(/\+/g, 'plus').replace(/英寸/g, ' ').replace(/[^a-z0-9\u3400-\u9fff.]/g, ' ');
+const compact = (text) => normalize(text).replace(/\s+/g, '');
+const deviceIndex = wallpaper_devices_1.WALLPAPER_DEVICES.map(device => ({ device, aliases: [...new Set(device.aliases.map(compact))] }));
+const usefulQuery = (query) => query.replace(/(?:帮我|给我|我想要?|请|生成|制作|一张|适合|我的|手机|壁纸|的)/g, ' ').replace(/\b(?:wallpaper|for|please|make|create|my|phone)\b/gi, ' ').trim();
+function searchWallpaperDevices(query) {
+    if (typeof query !== 'string' || query.length > 4096)
+        return [];
+    const key = compact(usefulQuery(query));
+    return deviceIndex.filter(item => !key || item.aliases.some(alias => alias.includes(key))).map(item => item.device);
+}
+function namedDevices(text) {
+    const source = normalize(text), positions = [];
+    let key = '';
+    for (let index = 0; index < source.length; index++)
+        if (!/\s/.test(source[index])) {
+            key += source[index];
+            positions.push(index);
+        }
+    const matches = [];
+    for (const { device, aliases } of deviceIndex)
+        for (const alias of aliases) {
+            let start = key.indexOf(alias);
+            while (start !== -1) {
+                const end = start + alias.length, left = source[positions[start] - 1] || '', right = source[positions[end - 1] + 1] || '';
+                const tail = source.slice(positions[end - 1] + 1);
+                if (!/[a-z0-9]/.test(left) && !/[a-z0-9]/.test(right) && !/^\s*(?:pro|max|ultra|plus|mini|air|fe|se|lite)(?=\s|$|[\u3400-\u9fff])/i.test(tail))
+                    matches.push({ start, end, device });
+                start = key.indexOf(alias, start + 1);
+            }
+        }
+    const specific = matches.filter(match => !matches.some(other => other.start <= match.start && other.end >= match.end && other.end - other.start > match.end - match.start));
+    const ids = new Set(specific.map(match => match.device.id));
+    return wallpaper_devices_1.WALLPAPER_DEVICES.filter(device => ids.has(device.id));
+}
+function ipadCandidates(text) {
+    const value = normalize(text), family = value.match(/ipad\s*(pro|air|mini)?\s*(\d+(?:\.\d+)?)?/);
+    if (!family || /(?:^|[^a-z])(?:m\d+|a\d+)/.test(value))
+        return [];
+    const prefix = compact(`iPad ${family[1] || ''}${family[2] || ''}`);
+    return deviceIndex.filter(item => item.device.category === 'tablet' && item.aliases.some(alias => alias.startsWith(prefix))).map(item => item.device);
+}
+function screenCandidates(devices, text) {
+    if (!devices.some(device => device.category === 'foldable'))
+        return devices;
+    const inner = /内屏|主屏|内外屏|\binner\b/i.test(text), cover = /外屏|副屏|\bcover\b/i.test(text);
+    if (inner === cover)
+        return devices;
+    return devices.filter(device => device.category !== 'foldable' || device.screen === (inner ? 'inner' : 'cover'));
+}
+function pixelPairs(text) {
+    const number = '([+-]?\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?)';
+    const patterns = [new RegExp(`${number}\\s*(?:[x×*]|乘以?|\\bby\\b)\\s*${number}`, 'gi'), new RegExp(`(?:宽(?:度)?|width)\\s*(?:为|是|[:：=])?\\s*${number}\\s*(?:像素|px)?\\s*[,，、;；]?\\s*(?:高(?:度)?|height)\\s*(?:为|是|[:：=])?\\s*${number}`, 'gi')];
+    const pairs = patterns.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ width: Number(match[1]), height: Number(match[2]), integer: /^\d+$/.test(match[1]) && /^\d+$/.test(match[2]), physical: /^\s*(?:毫米|英寸|mm\b|inches?\b)/i.test(text.slice((match.index || 0) + match[0].length)) })));
+    return [...new Map(pairs.map(pair => [`${pair.width}x${pair.height}:${pair.integer}:${pair.physical}`, pair])).values()];
+}
+function orientation(text) {
+    if (/横屏|横向|\blandscape\b/i.test(text))
+        return 'landscape';
+    if (/竖屏|纵向|\bportrait\b/i.test(text))
+        return 'portrait';
+}
+const fitFromText = (text) => /留边|不(?:要)?裁[剪切]|完整保留(?:画面|图片|图像)/.test(text.replace(/不(?:要)?留边/g, '')) ? 'contain' : 'cover';
+function orientTarget(target, text) {
+    const direction = orientation(text);
+    return direction === 'landscape' && target.width < target.height || direction === 'portrait' && target.width > target.height ? { ...target, width: target.height, height: target.width } : target;
+}
+function deviceTarget(device, text) { return orientTarget({ width: device.width, height: device.height, fit: fitFromText(text), deviceId: device.id, label: device.name }, text); }
+function ambiguous(candidates, message = '找到多个匹配，请选择具体机型或屏幕。') { return { status: 'ambiguous', candidates, message }; }
+function parseWallpaperTarget(text) {
+    if (typeof text !== 'string' || !text.trim())
+        return { status: 'unknown', message: '输入机型或像素即可，例如 iPhone 18 Pro、1170×2532。' };
+    if (text.length > 4096)
+        return { status: 'invalid', message: '描述过长，请只填写机型名称或宽×高像素。' };
+    if (/横屏|横向|\blandscape\b/i.test(text) && /竖屏|纵向|\bportrait\b/i.test(text))
+        return { status: 'invalid', message: '同时出现横屏和竖屏，请只保留本次需要的一个方向。' };
+    const input = text.normalize('NFKC'), pairs = pixelPairs(input), devices = screenCandidates(namedDevices(input), input);
+    if (!pairs.length && /\b(?:4k|uhd)\b/i.test(input)) {
+        const direction = orientation(input);
+        if (!direction)
+            return { status: 'unknown', message: '4K请选择竖屏 2160×3840 或横屏 3840×2160，也可直接输入像素尺寸。' };
+        return { status: 'resolved', target: { width: direction === 'portrait' ? 2160 : 3840, height: direction === 'portrait' ? 3840 : 2160, fit: fitFromText(input), label: direction === 'portrait' ? '4K竖屏' : '4K横屏' } };
+    }
+    if (pairs.length > 1)
+        return { status: 'invalid', message: '发现多组像素尺寸，请只保留本次壁纸的宽×高。' };
+    if (pairs.length) {
+        const pair = pairs[0];
+        if (pair.physical)
+            return { status: 'unknown', message: '毫米或英寸是物理尺寸，请选择机型或输入屏幕像素分辨率。' };
+        const selected = orientTarget({ width: pair.width, height: pair.height, fit: fitFromText(input) }, input), target = { ...selected, label: `自定义 ${selected.width}×${selected.height}` };
+        const issue = pair.integer ? wallpaperTargetIssue(target) : '像素尺寸请输入整数，不支持小数、负数或科学记数法。';
+        if (issue)
+            return { status: 'invalid', message: issue };
+        const device = devices.length === 1 ? devices[0] : undefined;
+        if (device && (device.width === target.width && device.height === target.height || device.height === target.width && device.width === target.height))
+            return { status: 'resolved', device, target: { ...target, deviceId: device.id, label: device.name } };
+        return { status: 'resolved', target };
+    }
+    if (devices.length > 1)
+        return ambiguous(devices);
+    if (devices.length === 1)
+        return { status: 'resolved', device: devices[0], target: deviceTarget(devices[0], input) };
+    const ipads = ipadCandidates(input);
+    if (ipads.length)
+        return ambiguous(ipads, 'iPad 的代际可能影响尺寸，请选择具体型号。');
+    if (/^(?:iphone|苹果(?:手机)?|三星|华为|小米|oppo|vivo|荣耀)$/i.test(usefulQuery(input).trim()))
+        return ambiguous(searchWallpaperDevices(input));
+    return { status: 'unknown', message: /英寸|毫米|\b(?:inch|inches|mm)\b|\b[248]k\b/i.test(input) ? '英寸、机身尺寸或 2K 等级不能确定像素，请选择机型或输入宽×高像素。' : '未找到明确机型，请从列表选择，或输入自定义像素，例如 1170×2532。' };
+}
+function wallpaperPrompt(target) {
+    const issue = wallpaperTargetIssue(target);
+    if (issue)
+        throw Error(issue);
+    return `创作完整的原创设备壁纸，最终成品尺寸为 ${target.width} × ${target.height} 像素，按该长宽比安排构图。主体与关键细节集中在画面中部，顶部为系统时钟留出适量干净空间；不要绘制手机边框、设备样机、时间、应用图标、系统界面、品牌商标或水印。${target.fit === 'contain' ? '完整保留主体和画面边缘，不通过拉伸改变主体比例。' : '画面边缘可以适当裁切，重要主体不要贴边。'}主题、色彩与风格按用户本次要求创作。`;
+}
+function wallpaperGenerationSize(target, modelId) {
+    const issue = wallpaperTargetIssue(target);
+    if (issue)
+        throw Error(issue);
+    if ((0, image_output_options_1.isModernImage)(modelId)) {
+        const ratio = Math.min(3, Math.max(1 / 3, target.width / target.height)), area = Math.min(3_686_400, Math.max(1_048_576, target.width * target.height));
+        let width = Math.min(3840, Math.floor(Math.sqrt(area * ratio) / 16) * 16), height = Math.min(3840, Math.floor(Math.sqrt(area / ratio) / 16) * 16);
+        while (width > height * 3)
+            width -= 16;
+        while (height > width * 3)
+            height -= 16;
+        return `${width}x${height}`;
+    }
+    if (modelId && !/^gpt-image-1(?:\.5)?(?:-mini)?$/.test(modelId))
+        return '1024x1024';
+    return target.width === target.height ? '1024x1024' : target.width > target.height ? '1536x1024' : '1024x1536';
+}
+
+},
+"./image-output-options": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.imageOutputFields = exports.RASTER_IMAGE_TYPES = exports.isModernImage = exports.isImage26 = void 0;
+exports.imageFormatModelDisabled = imageFormatModelDisabled;
+exports.imageFormatOptions = imageFormatOptions;
+exports.effectiveImageOptions = effectiveImageOptions;
+exports.imageOutputIssue = imageOutputIssue;
+exports.pickImageOutputOptions = pickImageOutputOptions;
+exports.readImageOutputOptions = readImageOutputOptions;
+const isImage26 = (id = '') => /^gpt-image-2\.6-(sunburst|flare)$/.test(id);
+exports.isImage26 = isImage26;
+const isModernImage = (id = '') => /^gpt-image-2\.[56]-(sunburst|flare)$/.test(id);
+exports.isModernImage = isModernImage;
+exports.RASTER_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+function imageFormatModelDisabled(format, modelId) {
+    return (format === 'svg' || format === 'gif') && !(0, exports.isImage26)(modelId);
+}
+function imageFormatOptions(modelId, capability) {
+    const special = (0, exports.isImage26)(modelId) && capability === 'image-generation';
+    const animation = (0, exports.isImage26)(modelId) && ['image-generation', 'image-editing'].includes(capability);
+    const reason = !(0, exports.isImage26)(modelId) ? '仅 GPT Image 2.6 Sunburst／Flare 支持' : '仅文字生成可用，精修及参考图生成不支持';
+    return [
+        { value: 'png', label: 'PNG 图片', description: '默认，支持透明背景' },
+        { value: 'jpeg', label: 'JPEG 图片', description: '文件较小，不支持透明背景' },
+        { value: 'webp', label: 'WebP 图片', description: '支持透明背景与压缩' },
+        { value: 'svg', label: 'SVG 矢量图 · 仅 2.6', disabled: !special, description: special ? '静态矢量，仅生成；费用含图像及作者模型' : reason },
+        { value: 'gif', label: 'GIF 动图 · 仅 2.6', disabled: !animation, description: animation ? '支持文字或静态参考图制作，账户需开通 GIF 预览权限' : !(0, exports.isImage26)(modelId) ? reason : '仅图片生成或编辑步骤可用' },
+    ];
+}
+function effectiveImageOptions(options = {}, modelId = '', capability = 'image-generation') {
+    const format = options.imageOutputFormat || 'png', result = {};
+    if (options.imageOutputFormat)
+        result.imageOutputFormat = options.imageOutputFormat;
+    if ((0, exports.isModernImage)(modelId) && options.imageQuality)
+        result.imageQuality = options.imageQuality;
+    if ((0, exports.isImage26)(modelId) && options.imageComplexity)
+        result.imageComplexity = options.imageComplexity;
+    if (format === 'gif') {
+        result.imageFrameCount = options.imageFrameCount ?? 9;
+        result.imageFrameDurationMs = Number.isFinite(options.imageFrameDurationMs) ? Math.round(options.imageFrameDurationMs / 10) * 10 : options.imageFrameDurationMs ?? 200;
+    }
+    if (['jpeg', 'webp'].includes(format) && options.imageCompression !== undefined)
+        result.imageCompression = options.imageCompression;
+    if (format === 'svg' && options.imageSvgModel) {
+        result.imageSvgModel = options.imageSvgModel;
+        if (options.imageSvgReasoningEffort)
+            result.imageSvgReasoningEffort = options.imageSvgReasoningEffort;
+    }
+    if (capability === 'image-editing' && (0, exports.isModernImage)(modelId) && options.imageMarkupId)
+        result.imageMarkupId = options.imageMarkupId;
+    return result;
+}
+function imageOutputIssue(options = {}, modelId = '', capability = 'image-generation', background = 'auto') {
+    const format = options.imageOutputFormat || 'png';
+    if (['svg', 'gif'].includes(format) && !(0, exports.isImage26)(modelId))
+        return 'SVG、GIF 仅支持 GPT Image 2.6 Sunburst／Flare，请选择对应模型或其他输出格式。';
+    if (format === 'svg' && capability !== 'image-generation')
+        return 'SVG 仅支持文字生成，精修和带参考图生成请改用 PNG、JPEG、WebP 或 GIF。';
+    if (format === 'gif' && !['image-generation', 'image-editing'].includes(capability))
+        return 'GIF 仅支持图片生成或编辑步骤。';
+    if (format === 'gif' && (!Number.isInteger(options.imageFrameCount ?? 9) || options.imageFrameCount < 2 || options.imageFrameCount > 16))
+        return 'GIF 帧数请输入 2–16 的整数。';
+    if (format === 'gif' && (!Number.isInteger(options.imageFrameDurationMs ?? 200) || (options.imageFrameDurationMs ?? 200) < 20 || (options.imageFrameDurationMs ?? 200) > 2000))
+        return '每帧时长请输入 20–2000 毫秒，按10毫秒取整。';
+    if (['jpeg', 'webp'].includes(format) && options.imageCompression !== undefined && (!Number.isInteger(options.imageCompression) || options.imageCompression < 0 || options.imageCompression > 100))
+        return '压缩质量请输入 0–100 的整数，或留空使用默认值。';
+    if (format === 'jpeg' && background === 'transparent')
+        return 'JPEG 不支持透明背景，请改用 PNG 或 WebP。';
+}
+exports.imageOutputFields = ['imageOutputFormat', 'imageQuality', 'imageComplexity', 'imageFrameCount', 'imageFrameDurationMs', 'imageCompression', 'imageMarkupId', 'imageSvgModel', 'imageSvgReasoningEffort'];
+function pickImageOutputOptions(value) { return value ? Object.fromEntries(exports.imageOutputFields.filter(key => value[key] !== undefined).map(key => [key, value[key]])) : {}; }
+function readImageOutputOptions(value) {
+    if (!value || typeof value !== 'object')
+        return {};
+    const input = value, result = {};
+    if (['png', 'jpeg', 'webp', 'svg', 'gif'].includes(input.imageOutputFormat || ''))
+        result.imageOutputFormat = input.imageOutputFormat;
+    if (['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(input.imageQuality || ''))
+        result.imageQuality = input.imageQuality;
+    if (['low', 'medium', 'high'].includes(input.imageComplexity || ''))
+        result.imageComplexity = input.imageComplexity;
+    for (const key of ['imageFrameCount', 'imageFrameDurationMs', 'imageCompression'])
+        if (Number.isFinite(input[key]))
+            result[key] = input[key];
+    if (typeof input.imageMarkupId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(input.imageMarkupId))
+        result.imageMarkupId = input.imageMarkupId;
+    if (typeof input.imageSvgModel === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(input.imageSvgModel))
+        result.imageSvgModel = input.imageSvgModel;
+    if (['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(input.imageSvgReasoningEffort || ''))
+        result.imageSvgReasoningEffort = input.imageSvgReasoningEffort;
+    return result;
+}
+
+},
+"../data/wallpaper-devices": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.brandLabel = exports.wallpaperBrandLabel = exports.WALLPAPER_DEVICES = void 0;
+// Official standard-rectangle screen pixels, normalized to portrait.
+exports.WALLPAPER_DEVICES = [
+    { "id": "iphone-18-pro", "brand": "apple", "name": "iPhone 18 Pro", "aliases": ["iPhone 18 Pro", "iPhone18Pro", "苹果 18 Pro", "苹果18Pro", "苹果 iPhone 18 Pro"], "category": "phone", "screen": "main", "width": 1206, "height": 2622, "sourceUrl": "https://www.apple.com/tw/iphone-18-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-18-pro-max", "brand": "apple", "name": "iPhone 18 Pro Max", "aliases": ["iPhone 18 Pro Max", "iPhone18ProMax", "苹果 18 Pro Max", "苹果18ProMax", "苹果 iPhone 18 Pro Max"], "category": "phone", "screen": "main", "width": 1320, "height": 2868, "sourceUrl": "https://www.apple.com/tw/iphone-18-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-17", "brand": "apple", "name": "iPhone 17", "aliases": ["iPhone 17", "iPhone17", "苹果 17", "苹果17", "苹果 iPhone 17"], "category": "phone", "screen": "main", "width": 1206, "height": 2622, "sourceUrl": "https://support.apple.com/zh-cn/125089", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-17-pro", "brand": "apple", "name": "iPhone 17 Pro", "aliases": ["iPhone 17 Pro", "iPhone17Pro", "苹果 17 Pro", "苹果17Pro", "苹果 iPhone 17 Pro"], "category": "phone", "screen": "main", "width": 1206, "height": 2622, "sourceUrl": "https://support.apple.com/en-us/125090", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-17-pro-max", "brand": "apple", "name": "iPhone 17 Pro Max", "aliases": ["iPhone 17 Pro Max", "iPhone17ProMax", "苹果 17 Pro Max", "苹果17ProMax", "苹果 iPhone 17 Pro Max"], "category": "phone", "screen": "main", "width": 1320, "height": 2868, "sourceUrl": "https://support.apple.com/zh-cn/125091", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-air", "brand": "apple", "name": "iPhone Air", "aliases": ["iPhone Air", "iPhoneAir", "苹果 Air", "苹果Air", "苹果 iPhone Air"], "category": "phone", "screen": "main", "width": 1260, "height": 2736, "sourceUrl": "https://www.apple.com/tw/iphone-air/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-17e", "brand": "apple", "name": "iPhone 17e", "aliases": ["iPhone 17e", "iPhone17e", "苹果 17e", "苹果17e", "苹果 iPhone 17e"], "category": "phone", "screen": "main", "width": 1170, "height": 2532, "sourceUrl": "https://support.apple.com/zh-cn/126470", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-16", "brand": "apple", "name": "iPhone 16", "aliases": ["iPhone 16", "iPhone16", "苹果 16", "苹果16", "苹果 iPhone 16"], "category": "phone", "screen": "main", "width": 1179, "height": 2556, "sourceUrl": "https://support.apple.com/zh-hk/121029", "verifiedAt": "2026-11-07" },
+    { "id": "iphone-16-plus", "brand": "apple", "name": "iPhone 16 Plus", "aliases": ["iPhone 16 Plus", "iPhone16Plus", "苹果 16 Plus", "苹果16Plus", "苹果 iPhone 16 Plus"], "category": "phone", "screen": "main", "width": 1290, "height": 2796, "sourceUrl": "https://support.apple.com/zh-cn/121030", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-pro-11-m5", "brand": "apple", "name": "iPad Pro 11 英寸（M5）", "aliases": ["iPad Pro 11 英寸（M5）", "iPadPro11英寸（M5）", "苹果 iPad Pro 11 英寸（M5）", "iPad Pro 11 M5"], "category": "tablet", "screen": "main", "width": 1668, "height": 2420, "sourceUrl": "https://www.apple.com/tw/ipad-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-pro-13-m5", "brand": "apple", "name": "iPad Pro 13 英寸（M5）", "aliases": ["iPad Pro 13 英寸（M5）", "iPadPro13英寸（M5）", "苹果 iPad Pro 13 英寸（M5）", "iPad Pro 13 M5"], "category": "tablet", "screen": "main", "width": 2064, "height": 2752, "sourceUrl": "https://www.apple.com/tw/ipad-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-air-11-m4", "brand": "apple", "name": "iPad Air 11 英寸（M4）", "aliases": ["iPad Air 11 英寸（M4）", "iPadAir11英寸（M4）", "苹果 iPad Air 11 英寸（M4）", "iPad Air 11 M4"], "category": "tablet", "screen": "main", "width": 1640, "height": 2360, "sourceUrl": "https://www.apple.com/tw/ipad-air/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-air-13-m4", "brand": "apple", "name": "iPad Air 13 英寸（M4）", "aliases": ["iPad Air 13 英寸（M4）", "iPadAir13英寸（M4）", "苹果 iPad Air 13 英寸（M4）", "iPad Air 13 M4"], "category": "tablet", "screen": "main", "width": 2048, "height": 2732, "sourceUrl": "https://www.apple.com/tw/ipad-air/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-mini-a20-pro", "brand": "apple", "name": "iPad mini 8.5 英寸（A20 Pro）", "aliases": ["iPad mini 8.5 英寸（A20 Pro）", "iPadmini8.5英寸（A20Pro）", "苹果 iPad mini 8.5 英寸（A20 Pro）", "iPad mini 8.5 A20 Pro", "iPad mini A20 Pro"], "category": "tablet", "screen": "main", "width": 1512, "height": 2316, "sourceUrl": "https://www.apple.com/tw/ipad-mini/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-mini-a17-pro", "brand": "apple", "name": "iPad mini 8.3 英寸（A17 Pro）", "aliases": ["iPad mini 8.3 英寸（A17 Pro）", "iPadmini8.3英寸（A17Pro）", "苹果 iPad mini 8.3 英寸（A17 Pro）", "iPad mini 8.3 A17 Pro", "iPad mini A17 Pro"], "category": "tablet", "screen": "main", "width": 1488, "height": 2266, "sourceUrl": "https://support.apple.com/zh-cn/121456", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-11-a16", "brand": "apple", "name": "iPad 11 英寸（A16）", "aliases": ["iPad 11 英寸（A16）", "iPad11英寸（A16）", "苹果 iPad 11 英寸（A16）", "iPad 11 A16"], "category": "tablet", "screen": "main", "width": 1640, "height": 2360, "sourceUrl": "https://www.apple.com/tw/ipad-11/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "ipad-pro-11-m2", "brand": "apple", "name": "iPad Pro 11 英寸（M2，第4代）", "aliases": ["iPad Pro 11 英寸（M2，第4代）", "iPadPro11英寸（M2，第4代）", "苹果 iPad Pro 11 英寸（M2，第4代）", "iPad Pro 11 M2"], "category": "tablet", "screen": "main", "width": 1668, "height": 2388, "sourceUrl": "https://support.apple.com/en-us/111842", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-s26", "brand": "samsung", "name": "Samsung Galaxy S26", "aliases": ["Samsung Galaxy S26", "SamsungGalaxyS26", "三星 S26", "三星S26", "三星 Samsung Galaxy S26", "S26"], "category": "phone", "screen": "main", "width": 1080, "height": 2340, "sourceUrl": "https://www.samsung.com/de/support/mobile-devices/vergleich-galaxy-s26-ultra-vs-galaxy-s26plus-vs-galaxy-s26/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-s26-plus", "brand": "samsung", "name": "Samsung Galaxy S26+", "aliases": ["Samsung Galaxy S26+", "SamsungGalaxyS26+", "三星 S26+", "三星S26+", "三星 Samsung Galaxy S26+", "S26+"], "category": "phone", "screen": "main", "width": 1440, "height": 3120, "sourceUrl": "https://www.samsung.com/de/support/mobile-devices/vergleich-galaxy-s26-ultra-vs-galaxy-s26plus-vs-galaxy-s26/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-s26-ultra", "brand": "samsung", "name": "Samsung Galaxy S26 Ultra", "aliases": ["Samsung Galaxy S26 Ultra", "SamsungGalaxyS26Ultra", "三星 S26 Ultra", "三星S26Ultra", "三星 Samsung Galaxy S26 Ultra", "S26 Ultra"], "category": "phone", "screen": "main", "width": 1440, "height": 3120, "sourceUrl": "https://www.samsung.com/de/support/mobile-devices/vergleich-galaxy-s26-ultra-vs-galaxy-s26plus-vs-galaxy-s26/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-s25", "brand": "samsung", "name": "Samsung Galaxy S25", "aliases": ["Samsung Galaxy S25", "SamsungGalaxyS25", "三星 S25", "三星S25", "三星 Samsung Galaxy S25", "S25"], "category": "phone", "screen": "main", "width": 1080, "height": 2340, "sourceUrl": "https://www.samsung.com/my/smartphones/galaxy-s25/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-z-fold7-inner", "brand": "samsung", "name": "Samsung Galaxy Z Fold7 内屏", "aliases": ["Samsung Galaxy Z Fold7 内屏", "SamsungGalaxyZFold7内屏", "三星 Z Fold7 内屏", "三星ZFold7内屏", "三星 Samsung Galaxy Z Fold7 内屏", "Z Fold7 内屏", "Samsung Galaxy Z Fold7", "Samsung Galaxy Z Fold7内屏", "Galaxy Z Fold7", "Galaxy Z Fold7内屏", "三星Z Fold7", "三星Z Fold7内屏", "三星Fold7", "三星Fold7内屏"], "category": "foldable", "screen": "inner", "width": 1968, "height": 2184, "sourceUrl": "https://www.samsung.com/us/smartphones/galaxy-z/galaxy-z-fold7-jetblack-256gb-sm-f966uzkavzw/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-z-fold7-cover", "brand": "samsung", "name": "Samsung Galaxy Z Fold7 外屏", "aliases": ["Samsung Galaxy Z Fold7 外屏", "SamsungGalaxyZFold7外屏", "三星 Z Fold7 外屏", "三星ZFold7外屏", "三星 Samsung Galaxy Z Fold7 外屏", "Z Fold7 外屏", "Samsung Galaxy Z Fold7", "Samsung Galaxy Z Fold7外屏", "Galaxy Z Fold7", "Galaxy Z Fold7外屏", "三星Z Fold7", "三星Z Fold7外屏", "三星Fold7", "三星Fold7外屏"], "category": "foldable", "screen": "cover", "width": 1080, "height": 2520, "sourceUrl": "https://www.samsung.com/us/smartphones/galaxy-z/galaxy-z-fold7-jetblack-256gb-sm-f966uzkavzw/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-z-flip7-inner", "brand": "samsung", "name": "Samsung Galaxy Z Flip7 内屏", "aliases": ["Samsung Galaxy Z Flip7 内屏", "SamsungGalaxyZFlip7内屏", "三星 Z Flip7 内屏", "三星ZFlip7内屏", "三星 Samsung Galaxy Z Flip7 内屏", "Z Flip7 内屏", "Samsung Galaxy Z Flip7", "Samsung Galaxy Z Flip7内屏", "Galaxy Z Flip7", "Galaxy Z Flip7内屏", "三星Z Flip7", "三星Z Flip7内屏", "三星Flip7", "三星Flip7内屏"], "category": "foldable", "screen": "inner", "width": 1080, "height": 2520, "sourceUrl": "https://www.samsung.com/us/smartphones/galaxy-z/galaxy-z-flip7-jetblack-512gb-sm-f766uzkexag/", "verifiedAt": "2026-11-07" },
+    { "id": "galaxy-z-flip7-cover", "brand": "samsung", "name": "Samsung Galaxy Z Flip7 外屏", "aliases": ["Samsung Galaxy Z Flip7 外屏", "SamsungGalaxyZFlip7外屏", "三星 Z Flip7 外屏", "三星ZFlip7外屏", "三星 Samsung Galaxy Z Flip7 外屏", "Z Flip7 外屏", "Samsung Galaxy Z Flip7", "Samsung Galaxy Z Flip7外屏", "Galaxy Z Flip7", "Galaxy Z Flip7外屏", "三星Z Flip7", "三星Z Flip7外屏", "三星Flip7", "三星Flip7外屏"], "category": "foldable", "screen": "cover", "width": 948, "height": 1048, "sourceUrl": "https://www.samsung.com/us/smartphones/galaxy-z/galaxy-z-flip7-jetblack-512gb-sm-f766uzkexag/", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-18-pro-max", "brand": "xiaomi", "name": "Xiaomi 18 Pro Max", "aliases": ["Xiaomi 18 Pro Max", "Xiaomi18ProMax", "小米 18 Pro Max", "小米18ProMax", "小米 Xiaomi 18 Pro Max"], "category": "phone", "screen": "main", "width": 1208, "height": 2624, "sourceUrl": "https://m.mi.com/commodity/detail/25526", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-17", "brand": "xiaomi", "name": "Xiaomi 17", "aliases": ["Xiaomi 17", "Xiaomi17", "小米 17", "小米17", "小米 Xiaomi 17"], "category": "phone", "screen": "main", "width": 1220, "height": 2656, "sourceUrl": "https://m.mi.com/commodity/detail/21931", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-17-pro", "brand": "xiaomi", "name": "Xiaomi 17 Pro", "aliases": ["Xiaomi 17 Pro", "Xiaomi17Pro", "小米 17 Pro", "小米17Pro", "小米 Xiaomi 17 Pro"], "category": "phone", "screen": "main", "width": 1220, "height": 2656, "sourceUrl": "https://m.mi.com/commodity/detail/21932", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-17-pro-max", "brand": "xiaomi", "name": "Xiaomi 17 Pro Max", "aliases": ["Xiaomi 17 Pro Max", "Xiaomi17ProMax", "小米 17 Pro Max", "小米17ProMax", "小米 Xiaomi 17 Pro Max"], "category": "phone", "screen": "main", "width": 1200, "height": 2608, "sourceUrl": "https://www.mi.com/prod/xiaomi-17-pro-max", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-17-ultra", "brand": "xiaomi", "name": "Xiaomi 17 Ultra", "aliases": ["Xiaomi 17 Ultra", "Xiaomi17Ultra", "小米 17 Ultra", "小米17Ultra", "小米 Xiaomi 17 Ultra"], "category": "phone", "screen": "main", "width": 1200, "height": 2608, "sourceUrl": "https://www.mi.com/global/product/xiaomi-17-ultra/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "xiaomi-15-pro", "brand": "xiaomi", "name": "Xiaomi 15 Pro", "aliases": ["Xiaomi 15 Pro", "Xiaomi15Pro", "小米 15 Pro", "小米15Pro", "小米 Xiaomi 15 Pro"], "category": "phone", "screen": "main", "width": 1440, "height": 3200, "sourceUrl": "https://www.mi.com/prod/xiaomi-15-pro", "verifiedAt": "2026-11-07" },
+    { "id": "mate-90", "brand": "huawei", "name": "HUAWEI Mate 90", "aliases": ["HUAWEI Mate 90", "HUAWEIMate90", "华为 Mate 90", "华为Mate90", "华为 HUAWEI Mate 90", "Mate 90"], "category": "phone", "screen": "main", "width": 1280, "height": 2832, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate90/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "mate-90-pro", "brand": "huawei", "name": "HUAWEI Mate 90 Pro", "aliases": ["HUAWEI Mate 90 Pro", "HUAWEIMate90Pro", "华为 Mate 90 Pro", "华为Mate90Pro", "华为 HUAWEI Mate 90 Pro", "Mate 90 Pro"], "category": "phone", "screen": "main", "width": 1280, "height": 2832, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate90-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "mate-90-pro-max", "brand": "huawei", "name": "HUAWEI Mate 90 Pro Max", "aliases": ["HUAWEI Mate 90 Pro Max", "HUAWEIMate90ProMax", "华为 Mate 90 Pro Max", "华为Mate90ProMax", "华为 HUAWEI Mate 90 Pro Max", "Mate 90 Pro Max"], "category": "phone", "screen": "main", "width": 1320, "height": 2848, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate90-pro-max/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "mate-80", "brand": "huawei", "name": "HUAWEI Mate 80", "aliases": ["HUAWEI Mate 80", "HUAWEIMate80", "华为 Mate 80", "华为Mate80", "华为 HUAWEI Mate 80", "Mate 80"], "category": "phone", "screen": "main", "width": 1280, "height": 2832, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate80/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "pura-90", "brand": "huawei", "name": "HUAWEI Pura 90", "aliases": ["HUAWEI Pura 90", "HUAWEIPura90", "华为 Pura 90", "华为Pura90", "华为 HUAWEI Pura 90", "Pura 90"], "category": "phone", "screen": "main", "width": 1320, "height": 2856, "sourceUrl": "https://consumer.huawei.com/cn/phones/pura90/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "pura-90-pro-max", "brand": "huawei", "name": "HUAWEI Pura 90 Pro Max", "aliases": ["HUAWEI Pura 90 Pro Max", "HUAWEIPura90ProMax", "华为 Pura 90 Pro Max", "华为Pura90ProMax", "华为 HUAWEI Pura 90 Pro Max", "Pura 90 Pro Max"], "category": "phone", "screen": "main", "width": 1308, "height": 2880, "sourceUrl": "https://consumer.huawei.com/cn/phones/pura90-pro-max/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "pura-80", "brand": "huawei", "name": "HUAWEI Pura 80", "aliases": ["HUAWEI Pura 80", "HUAWEIPura80", "华为 Pura 80", "华为Pura80", "华为 HUAWEI Pura 80", "Pura 80"], "category": "phone", "screen": "main", "width": 1256, "height": 2760, "sourceUrl": "https://consumer.huawei.com/cn/phones/pura80/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "pura-80-pro", "brand": "huawei", "name": "HUAWEI Pura 80 Pro", "aliases": ["HUAWEI Pura 80 Pro", "HUAWEIPura80Pro", "华为 Pura 80 Pro", "华为Pura80Pro", "华为 HUAWEI Pura 80 Pro", "Pura 80 Pro"], "category": "phone", "screen": "main", "width": 1276, "height": 2848, "sourceUrl": "https://consumer.huawei.com/cn/phones/pura80-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "pura-80-ultra", "brand": "huawei", "name": "HUAWEI Pura 80 Ultra", "aliases": ["HUAWEI Pura 80 Ultra", "HUAWEIPura80Ultra", "华为 Pura 80 Ultra", "华为Pura80Ultra", "华为 HUAWEI Pura 80 Ultra", "Pura 80 Ultra"], "category": "phone", "screen": "main", "width": 1276, "height": 2848, "sourceUrl": "https://consumer.huawei.com/cn/phones/pura80-ultra/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "mate-x6-inner", "brand": "huawei", "name": "HUAWEI Mate X6 内屏", "aliases": ["HUAWEI Mate X6 内屏", "HUAWEIMateX6内屏", "华为 Mate X6 内屏", "华为MateX6内屏", "华为 HUAWEI Mate X6 内屏", "Mate X6 内屏", "HUAWEI Mate X6", "HUAWEI Mate X6内屏", "华为Mate X6", "华为Mate X6内屏"], "category": "foldable", "screen": "inner", "width": 2240, "height": 2440, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate-x6/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "mate-x6-cover", "brand": "huawei", "name": "HUAWEI Mate X6 外屏", "aliases": ["HUAWEI Mate X6 外屏", "HUAWEIMateX6外屏", "华为 Mate X6 外屏", "华为MateX6外屏", "华为 HUAWEI Mate X6 外屏", "Mate X6 外屏", "HUAWEI Mate X6", "HUAWEI Mate X6外屏", "华为Mate X6", "华为Mate X6外屏"], "category": "foldable", "screen": "cover", "width": 1080, "height": 2440, "sourceUrl": "https://consumer.huawei.com/cn/phones/mate-x6/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "find-x10", "brand": "oppo", "name": "OPPO Find X10", "aliases": ["OPPO Find X10", "OPPOFindX10", "OPPO OPPO Find X10", "Find X10"], "category": "phone", "screen": "main", "width": 1272, "height": 2768, "sourceUrl": "https://www.oppo.com/cn/smartphones/series-find-x/find-x10/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "find-x10-pro-max", "brand": "oppo", "name": "OPPO Find X10 Pro Max", "aliases": ["OPPO Find X10 Pro Max", "OPPOFindX10ProMax", "OPPO OPPO Find X10 Pro Max", "Find X10 Pro Max"], "category": "phone", "screen": "main", "width": 1272, "height": 2772, "sourceUrl": "https://www.oppo.com/cn/smartphones/series-find-x/find-x10-pro-max/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "find-x9", "brand": "oppo", "name": "OPPO Find X9", "aliases": ["OPPO Find X9", "OPPOFindX9", "OPPO OPPO Find X9", "Find X9"], "category": "phone", "screen": "main", "width": 1256, "height": 2760, "sourceUrl": "https://www.oppo.com/cn/smartphones/series-find-x/find-x9/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "find-x9-pro", "brand": "oppo", "name": "OPPO Find X9 Pro", "aliases": ["OPPO Find X9 Pro", "OPPOFindX9Pro", "OPPO OPPO Find X9 Pro", "Find X9 Pro"], "category": "phone", "screen": "main", "width": 1272, "height": 2772, "sourceUrl": "https://www.oppo.com/cn/smartphones/series-find-x/find-x9-pro/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "find-x9-ultra", "brand": "oppo", "name": "OPPO Find X9 Ultra", "aliases": ["OPPO Find X9 Ultra", "OPPOFindX9Ultra", "OPPO OPPO Find X9 Ultra", "Find X9 Ultra"], "category": "phone", "screen": "main", "width": 1440, "height": 3168, "sourceUrl": "https://store.oppo.com/cn/app/product/index?skuId=39826", "verifiedAt": "2026-11-07" },
+    { "id": "reno16", "brand": "oppo", "name": "OPPO Reno16", "aliases": ["OPPO Reno16", "OPPOReno16", "OPPO OPPO Reno16", "Reno16"], "category": "phone", "screen": "main", "width": 1216, "height": 2640, "sourceUrl": "https://www.oppo.com/cn/smartphones/series-reno/reno16/specs/", "verifiedAt": "2026-11-07" },
+    { "id": "x500", "brand": "vivo", "name": "vivo X500", "aliases": ["vivo X500", "vivoX500", "vivo vivo X500", "X500"], "category": "phone", "screen": "main", "width": 1260, "height": 2750, "sourceUrl": "https://www.vivo.com.cn/vivo/param/x500", "verifiedAt": "2026-11-07" },
+    { "id": "x500-pro", "brand": "vivo", "name": "vivo X500 Pro", "aliases": ["vivo X500 Pro", "vivoX500Pro", "vivo vivo X500 Pro", "X500 Pro"], "category": "phone", "screen": "main", "width": 1216, "height": 2660, "sourceUrl": "https://www.vivo.com.cn/vivo/param/x500pro", "verifiedAt": "2026-11-07" },
+    { "id": "x500-pro-max", "brand": "vivo", "name": "vivo X500 Pro Max", "aliases": ["vivo X500 Pro Max", "vivoX500ProMax", "vivo vivo X500 Pro Max", "X500 Pro Max"], "category": "phone", "screen": "main", "width": 1440, "height": 3168, "sourceUrl": "https://www.vivo.com.cn/vivo/param/x500promax", "verifiedAt": "2026-11-07" },
+    { "id": "x300", "brand": "vivo", "name": "vivo X300", "aliases": ["vivo X300", "vivoX300", "vivo vivo X300", "X300"], "category": "phone", "screen": "main", "width": 1216, "height": 2640, "sourceUrl": "https://www.vivo.com.cn/vivo/param/x300", "verifiedAt": "2026-11-07" },
+    { "id": "x300-pro", "brand": "vivo", "name": "vivo X300 Pro", "aliases": ["vivo X300 Pro", "vivoX300Pro", "vivo vivo X300 Pro", "X300 Pro"], "category": "phone", "screen": "main", "width": 1260, "height": 2800, "sourceUrl": "https://www.vivo.com.cn/vivo/param/x300pro", "verifiedAt": "2026-11-07" },
+    { "id": "magic9", "brand": "honor", "name": "荣耀 Magic9", "aliases": ["荣耀 Magic9", "荣耀Magic9", "荣耀 荣耀 Magic9"], "category": "phone", "screen": "main", "width": 1236, "height": 2664, "sourceUrl": "https://www.honor.com/cn/shop/product/10086099402227.html", "verifiedAt": "2026-11-07" },
+    { "id": "magic9-pro-max", "brand": "honor", "name": "荣耀 Magic9 Pro Max", "aliases": ["荣耀 Magic9 Pro Max", "荣耀Magic9ProMax", "荣耀 荣耀 Magic9 Pro Max"], "category": "phone", "screen": "main", "width": 1320, "height": 2868, "sourceUrl": "https://www.honor.com/cn/shop/product/10086407229464.html", "verifiedAt": "2026-11-07" },
+    { "id": "magic9-super-power", "brand": "honor", "name": "荣耀 Magic9 超能版", "aliases": ["荣耀 Magic9 超能版", "荣耀Magic9超能版", "荣耀 荣耀 Magic9 超能版"], "category": "phone", "screen": "main", "width": 1280, "height": 2788, "sourceUrl": "https://www.honor.com/cn/phones/honor-magic9-super-power/spec/", "verifiedAt": "2026-11-07" },
+    { "id": "magic8-pro", "brand": "honor", "name": "荣耀 Magic8 Pro", "aliases": ["荣耀 Magic8 Pro", "荣耀Magic8Pro", "荣耀 荣耀 Magic8 Pro"], "category": "phone", "screen": "main", "width": 1256, "height": 2808, "sourceUrl": "https://www.honor.com/cn/phones/honor-magic8-pro/spec/", "verifiedAt": "2026-11-07" },
+];
+const BRAND_LABELS = { apple: '苹果', samsung: '三星', xiaomi: '小米', huawei: '华为', oppo: 'OPPO', vivo: 'vivo', honor: '荣耀' };
+const wallpaperBrandLabel = (brand) => BRAND_LABELS[brand] || brand;
+exports.wallpaperBrandLabel = wallpaperBrandLabel;
+exports.brandLabel = exports.wallpaperBrandLabel;
+
+},
+"./bead-intent": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BEAD_WORKSPACE_NOTICE = void 0;
+exports.isBeadPatternRequest = isBeadPatternRequest;
+exports.BEAD_WORKSPACE_NOTICE = '拼豆图纸需先选择一张底图，在拼豆工作台按真实色卡生成网格、色号与采购表。本地制图不收费。';
+const bead = /拼豆|\bperler\b|\b(?:fuse[ds]?\s+)?beads?\b/i;
+const technical = /图纸|图样|网格|格子|格数|底板|色号|用量|采购(?:表|清单)?|\bpattern\b|\bpegboard\b|\b(?:colou?r\s*codes?|quantit(?:y|ies)|procurement|shopping\s*list)\b/i;
+const marketing = /宣传|海报|营销|广告|文案|招牌|店招|经营|开店|商业计划|\bppt\b|\bpresentation\b|\bposter\b|\bmarketing\b|\badvertis\w*\b|\bcopywriting\b/i;
+const explanatory = /^(?:请|帮我|为我|给我)?\s*(?:介绍|讲解|说明|描述|提及|宣传|推广|展示|文案|标题|口号|写上|标明|讲讲|explain\b|describe\b|about\b)/i;
+const style = /拼豆\s*(?:风|风格)|\b(?:perler|bead)\s*[- ]?style\b/i;
+const action = /做|制作|生成|绘制|设计|转(?:成|为|换)?|制成|拼成|想要|需要|\b(?:make|create|generate|convert|turn)\b/i;
+const negated = /(?:不要|不需要|不用|无需|不必|不再|禁止|别|不想|不是要|不做|不制作|不生成)\s*(?:(?:把|将)(?:这|那)?(?:一)?(?:张)?(?:原图|参考图|图片|照片|图)\s*)?(?:(?:帮我|为我|给我|再|继续|进行|设计|做|制作|生成|转换|转成|转为|制成|要|任何|一个|一份|一套|一张|新的|实际的|真的|的)\s*)*(?:\d{1,3}\s*[×xX*]\s*\d{1,3}\s*(?:格|的)?\s*)?(?:拼豆|perler\b|(?:fuse[ds]?\s+)?beads?\b|hama\b)|\b(?:do\s+not|don['’]t|never|no|not)\s+(?:(?:make|create|generate|convert|a|an|any|new|actual|real)\s+)*(?:perler|(?:fuse[ds]?\s+)?beads?|hama)\b|拼豆(?:图纸|图样|网格)?\s*(?:不要|不用|不需要|无需|不必)\s*(?:再)?(?:做|制作|生成|转换)/i;
+const join = /\s*(?:和|以及|及|加上|加|[+&]|\band\b)\s*/i;
+const contentModifier = /(?:以|用).*(?:为|作)(?:主题|标题|卖点|口号)|介绍|讲解|描述|文案|标题|口号|写上|标明|展示/i;
+function actualBeadClause(clause) {
+    if (!bead.test(clause) || negated.test(clause) || explanatory.test(clause))
+        return false;
+    if (!marketing.test(clause)) {
+        if (technical.test(clause))
+            return true;
+        if (style.test(clause))
+            return false;
+        if (!/拼豆|\bperler\b|\bfuse[ds]?\s+beads?\b/i.test(clause))
+            return false;
+        return action.test(clause) || /^(?:请)?\s*(?:拼豆|perler(?:\s+beads?)?|(?:fuse[ds]?\s+)?beads?)\s*$/i.test(clause);
+    }
+    // A poster about patterns stays a poster. Separate requested products may include both.
+    if (contentModifier.test(clause))
+        return false;
+    const parts = clause.split(join);
+    return parts.length > 1 && action.test(clause) && parts.some(part => bead.test(part) && technical.test(part) && !marketing.test(part) && !negated.test(part) && !style.test(part));
+}
+function isBeadPatternRequest(text) {
+    if (typeof text !== 'string' || !text.trim() || !bead.test(text))
+        return false;
+    const content = marketing.test(text) ? text.replace(/“[^”]*”|"[^"]*"|「[^」]*」|『[^』]*』|《[^》]*》/g, '') : text;
+    return content.split(/[，,。；;\n!?？！]|但是|不过|而是|然后|另外|并且|同时|(?=(?:再|另|并)(?:做|制作|生成|绘制|转成))/).some(part => actualBeadClause(part.trim()));
 }
 
 }

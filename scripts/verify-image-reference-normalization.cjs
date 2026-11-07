@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function nativeFixture(directory, sourceRoot) {
+async function nativeFixture(directory, sourceRoot, largeEngineering) {
   const { app, nativeImage, BrowserWindow } = require('electron');
   process.on('uncaughtException', error => { fs.writeFileSync(path.join(directory, 'failure.txt'), String(error.stack || error)); app.exit(1); });
   try {
@@ -30,13 +30,23 @@ async function nativeFixture(directory, sourceRoot) {
     if (Math.abs(pixel[0] - 25) > 10 || Math.abs(pixel[1] - 80) > 10 || Math.abs(pixel[2] - 220) > 10 || pixel[3] !== 255) throw Error('Decoded PNG pixels do not match the native JPEG fixture');
     const normalizedPng = await normalize({ buffer: tiny.toPNG(), mimeType: 'image/jpeg' });
     if (normalizedPng.width !== 1 || normalizedPng.height !== 1 || nativeImage.createFromBuffer(normalizedPng.buffer).isEmpty()) throw Error('Real PNG normalization failed');
+    let engineeringProbe;
+    if (largeEngineering) {
+      const engineeringBytes = Buffer.concat([tiny.resize({ width: 4000, height: 4000 }).toJPEG(85), Buffer.alloc(24, 65)]), engineeringSha = hash(engineeringBytes), beforeDecode = decodeCalls;
+      let ordinaryRejected = false; try { await normalize({ buffer: engineeringBytes, mimeType: 'image/png' }); } catch { ordinaryRejected = true; }
+      if (!ordinaryRejected || decodeCalls !== beforeDecode) throw Error('Ordinary normalization bypassed its 8M admission limit');
+      const nativeStarted = performance.now(), prepared = await normalize({ buffer: engineeringBytes, mimeType: 'image/png', maxPixels: 16000000 }), nativeDecodeEncodeMs = performance.now() - nativeStarted;
+      const checked = nativeImage.createFromBuffer(prepared.buffer), size = checked.getSize(), sample = [...checked.crop({ x: 0, y: 0, width: 1, height: 1 }).toBitmap()];
+      if (checked.isEmpty() || size.width !== 4000 || size.height !== 4000 || hash(engineeringBytes) !== engineeringSha || imageType(prepared.buffer).mimeType !== 'image/png' || Math.abs(sample[0] - 25) > 10 || Math.abs(sample[1] - 80) > 10 || Math.abs(sample[2] - 220) > 10 || sample[3] !== 255) throw Error('Real 16M engineering reference normalization failed');
+      engineeringProbe = { width: size.width, height: size.height, pixels: size.width * size.height, nativeDecodeEncodeMs, originalShaPreserved: true, ordinaryRejectedBeforeDecode: true, decodedOutputVerified: true, pngBytes: prepared.buffer.length };
+    }
     const beforeRejected = decodeCalls;
     for (const buffer of [Buffer.from('GIF89a'), Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), Buffer.from('unknown')]) {
       let rejected = false; try { await normalize({ buffer, mimeType: 'image/png' }); } catch { rejected = true; }
       if (!rejected) throw Error('Unsupported source reached PNG normalization');
     }
     if (decodeCalls !== beforeRejected || BrowserWindow.getAllWindows().length) throw Error('Rejected inputs decoded or a fixture window was created');
-    const report = { electron: process.versions.electron, chromium: process.versions.chrome, source: { mimeType: input.mimeType, actualMimeType: 'image/jpeg', width: 1724, height: 1280, jpegBytes: jpeg.length, trailingBytes: bytes.length - jpeg.length, sha256: sourceSha256 }, strictRejected, sourceUnchanged, result: { mimeType: result.mimeType, width: result.width, height: result.height, bytes: result.buffer.length, pixel }, realDecodedFormats: ['PNG', 'JPEG with 24B trailer'], rejectedBeforeDecode: ['GIF', 'SVG', 'unknown'], browserWindowCount: 0, modelCalls: 0 };
+    const report = { electron: process.versions.electron, chromium: process.versions.chrome, source: { mimeType: input.mimeType, actualMimeType: 'image/jpeg', width: 1724, height: 1280, jpegBytes: jpeg.length, trailingBytes: bytes.length - jpeg.length, sha256: sourceSha256 }, strictRejected, sourceUnchanged, result: { mimeType: result.mimeType, width: result.width, height: result.height, bytes: result.buffer.length, pixel }, ...(engineeringProbe ? { engineeringProbe } : {}), realDecodedFormats: ['PNG', 'JPEG with 24B trailer'], rejectedBeforeDecode: ['GIF', 'SVG', 'unknown'], browserWindowCount: 0, modelCalls: 0 };
     fs.writeFileSync(path.join(directory, 'report.json'), JSON.stringify(report, null, 2) + '\n');
     app.exit(0);
   } catch (error) { fs.writeFileSync(path.join(directory, 'failure.txt'), String(error.stack || error)); app.exit(1); }
@@ -56,14 +66,14 @@ function runFixture() {
   delete env.ELECTRON_RUN_AS_NODE;
   let result;
   try {
-    result = spawnSync(electron, [__filename, '--native-child', directory, runtime], { env, windowsHide: true, timeout: 10000, encoding: 'utf8' });
+    result = spawnSync(electron, [__filename, '--native-child', directory, runtime, ...(process.argv.includes('--engineering-large') ? ['--engineering-large'] : [])], { env, windowsHide: true, timeout: 10000, encoding: 'utf8' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw Error(fs.existsSync(path.join(directory, 'failure.txt')) ? fs.readFileSync(path.join(directory, 'failure.txt'), 'utf8') : `Native fixture exited ${result.status}: ${result.stderr || ''}`);
     const report = JSON.parse(fs.readFileSync(path.join(directory, 'report.json'), 'utf8'));
     let residual = false;
     try { process.kill(result.pid, 0); residual = true; } catch (error) { if (error.code !== 'ESRCH') throw error; }
     if (residual) throw Error('Native fixture process did not exit');
-    const output = { ...report, exitCode: result.status, residualProcess: residual, elapsedMs: Date.now() - started };
+    const output = { ...report, commit: process.env.GITHUB_SHA || 'local', version: JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version, exitCode: result.status, residualProcess: residual, elapsedMs: Date.now() - started };
     const reportPath = path.join(root, 'work', 'image-reference-normalization-native.json'); fs.mkdirSync(path.dirname(reportPath), { recursive: true }); fs.writeFileSync(reportPath, JSON.stringify(output, null, 2) + '\n');
     process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   } finally {
@@ -74,5 +84,5 @@ function runFixture() {
 }
 
 const started = Date.now();
-if (process.argv[2] === '--native-child') nativeFixture(path.resolve(process.argv[3]), path.resolve(process.argv[4]));
+if (process.argv[2] === '--native-child') nativeFixture(path.resolve(process.argv[3]), path.resolve(process.argv[4]), process.argv.includes('--engineering-large'));
 else { try { runFixture(); } catch (error) { process.stderr.write(String(error.stack || error) + '\n'); process.exitCode = 1; } }

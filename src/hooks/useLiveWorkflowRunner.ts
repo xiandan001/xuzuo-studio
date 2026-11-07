@@ -267,6 +267,14 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         return result;
       },
     } : {}),
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.exportWallpaper4K === 'function' ? {
+      async exportWallpaper4K(input: import('../live-types').Wallpaper4KExportInput) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.exportWallpaper4K) throw Error('当前桌面后台不支持本地4K导出。');
+        if (optionsRef.current.projects.some(project => project.id === input.projectId && project.purgedAt)) throw Error('项目已永久移除，不能导出其壁纸。');
+        const result = await bridge.exportWallpaper4K(input); inventoryCache.invalidate(input.projectId); return result;
+      },
+    } : {}),
     async thumbnailArtifact(id) {
       const bridge = window.desktop?.runtime; if (!bridge) throw new Error('请在桌面版预览真实产物。');
       const metadata = updatedArtifacts[id] || trashedArtifacts?.find(item => item.id === id);
