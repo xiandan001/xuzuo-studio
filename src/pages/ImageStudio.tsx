@@ -40,7 +40,7 @@ import { MAX_IMAGE_QUANTITY, validImageQuantity } from '../lib/image-quantity';
 import { inspectImageReference, readImageReferencePreviews } from '../lib/image-reference-inspection';
 import { PurposeTemplates } from '../components/PurposeTemplates';
 import { ProjectReferences } from '../components/ProjectReferences';
-import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft } from '../lib/image-studio';
+import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft } from '../lib/image-studio';
 import { availableImageUseTemplates, imageUseTemplateSnapshot } from '../lib/image-use-templates';
 import type { ImageDraft } from '../lib/image-studio';
 import './studios.css';
@@ -274,7 +274,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     appliedPromptToken.current = application.token;
     const template = useTemplates.find(item => item.id === application.imagePreset);
     const current = editSnapshot.current.draft;
-    changeImage(application.mode === 'refine' ? { ...current, refinePrompt: application.content, mode: 'refine' } : { ...(template ? selectImageUseTemplate(current, template) : current), prompt: application.content, mode: 'create' });
+    changeImage(application.mode === 'refine' ? updateImageDraft(current, { refinePrompt: application.content, mode: 'refine' }) : updateImageDraft(template ? selectImageUseTemplate(current, template) : current, { prompt: application.content, mode: 'create' }));
     setTemplateOffer(undefined); setPromptPickerOpen(false); props.onPromptApplied(application.token);
     revealEditingInput();
   }, [props.promptToApply, props.onPromptApplied, props.configuration.useTemplates, project.id]);
@@ -320,15 +320,18 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
 
   async function importReferences() {
     if (importing || busy) return;
+    const mode = editSnapshot.current.draft.mode;
     setImporting(true);
     try {
       const selected = await runnerRef.current.importFiles(project.id);
       if (!alive.current) return;
+      if (editSnapshot.current.draft.mode !== mode) { props.notify('图片已保留在项目中；操作模式已变化，当前参考图未改动。', 'info'); return; }
       const files = selected.filter(file => file.kind === 'image' && RASTER_IMAGE_TYPES.has(file.mimeType));
       if (!files.length) { if (selected.length) props.notify('请选择图片格式的参考文件。', 'info'); return; }
       if (files.length !== selected.length) props.notify('本次仅使用图片，已忽略其它格式的文件。', 'info');
       if (files.length > MAX_IMAGE_REFERENCES) { props.notify(`每次最多使用 ${MAX_IMAGE_REFERENCES} 张参考图，请重新选择。`, 'error'); return; }
-      updateDraft({ references: files.map(({ id, name }) => ({ id, name })) });
+      const base = selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? { id: selectedImage.id, name: selectedImage.name } : undefined;
+      changeImage(importImageReferences(editSnapshot.current.draft, files.map(({ id, name }) => ({ id, name })), base));
     } catch (cause) { if (alive.current) setActionError(workflowPublicError(cause, '参考图导入未完成，请重新选择。')); }
     finally { if (alive.current) setImporting(false); }
   }

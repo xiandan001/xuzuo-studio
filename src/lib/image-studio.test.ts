@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowRun } from '../configuration-types';
 import type { ArtifactMetadata } from '../live-types';
-import { followGalleryImage, imageArtifactTarget, imageCapability, imageCreationDescription, imageReferenceIds, imageTaskRequest, isGalleryImageBase, projectImageContent, readImageDraft, updateImageDraft } from './image-studio';
+import { followGalleryImage, imageArtifactTarget, imageCapability, imageCreationDescription, imageReferenceIds, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, updateImageDraft } from './image-studio';
 import { MAX_IMAGE_QUANTITY, validImageQuantity } from './image-quantity';
 
 const file = (id: string, kind: ArtifactMetadata['kind'] = 'image'): ArtifactMetadata => ({ id, name: `${id}.${kind === 'image' ? 'png' : 'txt'}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain', bytes: 20, path: `files/${id}`, kind, projectId: 'project', createdAt: '2026-10-30T01:00:00Z' });
@@ -10,6 +10,45 @@ function run(id: string, artifacts: ArtifactMetadata[], updatedAt: string, workf
 }
 
 describe('图片工作台的真实结果与描述', () => {
+  it('生成参考A与精修B/C分别保留，切换和JSON重载后的真实任务附件不串用', () => {
+    const a = { id: 'create-a', name: '生成参考A.png' }, b = { id: 'result-b', name: '产物B.png' }, c = { id: 'refine-c', name: '精修参考C.png' };
+    const creation = updateImageDraft(readImageDraft(null, '生成描述'), { references: [a] });
+    expect(imageTaskRequest(creation, b.id).parameters.attachmentIds).toEqual([a.id]);
+    const refinement = updateImageDraft(creation, { mode: 'refine' });
+    expect(refinement.references).toEqual([]); expect(imageTaskRequest(refinement, b.id).parameters.attachmentIds).toEqual([b.id]);
+    const extra = importImageReferences(refinement, [c], b);
+    expect(imageTaskRequest(extra, b.id).parameters.attachmentIds).toEqual([b.id, c.id]);
+    const back = updateImageDraft(extra, { mode: 'create' });
+    expect(back.references).toEqual([a]); expect(imageTaskRequest(back, b.id).parameters.attachmentIds).toEqual([a.id]);
+    const restored = readImageDraft(JSON.stringify(back), '');
+    expect(imageTaskRequest(updateImageDraft(restored, { mode: 'refine' }), b.id).parameters.attachmentIds).toEqual([b.id, c.id]);
+    expect(creation.references).toEqual([a]); expect(creation.refinePrompt).toBe(restored.refinePrompt);
+  });
+  it('明确替换精修基底和Gallery跟随仍有效，生成参考不被替换', () => {
+    const a = { id: 'create-a', name: '生成参考A.png' }, base = { id: 'explicit-base', name: '明确基底.png' }, next = { id: 'next-result', name: '新产物.png' };
+    const creation = updateImageDraft(readImageDraft(null, '描述'), { references: [a] });
+    const explicit = updateImageDraft(creation, { mode: 'refine', references: [base], galleryBaseId: base.id });
+    expect(followGalleryImage(explicit, next).references).toEqual([next]);
+    const manual = updateImageDraft(explicit, { references: [base], galleryBaseId: undefined });
+    expect(followGalleryImage(manual, next)).toBe(manual);
+    const back = updateImageDraft(manual, { mode: 'create' });
+    expect(back.references).toEqual([a]); expect(updateImageDraft(back, { mode: 'refine' }).references).toEqual([base]);
+  });
+  it('精修额外参考去重并把原图计入12张上限，拒绝时不改变草稿', () => {
+    const b = { id: 'base', name: '原图.png' }, draft = updateImageDraft(readImageDraft(null, '描述'), { mode: 'refine' });
+    const added = Array.from({ length: 11 }, (_, index) => ({ id: `extra-${index}`, name: `${index}.png` }));
+    expect(importImageReferences(draft, [b, ...added], b).references).toHaveLength(12);
+    const before = JSON.stringify(draft);
+    expect(() => importImageReferences(draft, [...added, { id: 'too-many', name: '超限.png' }], b)).toThrow('合计最多 12 张');
+    expect(JSON.stringify(draft)).toBe(before);
+  });
+  it('旧草稿仅保留其当前模式参考，不猜测迁移到另一模式；非当前bank仍严格清洗', () => {
+    const legacy = readImageDraft(JSON.stringify({ mode: 'refine', references: [{ id: 'legacy-base', name: '旧手动基底.png' }] }), '');
+    expect(legacy.references[0].id).toBe('legacy-base');
+    expect(updateImageDraft(legacy, { mode: 'create' }).references).toEqual([]);
+    const saved = readImageDraft(JSON.stringify({ mode: 'create', references: [], referenceDrafts: { refine: { references: [{ id: 'valid', name: '参考.png', preview: 'not-secret-storage' }, { id: '../outside', name: '坏路径' }] } } }), '');
+    expect(updateImageDraft(saved, { mode: 'refine' }).references).toEqual([{ id: 'valid', name: '参考.png' }]);
+  });
   it('自定义整数张数在创建、精修、草稿重载后保持一致，不再限于1/2/4', () => {
     for (let quantity = 1; quantity <= MAX_IMAGE_QUANTITY; quantity++) {
       const draft = readImageDraft(JSON.stringify({ quantity, prompt: '制作表情包', refinePrompt: '清理边缘' }), '');

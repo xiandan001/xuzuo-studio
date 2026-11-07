@@ -16,6 +16,7 @@ export function imageCreationDescription(prompt: string): string {
   return (position >= 0 ? prompt.slice(position + marker.length) : prompt.split('\n\n【成品与交付要求】')[0]).trim();
 }
 export interface ImageReference { id: string; name: string; }
+interface ImageReferenceDraft { references: ImageReference[]; galleryBaseId?: string; }
 export interface ImageDraft {
   preset: string;
   presetSnapshot?: ImageUseTemplateSnapshot;
@@ -28,6 +29,7 @@ export interface ImageDraft {
   generationModelId: string;
   editingModelId: string;
   references: ImageReference[];
+  referenceDrafts?: Partial<Record<ImageMode, ImageReferenceDraft>>;
   galleryBaseId?: string;
   imageOptions?: ImageOutputOptions;
   markupSourceId?: string;
@@ -35,13 +37,20 @@ export interface ImageDraft {
 
 export const imageDraftKey = (projectId: string) => `xuzuo-image-draft-v1-${projectId}`;
 
+function readReferences(value: unknown): ImageReference[] {
+  return Array.isArray(value) ? value.filter((item): item is ImageReference => Boolean(item && typeof item.id === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(item.id) && typeof item.name === 'string' && item.name.length <= 200)).slice(0, MAX_IMAGE_REFERENCES).map(({ id, name }) => ({ id, name })) : [];
+}
+function readReferenceDraft(value: ImageReferenceDraft | undefined): ImageReferenceDraft {
+  const references = readReferences(value?.references);
+  return { references, ...(typeof value?.galleryBaseId === 'string' && references.length === 1 && references[0].id === value.galleryBaseId ? { galleryBaseId: value.galleryBaseId } : {}) };
+}
 export function readImageDraft(raw: string | null, description: string): ImageDraft {
   const defaults: ImageDraft = { preset: '宣传图', prompt: description, refinePrompt: '保留主体与整体构图，按我的要求调整细节。', mode: 'create', size: '1024x1024', quantity: 1, background: 'auto', generationModelId: '', editingModelId: '', references: [] };
   if (!raw) return defaults;
   try {
     const value = JSON.parse(raw) as Partial<ImageDraft>;
     const text = (input: unknown, fallback: string, maximum = 200000) => typeof input === 'string' && input.length <= maximum ? input : fallback;
-    const references = Array.isArray(value.references) ? value.references.filter((item): item is ImageReference => Boolean(item && typeof item.id === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(item.id) && typeof item.name === 'string' && item.name.length <= 200)).slice(0, MAX_IMAGE_REFERENCES).map(({ id, name }) => ({ id, name })) : [];
+    const references = readReferences(value.references);
     return {
       preset: typeof value.preset === 'string' && ((IMAGE_PRESETS as readonly string[]).includes(value.preset) || /^[A-Za-z0-9-]{1,100}$/.test(value.preset)) ? value.preset : defaults.preset,
       ...(value.presetSnapshot && value.presetSnapshot.id === value.preset && !useTemplateDraftError({ ...value.presetSnapshot, enabled: true }) ? { presetSnapshot: imageUseTemplateSnapshot(value.presetSnapshot) } : {}),
@@ -52,6 +61,7 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
       background: ['auto', 'opaque', 'transparent'].includes(value.background!) ? value.background! : 'auto',
       generationModelId: text(value.generationModelId, '', 240), editingModelId: text(value.editingModelId, '', 240),
       references,
+      ...(value.referenceDrafts ? { referenceDrafts: { create: { references: readReferences(value.referenceDrafts.create?.references) }, refine: readReferenceDraft(value.referenceDrafts.refine) } } : {}),
       ...(value.imageOptions ? { imageOptions: readImageOutputOptions(value.imageOptions) } : {}),
       ...(typeof value.markupSourceId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.markupSourceId) ? { markupSourceId: value.markupSourceId } : {}),
       ...(typeof value.galleryBaseId === 'string' && references.length === 1 && references[0].id === value.galleryBaseId ? { galleryBaseId: value.galleryBaseId } : {}),
@@ -61,10 +71,22 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
 
 export function isGalleryImageBase(draft: ImageDraft): boolean { return draft.mode === 'refine' && draft.references.length === 1 && draft.galleryBaseId === draft.references[0].id; }
 export function followGalleryImage(draft: ImageDraft, image: ImageReference): ImageDraft {
-  return isGalleryImageBase(draft) ? { ...draft, references: [{ id: image.id, name: image.name }], galleryBaseId: image.id } : draft;
+  return isGalleryImageBase(draft) ? updateImageDraft(draft, { references: [{ id: image.id, name: image.name }], galleryBaseId: image.id }) : draft;
 }
 export function updateImageDraft(draft: ImageDraft, changes: Partial<ImageDraft>): ImageDraft {
-  return { ...draft, ...changes, ...(changes.mode === 'create' || 'references' in changes && !Object.hasOwn(changes, 'galleryBaseId') ? { galleryBaseId: undefined } : {}) };
+  const mode = changes.mode ?? draft.mode;
+  const previous = { references: draft.references, ...(draft.mode === 'refine' && draft.galleryBaseId ? { galleryBaseId: draft.galleryBaseId } : {}) };
+  const referenceDrafts = { ...draft.referenceDrafts, [draft.mode]: previous };
+  const target: ImageReferenceDraft = mode === draft.mode ? previous : referenceDrafts[mode] || { references: [] };
+  const references = 'references' in changes ? changes.references || [] : target.references;
+  const galleryBaseId = mode === 'create' ? undefined : Object.hasOwn(changes, 'galleryBaseId') ? changes.galleryBaseId : 'references' in changes ? undefined : target.galleryBaseId;
+  return { ...draft, ...changes, mode, references, galleryBaseId, referenceDrafts: { ...referenceDrafts, [mode]: { references, ...(galleryBaseId ? { galleryBaseId } : {}) } } };
+}
+export function importImageReferences(draft: ImageDraft, added: ImageReference[], selectedImage?: ImageReference): ImageDraft {
+  const base = draft.mode === 'refine' ? draft.references.length ? draft.references : selectedImage ? [selectedImage] : [] : [];
+  const references = [...new Map([...base, ...added].map(reference => [reference.id, reference])).values()];
+  if (references.length > MAX_IMAGE_REFERENCES) throw new Error(`原图与参考图合计最多 ${MAX_IMAGE_REFERENCES} 张，请先移除不需要的参考图。`);
+  return updateImageDraft(draft, { references });
 }
 
 export function imageArtifactTarget(runs: WorkflowRun[], projectId: string, artifact: ArtifactMetadata | undefined): { size?: string; background?: ImageBackground } {
