@@ -152,7 +152,7 @@ describe('快捷图片自定义数量实际执行与交付', () => {
     const f = await fixture('image-generation', 3, options);
     try {
       const started = await f.engine.start(f.request); await waitFor(f.engine, started.id, 'waiting-review');
-      if ('excess' in options) await expect(f.engine.control({ id: started.id, action: 'resume' })).rejects.toThrow('来源不完整');
+      if ('excess' in options) await expect(f.engine.control({ id: started.id, action: 'resume' })).rejects.toThrow('结果不完整');
       else { await f.engine.control({ id: started.id, action: 'resume' }); expect((await waitFor(f.engine, started.id, 'failed')).run.error).toContain('重复'); }
       const snapshot = await f.engine.snapshot(); expect(f.calls).toHaveLength(3); expect(snapshot.ledger.reduce((sum, entry) => sum + entry.costCents, 0)).toBe(300);
       for (const image of produced(snapshot.runs[0])) expect((await f.store.read(image.id)).buffer).toEqual(PNG);

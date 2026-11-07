@@ -12,6 +12,7 @@ const { evaluateQuality, repairInput } = require('./automation-quality.cjs');
 const { imageExportAssets } = require('./image-export-sources.cjs');
 const { startFingerprint } = require('./live-start.cjs');
 const { replacementReview, assertRefinementSource } = require('./refinement-fork.cjs');
+const { validateResumeImageSources } = require('./resume-image-sources.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const now = () => new Date().toISOString();
@@ -516,19 +517,11 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         if (first) {
           first.inputSource = 'project';
           const completedStepIds = new Set(nextRun.snapshot.steps.filter(step => step.enabled && nextRun.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && (attempt.summary || attempt.artifacts?.length))).map(step => step.id));
-          const completedImageStepIds = new Set();
-          const neededImageIds = new Set(remaining.filter(step => step.enabled).flatMap(step => [...(Array.isArray(step.documentImageStepIds) ? step.documentImageStepIds : []), ...(Array.isArray(step.contentSourceStepIds) ? step.contentSourceStepIds : []), ...(step.imageSourceStepId ? [step.imageSourceStepId] : [])]));
-          for (const sourceId of neededImageIds) {
-            const source = remaining.find(step => step.id === sourceId);
-            if (!source || source.enabled) continue;
-            const result = nextRun.attempts.filter(attempt => attempt.stepId === sourceId && attempt.status === 'complete').at(-1);
-            const pictures = result?.artifacts?.filter(file => file.kind === 'image') || [];
-            if (pictures.length !== (source.count || 1)) throw new Error('已完成的配图来源不完整，请先检查对应步骤；未发送新请求。');
-            for (const picture of pictures) {
-              const file = await artifactStore.read(picture.id);
-              if (file.projectId !== run.projectId || !['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType)) throw new Error('已有配图文件不可用，未继续调用模型。');
-            }
-            completedImageStepIds.add(sourceId);
+          let completedImageStepIds;
+          try { completedImageStepIds = await validateResumeImageSources(nextRun, remaining, artifactStore); }
+          catch (error) {
+            if (error.referenceIssue) { update(record, { error: error.message, referenceIssue: error.referenceIssue }); await persist(); }
+            throw error;
           }
           const continuingVideo = !nextRun.retryStepOnly && first.kind === 'video-generation' && nextRun.attempts.some(attempt => attempt.stepId === first.id && attempt.providerRequestId && ['failed', 'cancelled'].includes(attempt.status));
           const priorResult = latestBefore(nextRun, nextRun.stepIndex);
@@ -539,7 +532,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         }
         const previous = { run: structuredClone(run), request: record.request, legacyBaseCostCents: record.legacyBaseCostCents };
         record.request = nextRequest; record.legacyBaseCostCents = nextBaseline;
-        Object.assign(run, nextRun); update(record, { status: 'running', error: undefined, pauseRequested: false });
+        Object.assign(run, nextRun); update(record, { status: 'running', error: undefined, referenceIssue: undefined, pauseRequested: false });
         try { await persist(); }
         catch {
           record.run = previous.run; record.request = previous.request; record.legacyBaseCostCents = previous.legacyBaseCostCents;

@@ -8,30 +8,47 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { projectImageContent } from '../lib/image-studio';
 import { projectTimeLabel } from '../lib/studio-time';
 import { projectCardStatusLabel } from '../lib/project-status';
+import { workflowPublicError } from '../lib/studio-run';
 import './project-thumbnail.css';
 
 const icons = { ppt: Presentation, word: FileText, excel: FileSpreadsheet, image: ImageIcon };
+const previewTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml']);
 export function ProjectThumbnail({ project, runner }: { project: Project; runner?: WorkflowRunner }) {
   const Icon = icons[project.kind];
-  const imageId = useMemo(() => project.kind === 'image' && runner ? projectImageContent(runner.runs, project.id, runner.trashedArtifacts).images.find(image => !image.projectId || image.projectId === project.id)?.id : undefined, [project.kind, project.id, runner?.runs, runner?.trashedArtifacts]);
-  const element = useRef<HTMLDivElement>(null), [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined');
+  const image = useMemo(() => project.kind === 'image' && runner ? projectImageContent(runner.runs, project.id, runner.trashedArtifacts).images.find(image => !image.projectId || image.projectId === project.id) : undefined, [project.kind, project.id, runner?.runs, runner?.trashedArtifacts]);
+  const originalFormat = image?.mimeType === 'image/gif' || image?.mimeType === 'image/svg+xml';
+  const tooLarge = originalFormat && !!image && image.bytes > (image.mimeType === 'image/svg+xml' ? 4 : 20) * 1024 * 1024;
+  const eligible = !!image && !image.unavailable && !image.trashedAt && previewTypes.has(image.mimeType) && !tooLarge;
+  const key = JSON.stringify([project.id, image?.id, image?.mimeType, image?.bytes, image?.path, image?.createdAt]);
+  const element = useRef<HTMLDivElement>(null), [visibleKey, setVisibleKey] = useState(() => typeof IntersectionObserver === 'undefined' ? key : '');
   useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined' || !element.current) return;
-    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: '160px' });
-    observer.observe(element.current); return () => observer.disconnect();
-  }, []);
+    setVisibleKey('');
+    if (!eligible || !element.current) return;
+    if (typeof IntersectionObserver === 'undefined') { setVisibleKey(key); return; }
+    let disposed = false;
+    const observer = new IntersectionObserver(entries => {
+      if (disposed) return;
+      const visible = entries.some(entry => entry.isIntersecting);
+      if (visible) { setVisibleKey(key); if (!originalFormat) observer.disconnect(); }
+      else if (originalFormat) setVisibleKey('');
+    }, { rootMargin: originalFormat ? '0px' : '160px' });
+    observer.observe(element.current); return () => { disposed = true; observer.disconnect(); };
+  }, [eligible, key, originalFormat]);
   const currentRunner = useRef(runner); currentRunner.current = runner;
-  const [preview, setPreview] = useState<{ projectId: string; imageId: string; url: string }>();
+  const [preview, setPreview] = useState<{ key: string; url?: string; error?: string }>();
   useEffect(() => {
     let cancelled = false; setPreview(undefined);
     const runner = currentRunner.current;
-    if (imageId && visible && runner) void (runner.thumbnailArtifact || runner.previewArtifact)(imageId).then(result => {
-      if (!cancelled && result.dataUrl && /^data:image\/(png|jpeg|webp|gif);base64,/i.test(result.dataUrl)) setPreview({ projectId: project.id, imageId, url: result.dataUrl });
-    }).catch(() => undefined);
+    if (eligible && image && visibleKey === key && runner) void (runner.thumbnailArtifact || runner.previewArtifact)(image.id).then(result => {
+      const type = result.dataUrl?.match(/^data:(image\/(?:png|jpeg|webp|gif|svg\+xml));base64,/i)?.[1];
+      if (!type || type !== result.mimeType || originalFormat && type !== image.mimeType) throw new Error('图片格式暂不能安全预览，请打开项目查看。');
+      if (!cancelled) setPreview({ key, url: result.dataUrl });
+    }).catch(error => { if (!cancelled) setPreview({ key, error: workflowPublicError(error, '图片预览暂不可用，请打开项目查看。') }); });
     return () => { cancelled = true; };
-  }, [project.id, imageId, visible]);
-  const actual = preview?.projectId === project.id && preview.imageId === imageId ? preview.url : undefined;
-  return <div ref={element} className={`project-thumb project-neutral project-neutral-${project.kind}`}>{actual ? <><img className="project-thumb-image" loading="lazy" decoding="async" src={actual} alt={project.name} onError={() => setPreview(undefined)} /><span className="project-thumb-source">实际生成图片</span></> : <><span className="project-neutral-type"><Icon size={19} />{KIND_LABEL[project.kind]}</span><strong>{project.name}</strong><span className="project-neutral-footer"><span>{project.kind === 'image' ? '暂无可用图片预览' : '类型示意 · 打开查看实际内容'}</span><Icon size={32} strokeWidth={1.4} /></span></>}</div>;
+  }, [eligible, key, visibleKey]);
+  const current = eligible && visibleKey === key && preview?.key === key ? preview : undefined;
+  const fallback = image && !previewTypes.has(image.mimeType) ? '此格式暂无缩略预览，请打开项目查看。' : tooLarge ? '图片较大，请打开项目查看。' : image?.unavailable ? '原图片暂不可用，请打开项目查看。' : '暂无可用图片预览';
+  return <div ref={element} className={`project-thumb project-neutral project-neutral-${project.kind}`}>{current?.url ? <><img className="project-thumb-image" loading="lazy" decoding="async" src={current.url} alt={project.name} onError={() => setPreview({ key, error: '图片未能显示，请打开项目查看。' })} /><span className="project-thumb-source">实际生成图片</span></> : <><span className="project-neutral-type"><Icon size={19} />{KIND_LABEL[project.kind]}</span><strong>{project.name}</strong><span className="project-neutral-footer"><span>{project.kind === 'image' ? current?.error || fallback : '类型示意 · 打开查看实际内容'}</span><Icon size={32} strokeWidth={1.4} /></span></>}</div>;
 }
 export function ProjectCard({ project, ledger, runner, onOpen, onFavorite }: { project: Project; ledger?: LedgerEntry[]; runner?: WorkflowRunner; onOpen: () => void; onFavorite?: () => void }) {
   const Icon = icons[project.kind];

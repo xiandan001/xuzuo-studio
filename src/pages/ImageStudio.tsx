@@ -42,6 +42,7 @@ import { PurposeTemplates } from '../components/PurposeTemplates';
 import { ProjectReferences } from '../components/ProjectReferences';
 import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft, withAnimationReference } from '../lib/image-studio';
 import { prepareAnimationReference } from '../lib/generated-animation-reference';
+import { prepareSvgReference } from '../lib/svg-reference';
 import { availableImageUseTemplates, imageUseTemplateSnapshot } from '../lib/image-use-templates';
 import type { ImageDraft } from '../lib/image-studio';
 import './studios.css';
@@ -91,6 +92,9 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   const [preparingAnimation, setPreparingAnimation] = useState(false);
   const animationPreparation = useRef<AbortController | undefined>(undefined);
   useEffect(() => () => animationPreparation.current?.abort(), []);
+  const [preparingSvg, setPreparingSvg] = useState(false);
+  const svgPreparation = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => svgPreparation.current?.abort(), []);
   const [checkingReferences, setCheckingReferences] = useState(Boolean(draft.references.length));
   const [referenceError, setReferenceError] = useState('');
   const [referencePreview, setReferencePreview] = useState<string>();
@@ -140,7 +144,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   const needsModelSetup = currentModels.length === 0;
   const active = props.workflowRunner.runs.find(run => isProductionRun(run) && run.projectId === project.id && ['running', 'paused'].includes(run.status));
   const reviewing = props.workflowRunner.runs.some(run => run.projectId === project.id && run.status === 'waiting-review');
-  const busy = restoringImage || preparingAnimation || Boolean(active) || project.status === 'processing' && !reviewing;
+  const busy = restoringImage || preparingAnimation || preparingSvg || Boolean(active) || project.status === 'processing' && !reviewing;
   const realEntries = props.ledger.filter(entry => entry.projectId === project.id && entry.billingMode === 'live');
   const costSummary = summarizeCosts(realEntries);
   const purpose = imageDraftPurpose(draft);
@@ -152,7 +156,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   const refinementNeedsImage = draft.mode === 'refine' && !task.parameters.attachmentIds.length && !animationSource;
   const quantityValid = validImageQuantity(draft.quantity);
   const outputIssue = imageOutputIssue(draft.imageOptions, currentModel?.modelId, task.parameters.capability, task.parameters.imageBackground);
-  const vectorSourceIssue = animationSource && !props.workflowRunner.prepareGeneratedAnimationReference ? '请使用支持继续修改动画的新版桌面应用。' : draft.mode === 'refine' && !draft.references.length && selectedImage?.mimeType === 'image/svg+xml' ? 'SVG 成品可预览和下载；请选择 PNG、JPEG 或 WebP 原图。' : '';
+  const vectorSourceIssue = animationSource && !props.workflowRunner.prepareGeneratedAnimationReference ? '请使用支持继续修改动画的新版桌面应用。' : draft.mode === 'refine' && !draft.references.length && selectedImage?.mimeType === 'image/svg+xml' ? '静态矢量原文件可外部编辑；点击画面上方“转PNG作参考”再继续精修。' : '';
   const quantityUnit = animationSource || draft.imageOptions?.imageOutputFormat === 'gif' ? '份' : '张';
   const quantityLabel = quantityValid ? `${draft.quantity} ${quantityUnit}` : '数量待填写';
   const generationLabel = `${draft.mode === 'refine' ? animationSource ? '继续修改动画' : '开始精修' : draft.references.length ? '按参考图生成' : '生成图片'}${quantityValid ? ` · ${quantityLabel}` : ''}`;
@@ -170,6 +174,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     const currentImage = imageId === undefined ? selectedImage : images.find(image => image.id === imageId);
     imageId ??= editSnapshot.current.selectedImageId;
     if (animationPreparation.current && (imageId !== editSnapshot.current.selectedImageId || nextDraft.mode !== editSnapshot.current.draft.mode || nextDraft.references !== editSnapshot.current.draft.references)) cancelAnimationPreparation();
+    if (svgPreparation.current && (imageId !== editSnapshot.current.selectedImageId || nextDraft.mode !== editSnapshot.current.draft.mode || nextDraft.references !== editSnapshot.current.draft.references)) cancelSvgPreparation();
     if (currentImage && isGalleryImageBase(nextDraft) && nextDraft.galleryBaseId !== currentImage.id) nextDraft = followGalleryImage(nextDraft, currentImage);
     const sourceId = nextDraft.references[0]?.id || (nextDraft.mode === 'refine' ? imageId : undefined);
     if (nextDraft.markupSourceId && sourceId !== nextDraft.markupSourceId) nextDraft = { ...nextDraft, markupSourceId: undefined, imageOptions: { ...nextDraft.imageOptions, imageMarkupId: undefined } };
@@ -341,6 +346,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       if (editSnapshot.current.draft.mode !== mode) { props.notify('图片已保留在项目中；操作模式已变化，当前参考图未改动。', 'info'); return; }
       if (selected.some(file => file.mimeType === 'image/gif')) throw Error('外部GIF暂不支持直接精修。文件仍保留；请从本应用生成记录继续修改动画，或选择静态图片。');
       const files = selected.filter(file => file.kind === 'image' && RASTER_IMAGE_TYPES.has(file.mimeType));
+      if (!files.length && selected.some(file => file.mimeType === 'image/svg+xml')) { props.notify('SVG原文件已保存在项目文件；点击“转PNG作参考”后再精修。', 'info'); layout.openPanel('files'); return; }
       if (!files.length) { if (selected.length) props.notify('请选择图片格式的参考文件。', 'info'); return; }
       if (files.length !== selected.length) props.notify('本次仅使用图片，已忽略其它格式的文件。', 'info');
       if (files.length > MAX_IMAGE_REFERENCES) { props.notify(`每次最多使用 ${MAX_IMAGE_REFERENCES} 张参考图，请重新选择。`, 'error'); return; }
@@ -383,10 +389,30 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   }
   function refineImage(artifact: ArtifactMetadata) {
     if (artifact.mimeType === 'image/gif') { void prepareAnimation(artifact); layout.openPanel('ai'); return; }
-    if (!RASTER_IMAGE_TYPES.has(artifact.mimeType)) { setActionError('SVG／GIF 可直接预览和下载；当前接口不支持将它们作为精修原图，请选择 PNG、JPEG 或 WebP。'); layout.openPanel('ai'); return; }
+    if (artifact.mimeType === 'image/svg+xml') { void convertSvgReference(artifact); layout.openPanel('ai'); return; }
+    if (!RASTER_IMAGE_TYPES.has(artifact.mimeType)) { setActionError('请选择 PNG、JPEG 或 WebP 作为精修原图。'); layout.openPanel('ai'); return; }
     setTextSelection(undefined);
     changeImage(updateImageDraft(editSnapshot.current.draft, { mode: 'refine', references: [{ id: artifact.id, name: artifact.name }], galleryBaseId: artifact.id }), artifact.id);
     revealEditingInput();
+  }
+
+  function cancelSvgPreparation() {
+    svgPreparation.current?.abort(); svgPreparation.current = undefined; setPreparingSvg(false);
+  }
+  async function convertSvgReference(artifact: ArtifactMetadata) {
+    if (svgPreparation.current || animationPreparation.current) return;
+    const controller = new AbortController(), selection = editSnapshot.current.selectedImageId;
+    svgPreparation.current = controller; setPreparingSvg(true); setActionError('');
+    try {
+      const prepared = await prepareSvgReference(runnerRef.current, project.id, artifact.id, controller.signal);
+      if (!alive.current || controller.signal.aborted || svgPreparation.current !== controller || editSnapshot.current.selectedImageId !== selection || !prepared.reference) return;
+      svgPreparation.current = undefined; setPreparingSvg(false); setTextSelection(undefined);
+      const reference = prepared.reference;
+      changeImage(updateImageDraft(editSnapshot.current.draft, { mode: 'refine', references: [{ id: reference.id, name: reference.name }], galleryBaseId: undefined, animationReference: undefined, imageOptions: { imageOutputFormat: 'png' } }), artifact.id);
+      setReferenceRevision(value => value + 1); revealEditingInput();
+      props.notify('已免费转为PNG固定参考，原SVG保留；下一次精修输出PNG。', 'success');
+    } catch (cause) { if (!controller.signal.aborted && alive.current) setActionError(workflowPublicError(cause, 'SVG转换未完成，原文件与费用仍保留。')); }
+    finally { if (svgPreparation.current === controller) { svgPreparation.current = undefined; if (alive.current) setPreparingSvg(false); } }
   }
 
   function selectImage(id: string) {
@@ -468,6 +494,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       <button className="btn btn-primary" disabled={needsModelSetup ? busy || importing || checkingReferences : !ready} aria-label={needsModelSetup ? '配置图片模型' : generationLabel} aria-describedby={generationIssue || imageKeyIssue || actionError || reviewing ? actionStatusId : undefined} onClick={() => needsModelSetup ? props.navigate('models') : generate()}>{busy && active?.status !== 'paused' ? <LoaderCircle size={17} className="spin" /> : draft.mode === 'refine' ? <WandSparkles size={17} /> : <Sparkles size={17} />}{needsModelSetup ? '配置图片模型' : generationLabel}</button>
       {actionStatus}
       {preparingAnimation && <p role="status">正在准备修改…<button type="button" className="ig-link" aria-label="取消动画准备" onClick={cancelAnimationPreparation}>取消</button></p>}
+      {preparingSvg && <p role="status">正在本地转换PNG参考，不调用模型…<button type="button" className="ig-link" aria-label="取消SVG转换" onClick={cancelSvgPreparation}>取消</button></p>}
       <p className="studio-ai-fee-note">{quantityValid && draft.quantity > 1 ? `${quantityUnit === '份' ? '逐份制作' : '逐张生成'} ${draft.quantity} ${quantityUnit} · ` : ''}调用费用自动记录</p>
     </div>
   }>
@@ -513,14 +540,15 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   }
   useStudioToolRequests(props.workspaceId, project.id, tool => { layout.openPanel(tool); });
   const formatTools = <><div className="sw-image-properties"><strong>{selectedImage ? selectedImage.name : '图片输出设置'}</strong><p>{selectedImage ? selectedImage.mimeType + ' · ' + (selectedImage.bytes / 1024).toFixed(0) + ' KB' : '首张图片完成后可在这里查看实际规格。'}</p>{imageMetadata.id === selectedImage?.id && imageMetadata.width && imageMetadata.height && <p>实际尺寸：{imageMetadata.width} × {imageMetadata.height}</p>}</div><label>画面比例与尺寸<Select aria-label="图像输出尺寸" disabled={draft.imageOptions?.imageOutputFormat === 'gif'} value={task.parameters.imageSize} onValueChange={value => updateDraft({ size: value })} options={IMAGE_SIZES} /></label><ImageQuantityField value={draft.quantity} onChange={quantity => updateDraft({ quantity })} disabled={busy || importing} />{outputControls}<label>输出背景<Select aria-label="图像输出背景" disabled={purpose?.background === 'transparent' || ['svg', 'gif'].includes(draft.imageOptions?.imageOutputFormat || '')} value={task.parameters.imageBackground} onValueChange={value => updateDraft({ background: value as ImageDraft['background'] })} options={[{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明背景' }, { value: 'transparent', label: '透明背景 PNG' }]} /></label><p>选择设置不会改动现有图片；下一次明确生成或精修时使用。尺寸与透明背景以模型支持范围为准。</p><button type="button" className="btn btn-secondary" disabled={busy || !selectedImage} onClick={inspectImage}><ShieldCheck size={15} />AI 检查当前图片</button><p>AI 检查会新增一次模型调用并记录费用。</p></>;
-  const versions = <><div className="sw-scope-label">左侧保留本项目全部实际图片结果，切换或撤销不重新调用模型。</div>{selectedImage && <><strong>{selectedImage.name}</strong><p>{selectedImage.mimeType} · {(selectedImage.bytes / 1024).toFixed(0)} KB</p><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />作为精修基底</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />另存原图</button></div></>}{creationPrompt && <RememberedDetails rememberKey={layout.rememberKey('images:source-description')}><summary>查看当时的画面描述</summary><p>{creationPrompt}</p></RememberedDetails>}<p>结果与原图始终保留。当前表单、参考来源和图片选择支持撤销与重做；历史费用不会减少。</p></>;
+  const versions = <><div className="sw-scope-label">左侧保留本项目全部实际图片结果，切换或撤销不重新调用模型。</div>{selectedImage && <><strong>{selectedImage.name}</strong><p>{selectedImage.mimeType} · {(selectedImage.bytes / 1024).toFixed(0)} KB</p><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />{selectedImage.mimeType === 'image/svg+xml' ? '转PNG作参考' : '作为精修基底'}</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />{selectedImage.mimeType === 'image/svg+xml' ? '另存原SVG' : '另存原图'}</button></div></>}{creationPrompt && <RememberedDetails rememberKey={layout.rememberKey('images:source-description')}><summary>查看当时的画面描述</summary><p>{creationPrompt}</p></RememberedDetails>}<p>结果与原图始终保留。当前表单、参考来源和图片选择支持撤销与重做；历史费用不会减少。</p></>;
   const assets = <Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker embedded props={{ ...props, activeProject: project }} title="选择图片参考素材" description="作为固定精修参考，保留当前结果；不会自动生成或收费。" confirmLabel="作为精修参考" onClose={revealEditingInput} onChoose={useMaterial} /></Suspense>;
-  const files = <><ArtifactResults artifacts={artifacts} runner={props.workflowRunner} projectId={project.id} onUseReference={refineImage} /><p>项目调用费用</p><CostTotal summary={costSummary} /><p>生成、精修和检查按每次真实调用累计；手工修改、导出和撤销不减少费用。</p></>;
+  const files = <><ArtifactResults artifacts={artifacts} runner={props.workflowRunner} projectId={project.id} onUseReference={refineImage} referenceActionLabel={artifact => artifact.mimeType === 'image/svg+xml' ? '转PNG作参考' : '用作参考'} /><p>项目调用费用</p><CostTotal summary={costSummary} /><p>生成、精修和检查按每次真实调用累计；手工修改、导出和撤销不减少费用。</p></>;
   const deliveryTools = <><p>导出当前所选真实图片，再按需完成当前版本的人工验收。</p><button type="button" className="btn btn-secondary" disabled={!selectedImage || saving} onClick={() => { if (selectedImage) void saveImage(selectedImage); }}><Download size={15} />另存当前图片</button></>;
   const panel = layout.tool === 'ai' ? settingsPanel : layout.tool === 'format' ? formatTools : layout.tool === 'assets' ? assets : layout.tool === 'versions' ? versions : layout.tool === 'files' ? files : deliveryTools;
   return <div ref={workbench} className="sw-editor-root image-studio-page">
     {markupSource && <Suspense fallback={null}><ImageMarkupEditor source={markupSource.url} onSave={saveMarkup} onClose={() => setMarkupSource(undefined)} /></Suspense>}
     <StudioWorkbench projectName={project.name} kind="image" titleActions={<button type="button" className="btn btn-ghost" onClick={() => setGroupBatchOpen(true)}><Layers3 size={16} />分组批量生成</button>} layout={layout} onTool={openTool} saveStatus={busy ? '正在制作，已发生费用保留' : selectedImage ? '真实图片已保存到当前项目' : '尚未生成图片 · 可以先添加参考'} selectionLabel={draft.mode === 'refine' && draft.references.length ? isGalleryImageBase(draft) ? '精修基底跟随当前结果' : draft.references.length + ' 份固定精修参考' : selectedImage ? '当前所选图片：' + selectedImage.name : '未选择图片'} navigation={<ImageHistoryNavigation images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} />} navigationLabel="图片结果" panel={panel} selectionTools={<>{(textSelection || selectedImage && (localUndo.available || localRedo.available)) && <SelectionHistoryToolbar label={textSelection ? '选中的图片描述文字' : '当前图片'} exactSelection={!!textSelection} selectedCount={textSelection ? Array.from(localValue.slice(localStart, localEnd)).length : 0} image={!textSelection} selectionPreview={textSelection ? localValue.slice(localStart, localEnd) : selectedImage?.name} canUndo={localUndo.available} canRedo={localRedo.available} reason={!localUndo.available && !localRedo.available ? localUndo.reason : undefined} disabled={busy || importing || saving} onUndo={() => { void moveSelection('undo'); }} onRedo={() => { void moveSelection('redo'); }} onClearSelection={textSelection ? () => setTextSelection(undefined) : undefined} />}</>} cost={<CostTotal summary={costSummary} />} busy={busy || importing || saving} exporting={saving} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!selectedImage} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onExport={() => { if (selectedImage) void saveImage(selectedImage); }} deliveryPanel={selectedImage && <DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="image" artifactIds={[selectedImage.id]} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} sourceRevision={JSON.stringify({ id: selectedImage.id, target: deliveryTarget })} checks={imageDeliveryChecks({ ...(imageMetadata.id === selectedImage.id ? imageMetadata : {}), expectedSize: deliveryTarget.size, requiresTransparency, mimeType: selectedImage.mimeType, artifactAvailable: true })} />} >
+      {selectedImage?.mimeType === 'image/svg+xml' && <div className="sw-scope-label"><strong>静态矢量原文件，可在矢量工具中编辑</strong><p>平台内AI精修使用PNG参考，转换免费；原SVG保留。</p><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />转PNG作参考</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />另存原SVG</button></div>}
       <ImageGallery hideActions showHistory={false} onCreate={() => layout.openPanel('ai')} reference={draft.mode === 'refine' && draft.references.length ? { name: draft.references[0].name, url: referencePreview, loading: checkingReferences, error: referenceError } : undefined} onImageReady={inspectImageMetadata} images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} onRefine={refineImage} onSave={artifact => { void saveImage(artifact); }} saving={saving} canRefine={!busy && !importing} />
     </StudioWorkbench>
     {groupBatchOpen && <Suspense fallback={<p role="status">正在打开分组生成…</p>}><ImageGroupBatchPanel key={props.workspaceId + '/' + project.id} props={props} project={project} settings={{ model: generationModel, credentialId: groupCredential, size: draft.size, background: task.parameters.imageBackground, imageOptions: effectiveImageOptions(draft.imageOptions, generationModel?.modelId, 'image-generation') }} busy={busy || importing || saving} onClose={() => setGroupBatchOpen(false)} /></Suspense>}

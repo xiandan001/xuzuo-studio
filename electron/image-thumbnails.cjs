@@ -131,6 +131,16 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     writerQueue = writerQueue.then(() => persistCache(key, buffer, meta)).catch(error => cacheFailure(error, 'write', key)).finally(() => { writes.delete(key); releaseWriter(); cleanupIfIdle(); });
   }
   async function generate(source, key) {
+    if (['image/gif', 'image/svg+xml'].includes(source.artifact.mimeType)) {
+      const file = await source.read(), mimeType = source.artifact.mimeType;
+      if (!file?.buffer?.length || file.buffer.length > 20 * 1024 * 1024) throw new Error('图片为空或超过20MB，请打开项目查看原文件。');
+      if (file.mimeType && file.mimeType !== mimeType) throw new Error('图片格式与登记不一致，请重新读取项目文件。');
+      const formats = require('./image-output-formats.cjs');
+      if (mimeType === 'image/gif') formats.validateGif(file.buffer); else formats.validateSvg(file.buffer);
+      // Keep animation/vector bytes; this preview is never an image API input.
+      const result = { mimeType, dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`, thumbnail: false };
+      return retain(key, result, result.dataUrl.length * 2 + 256);
+    }
     const waiting = pendingPreview(key); if (waiting) return waiting;
     const reused = await cached(key); if (reused) return reused;
     await writerSlot();
@@ -151,8 +161,8 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
     } finally { if (!transferred) releaseWriter(); }
   }
   function get(source) {
-    if (!source || source.artifact?.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.artifact.mimeType) || typeof source.key !== 'string' || typeof source.read !== 'function') return Promise.reject(new Error('请选择可预览的受管图片。'));
-    const key = hash(source.key), ready = memoryPreview(key) || pendingPreview(key); if (ready) return Promise.resolve({ ...ready, artifact: source.artifact });
+    if (!source || source.artifact?.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml'].includes(source.artifact.mimeType) || typeof source.key !== 'string' || typeof source.read !== 'function') return Promise.reject(new Error('请选择可预览的受管图片。'));
+    const key = hash(['image/gif', 'image/svg+xml'].includes(source.artifact.mimeType) ? source.artifact.mimeType + ':' + source.key : source.key), ready = memoryPreview(key) || pendingPreview(key); if (ready) return Promise.resolve({ ...ready, artifact: source.artifact });
     if (pending.has(key)) return pending.get(key);
     const task = serial(() => generate(source, key)).then(result => ({ ...result, artifact: source.artifact })).finally(() => { pending.delete(key); cleanupIfIdle(); }); pending.set(key, task); return task;
   }

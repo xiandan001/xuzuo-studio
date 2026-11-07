@@ -154,6 +154,7 @@ contextBridge.exposeInMainWorld('desktop', {
     thumbnailArtifact: id => ipcRenderer.invoke('runtime:thumbnail-artifact', id),
     inspectImageArtifact: id => ipcRenderer.invoke('runtime:inspect-image-artifact', id),
     prepareGeneratedAnimationReference: input => ipcRenderer.invoke('runtime:prepare-generated-animation-reference', input),
+    prepareSvgReference: input => ipcRenderer.invoke('runtime:prepare-svg-reference', input),
     openArtifact: id => ipcRenderer.invoke('runtime:open-artifact', id),
     saveArtifact: id => ipcRenderer.invoke('runtime:save-artifact', id),
     trashArtifact: id => ipcRenderer.invoke('runtime:trash-artifact', id),

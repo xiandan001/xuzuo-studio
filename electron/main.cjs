@@ -94,7 +94,8 @@ function registerRuntime(credentials) {
   const builtinAssets = createBuiltinAssets({ workspaceStorage, artifactStore, assetLibrary: assets });
   const assetCategories = createAssetCategories({ workspaceStorage, assetLibrary: assets, builtinAssets });
   const fetchImpl = (url, options) => net.fetch(url, options);
-  const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl, directory: app.getPath('userData'), getAvailableRuns: async projectIds => (await liveEngine.snapshot(undefined, { summaryOnly: true, projectIds })).runs });
+  const normalizeRasterReference = require('./image-reference-normalization.cjs').createImageReferenceNormalizer({ nativeImage });
+  const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl, normalizeRasterReference, directory: app.getPath('userData'), getAvailableRuns: async projectIds => (await liveEngine.snapshot(undefined, { summaryOnly: true, projectIds })).runs });
   const fxRates = createFxRateService({ directory: app.getPath('userData'), fetchImpl });
   liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
   const documentArtifactPreview = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
@@ -221,6 +222,8 @@ function registerRuntime(credentials) {
   handle('save-image-markup', input => withProjectWrite(input?.projectId, () => require('./image-markup.cjs').saveImageMarkup(artifactStore, input)));
   const prepareAnimationReference = require('./generated-animation-reference.cjs').createGeneratedAnimationReference({ artifactStore, liveEngine });
   handle('prepare-generated-animation-reference', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); if (movingArtifacts.has(input?.sourceArtifactId)) throw Error('这份动画正在移动，请稍后再试。'); return prepareAnimationReference(input); }));
+  const prepareSvgReference = require('./svg-reference.cjs').createSvgReference({ artifactStore });
+  handle('prepare-svg-reference', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); if (movingArtifacts.has(input?.sourceArtifactId)) throw Error('这份SVG正在移动，请稍后再试。'); return prepareSvgReference(input); }));
   handle('customer-quote-export', input => withProjectWrite(input?.projectId, () => quoteExporter.export(input)));
   handle('automation-snapshot', workspaceId => automationCenter.snapshot(workspaceId));
   handle('automation-planning-start', input => automationPlanning.start(input));

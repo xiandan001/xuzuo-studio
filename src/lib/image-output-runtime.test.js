@@ -18,11 +18,11 @@ const usage = { input_tokens: 30, output_tokens: 196, total_tokens: 226 };
 function request(kind = 'image-generation', options = {}) {
   return { requestId: 'request-1', runId: 'run-1', projectId: 'project-1', credentialId: 'fixture-key-id', kind, connection: { id: 'connection', providerId: 'openai', protocol: 'openai-responses', enabled: true, baseUrl: 'https://fixture.example/v1' }, model: { id: 'model', modelId: 'gpt-image-2.6-sunburst', connectionId: 'connection', enabled: true, capabilities: [kind] }, prompt: '隔离测试描述', input: '', attachments: [], options: { count: 1, ...options } };
 }
-function fixture(bytes = PNG, extra = {}) {
+function fixture(bytes = PNG, extra = {}, normalizeRasterReference) {
   const calls = [], writes = [], files = new Map();
   const withSecret = vi.fn(async (_id, _connection, action) => action('fixture-only-secret'));
   const read = vi.fn(async id => { if (!files.has(id)) throw new Error('fixture missing artifact'); return files.get(id); });
-  const runtime = createModelRuntime({ credentialStore: { withSecret }, artifactStore: { read, write: async value => { writes.push(value); return { ...value, id: `output-${writes.length}`, bytes: value.buffer.length }; } }, fetchImpl: async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }], usage, ...extra }), { headers: { 'content-type': 'application/json', 'x-request-id': 'fixture-image-request' } }); } });
+  const runtime = createModelRuntime({ credentialStore: { withSecret }, artifactStore: { read, write: async value => { writes.push(value); return { ...value, id: `output-${writes.length}`, bytes: value.buffer.length }; } }, normalizeRasterReference, fetchImpl: async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }], usage, ...extra }), { headers: { 'content-type': 'application/json', 'x-request-id': 'fixture-image-request' } }); } });
   const add = (id, changes = {}) => { const file = { id, projectId: 'project-1', name: `${id}.png`, mimeType: 'image/png', buffer: PNG, ...changes }; files.set(id, file); return file; };
   return { runtime, calls, writes, files, add, withSecret, read };
 }
@@ -178,5 +178,54 @@ describe('Markup-guided image editing', () => {
       await expect(f.runtime.execute(input)).rejects.toMatchObject({ code: 'INVALID_IMAGE_INPUT', requestStarted: false });
       expect(f.calls).toHaveLength(0); expect(f.withSecret).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Local preparation of mislabelled raster references', () => {
+  // Synthetic JPEG; complete native decoding is separately exercised by verify-image-reference-normalization.cjs.
+  const jpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAB//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJgAtOz/2Q==', 'base64');
+  const original = Buffer.concat([jpeg, Buffer.alloc(24, 65)]);
+  const prepared = PngCodec.sync.write({ width: 1, height: 1, data: Buffer.from([0, 128, 255, 255]) });
+  it('prepares JPEG plus 24 trailing bytes registered as PNG before credentials and sends only the canonical PNG, preserving original bytes/metadata', async () => {
+    const normalize = vi.fn(async () => ({ buffer: prepared, mimeType: 'image/png', width: 1, height: 1 }));
+    const f = fixture(PNG, {}, normalize), source = f.add('wrong-extension', { name: '错误扩展名.jpg', mimeType: 'image/png', buffer: Buffer.from(original) });
+    const before = { ...source, buffer: Buffer.from(source.buffer) }, input = request('image-editing'), onProgress = vi.fn(); input.attachments = [source];
+    await f.runtime.execute(input, { onProgress });
+    expect(normalize).toHaveBeenCalledExactlyOnceWith({ buffer: original, mimeType: 'image/png' });
+    expect(normalize.mock.invocationCallOrder[0]).toBeLessThan(f.withSecret.mock.invocationCallOrder[0]);
+    const image = f.calls[0].init.body.getAll('image[]')[0];
+    expect(f.calls).toHaveLength(1); expect(f.calls[0].url).toBe('https://fixture.example/v1/images/edits'); expect(image.name).toBe('错误扩展名.png'); expect(image.type).toBe('image/png'); expect(Buffer.from(await image.arrayBuffer())).toEqual(prepared);
+    expect(f.files.get(source.id)).toEqual(before); expect(onProgress.mock.calls.some(([event]) => event.phase === 'preparing' && event.message.includes('本地免费') && event.message.includes('不调用模型'))).toBe(true);
+  });
+  it('keeps already-correct PNG/JPEG/WebP on the direct path without local re-encoding', async () => {
+    for (const [mimeType, buffer] of [['image/png', PNG], ['image/jpeg', jpeg], ['image/webp', WEBP]]) {
+      const normalize = vi.fn(), f = fixture(PNG, {}, normalize), source = f.add('correct', { mimeType, buffer });
+      const input = request('image-editing'); input.attachments = [source]; await f.runtime.execute(input);
+      expect(normalize).not.toHaveBeenCalled(); expect(Buffer.from(await f.calls[0].init.body.getAll('image[]')[0].arrayBuffer())).toEqual(buffer);
+    }
+  });
+  it('reports a named reference failure rather than supplier output when the local decoder cannot repair it, without credentials or HTTP', async () => {
+    const normalize = vi.fn(async () => { throw Object.assign(Error('参考图无法完整解码。'), { code: 'INVALID_IMAGE_INPUT' }); });
+    const f = fixture(PNG, {}, normalize), source = f.add('bad', { name: '有问题的参考.png', buffer: original });
+    const input = request('image-editing'); input.attachments = [source];
+    await expect(f.runtime.execute(input)).rejects.toMatchObject({ code: 'INVALID_IMAGE_INPUT', requestStarted: false, message: expect.stringContaining('参考图“有问题的参考.png”') });
+    expect(f.calls).toHaveLength(0); expect(f.withSecret).not.toHaveBeenCalled(); expect(source.buffer).toEqual(original);
+  });
+  it('does not pass actual GIF or SVG through the raster normalizer merely because metadata says PNG', async () => {
+    for (const buffer of [GIF, SVG]) {
+      const normalize = vi.fn(), f = fixture(PNG, {}, normalize), source = f.add('not-raster', { buffer });
+      const input = request('image-editing'); input.attachments = [source];
+      await expect(f.runtime.execute(input)).rejects.toMatchObject({ code: 'INVALID_IMAGE_INPUT', requestStarted: false });
+      expect(normalize).not.toHaveBeenCalled(); expect(f.calls).toHaveLength(0); expect(f.withSecret).not.toHaveBeenCalled();
+    }
+  });
+  it('cancelling pending local preparation sends no request and preserves the source', async () => {
+    let resolve, enter;
+    const entered = new Promise(done => { enter = done; });
+    const normalize = vi.fn(() => { enter(); return new Promise(done => { resolve = done; }); });
+    const f = fixture(PNG, {}, normalize), source = f.add('pending', { buffer: original }), controller = new AbortController();
+    const input = request('image-editing'); input.attachments = [source];
+    const execution = f.runtime.execute(input, { signal: controller.signal }); await entered; controller.abort(); resolve({ buffer: prepared, mimeType: 'image/png', width: 1, height: 1 });
+    await expect(execution).rejects.toMatchObject({ code: 'CANCELLED', requestStarted: false }); expect(f.calls).toHaveLength(0); expect(f.withSecret).not.toHaveBeenCalled(); expect(source.buffer).toEqual(original);
   });
 });

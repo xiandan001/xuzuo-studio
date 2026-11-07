@@ -15,7 +15,7 @@ function validateSvg(bytes) {
   const source = bytes.toString('utf8').replace(/^\uFEFF/, '');
   if (source.includes('\uFFFD')) throw invalid('SVG 需要有效的UTF-8内容。');
   const { SaxesParser } = require('saxes');
-  const parser = new SaxesParser({ xmlns: true }); let count = 0, depth = 0, root = false, styleDepth = 0;
+  const parser = new SaxesParser({ xmlns: true }); let count = 0, depth = 0, root = false, styleDepth = 0, intrinsicSize = false;
   const denied = new Set(['script', 'foreignobject', 'image', 'feimage', 'iframe', 'object', 'embed', 'animate', 'animatemotion', 'animatetransform', 'set', 'discard', 'handler', 'listener']);
   parser.on('doctype', () => { throw invalid('SVG 不允许DTD或外部实体。'); });
   parser.on('processinginstruction', () => { throw invalid('SVG 不允许外部样式指令。'); });
@@ -27,6 +27,7 @@ function validateSvg(bytes) {
     if (name === 'style') styleDepth = depth;
     for (const attribute of Object.values(node.attributes)) {
       const key = attribute.local.toLowerCase(), value = attribute.value;
+      if (depth === 1 && ['width', 'height'].includes(key) && !value.trim().endsWith('%')) intrinsicSize = true;
       if (attribute.prefix === 'xmlns' || attribute.name === 'xmlns') continue;
       if (key.startsWith('on') || ['base', 'src'].includes(key)) throw invalid('SVG 包含不允许的交互或资源属性。');
       if (key === 'href' && !/^#[A-Za-z_][\w:.-]*$/.test(value)) throw invalid('SVG 只允许文档内的矢量引用。');
@@ -39,6 +40,11 @@ function validateSvg(bytes) {
   parser.on('closetag', () => { if (depth === styleDepth) styleDepth = 0; depth--; });
   parser.on('error', () => { throw invalid('SVG 文档格式无效。'); });
   parser.write(source).close(); if (!root || depth !== 0) throw invalid('SVG 文档不完整。');
+  if (intrinsicSize) {
+    let size;
+    try { size = rasterDimensions(bytes); } catch { throw invalid('SVG 固定画布尺寸无效。'); }
+    if (!Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0 || size.width > 16384 || size.height > 16384 || size.width * size.height > 16777216) throw invalid('SVG 固定画布尺寸无效或过大。');
+  }
   return { mimeType: 'image/svg+xml', extension: 'svg' };
 }
 function validateGif(bytes) {

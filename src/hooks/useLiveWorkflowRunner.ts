@@ -180,7 +180,10 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     if (['resume', 'retry', 'continue'].includes(action) && current.isOtherTaskRunning(run.projectId)) { current.notify('项目正在处理其他任务，请等待操作完成。', 'info'); return; }
     const project = current.projects.find(item => item.id === run.projectId);
     try { await bridge.control({ id, action, stepId, stepBudgetCents, project, connections: current.configuration.connections, models: current.configuration.models }); const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot) mergeRef.current(snapshot); }
-    catch (error) { current.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作未完成，请检查运行记录。', 'error'); }
+    catch (error) {
+      try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot && alive.current) mergeRef.current(snapshot); } catch { /* The original action error remains available even when refresh is unavailable. */ }
+      current.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作未完成，请检查运行记录。', 'error');
+    }
   };
   const workspaceProjectIds = new Set(options.projects.filter(project => project.workspaceId === options.workspaceId && !project.purgedAt).map(project => project.id));
   const visibleRuns = useMemo(() => {
@@ -250,6 +253,16 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         if (!bridge?.prepareGeneratedAnimationReference) throw new Error('当前桌面后台不支持继续修改动画。');
         if (optionsRef.current.projects.some(project => project.id === input.projectId && project.purgedAt)) throw new Error('项目已永久移除，不能再修改其动画。');
         const result = await bridge.prepareGeneratedAnimationReference(input);
+        if (result.reference) inventoryCache.invalidate(input.projectId);
+        return result;
+      },
+    } : {}),
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.prepareSvgReference === 'function' ? {
+      async prepareSvgReference(input: import('../live-types').SvgReferenceInput) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.prepareSvgReference) throw new Error('当前桌面后台不支持 SVG 参考转换。');
+        if (optionsRef.current.projects.some(project => project.id === input.projectId && project.purgedAt)) throw new Error('项目已永久移除，不能再准备其 SVG 参考。');
+        const result = await bridge.prepareSvgReference(input);
         if (result.reference) inventoryCache.invalidate(input.projectId);
         return result;
       },
