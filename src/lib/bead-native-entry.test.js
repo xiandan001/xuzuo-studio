@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 const source = fs.readFileSync(new URL('../../scripts/verify-bead-native.cjs', import.meta.url), 'utf8');
 const dispatch = source.slice(source.lastIndexOf('\nif (process.versions.electron'), source.lastIndexOf('\nmodule.exports'));
-const { pdfAssetDirectory, pdfBodyText, pdfTextChecks } = createRequire(import.meta.url)('../../scripts/verify-bead-native.cjs');
+const { pdfAssetDirectory, pdfBodyText, pdfTextChecks, hotpinkPixelCount } = createRequire(import.meta.url)('../../scripts/verify-bead-native.cjs');
 
 function execute({ electron = false, main = false, args = ['--native-child', 'fixture-directory', 'fixture-source', 'fixture-nonce'] } = {}) {
   const module = {}, calls = { native: [], parent: [], output: [] };
@@ -16,6 +16,11 @@ function execute({ electron = false, main = false, args = ['--native-child', 'fi
 }
 
 describe('native bead CLI dispatch', () => {
+  it('rejects the exact PDF.js debug fallback colour while allowing the fixture palette and grayscale hatch', () => {
+    expect(hotpinkPixelCount(new Uint8Array([255, 0, 0, 255, 255, 255, 255, 255, 180, 180, 180, 255, 255, 0, 255, 255]))).toBe(0);
+    expect(hotpinkPixelCount(new Uint8Array([255, 105, 180, 255, 255, 105, 180, 255]))).toBe(2);
+  });
+
   it('extracts only ordered body text across two pages while excluding known header/footer regions', () => {
     const view = [0, 0, 595, 842], at = (str, topMm) => ({ str, transform: [1, 0, 0, 1, 30, view[3] - topMm * 72 / 25.4] });
     const pages = [[at('列61–61·行81–81', 25), at('Permission is hereby granted,', 32), at('free of charge', 37), at('Footer1', 290)], [at('Header2', 25), at('to any person.', 32), at('native-v1', 37), at('LONGCODE1234', 42), at('Footer2', 290)]];

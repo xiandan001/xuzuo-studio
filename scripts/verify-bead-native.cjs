@@ -22,6 +22,11 @@ function pdfTextChecks(bodyPages, expected) {
   const compact = value => value.replace(/\s/g, ''), body = compact(bodyPages.join('\n'));
   return Object.fromEntries(Object.entries(expected).map(([field, value]) => [field, body.includes(compact(value))]));
 }
+function hotpinkPixelCount(pixels) {
+  let count = 0;
+  for (let at = 0; at < pixels.length; at += 4) if (pixels[at] === 255 && pixels[at + 1] === 105 && pixels[at + 2] === 180 && pixels[at + 3] === 255) count++;
+  return count;
+}
 const requiredFiles = ['bead-source.cjs', 'bead-raster-orientation.cjs', 'bead-pattern.runtime.cjs', 'bead-document.cjs', 'bead-exports.cjs', 'bead-export-helpers.cjs', 'bead-pdf-layout.cjs', 'bead-pdf-printer.cjs', 'cpu-tasks.cjs', 'cpu-worker.cjs', 'image-reference-normalization.cjs', 'image-output-formats.cjs', 'artifact-store.cjs'];
 
 function argumentsFor(args) {
@@ -298,6 +303,9 @@ async function inspectPdfs(directory, output, report, runtime) {
         const page = await pdf.getPage(number), viewport = page.getViewport({ scale: 1.4 }), surface = canvas.createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
         await page.render({ canvas: surface, canvasContext: surface.getContext('2d'), viewport }).promise;
         const file = path.join(output, `${entry.name}-page${number}.png`); fs.writeFileSync(file, surface.toBuffer('image/png')); entry.renderedPages.push(file); page.cleanup();
+        const hotpink = hotpinkPixelCount(surface.getContext('2d').getImageData(0, 0, surface.width, surface.height).data);
+        (entry.renderingPixelChecks ||= []).push({ page: number, hotpink });
+        assert.equal(hotpink, 0, `${entry.name} page ${number} contains PDF.js unsupported-shading hotpink pixels`);
       }
     } finally { await loading.destroy(); }
   }
@@ -347,4 +355,4 @@ else if (require.main === module) {
   else runProbe(process.argv.slice(2)).catch(error => { process.stderr.write(errorsOf(error) + '\n'); process.exitCode = 1; });
 }
 
-module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment, pdfAssetDirectory, pdfBodyText, pdfTextChecks };
+module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment, pdfAssetDirectory, pdfBodyText, pdfTextChecks, hotpinkPixelCount };

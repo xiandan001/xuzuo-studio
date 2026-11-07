@@ -95,7 +95,8 @@ describe('bounded printable layout and client bundle', () => {
   });
   it('tiles charts at 30x40 with 6mm cells, exact global coordinates and a short-symbol legend', async () => {
     const result = await createBeadExport({ document: document(61, 81), format: 'pdf' }, dependencies), { html, pages } = result;
-    expect(html.match(/class="sheet chart-sheet"/g)).toHaveLength(9); expect(html).toContain('列 61–61 · 行 81–81'); expect(html).toContain('6mm'); expect(html).toContain('LONGCODE1234'); expect(html).toContain('短号');
+      expect(html.match(/class="sheet chart-sheet"/g)).toHaveLength(9); expect(html).toContain('列 61–61 · 行 81–81'); expect(html).toContain('6mm'); expect(html).toContain('LONGCODE1234'); expect(html).toContain('短号');
+      expect(html).not.toContain('gradient('); expect(html).toContain('.t::before,.t::after'); expect(html).toContain('border-top:.15mm solid #b4b4b4');
     expect(html.match(/class="sheet /g)).toHaveLength(pages); expect(pages).toBeLessThanOrEqual(100); expect(html).not.toMatch(/<script|<img|<iframe|<link|\b(?:src|href)=|url\(/i);
     const firstChart = html.split('<section class="sheet chart-sheet"')[1].split('</section>')[0]; expect(firstChart).not.toMatch(/>R1<|>LONGCODE1234</); expect(firstChart).toContain('>1</b>');
   });
