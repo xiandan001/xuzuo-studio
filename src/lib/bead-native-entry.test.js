@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
 const source = fs.readFileSync(new URL('../../scripts/verify-bead-native.cjs', import.meta.url), 'utf8');
 const dispatch = source.slice(source.lastIndexOf('\nif (process.versions.electron'), source.lastIndexOf('\nmodule.exports'));
+const { pdfAssetDirectory } = createRequire(import.meta.url)('../../scripts/verify-bead-native.cjs');
 
 function execute({ electron = false, main = false, args = ['--native-child', 'fixture-directory', 'fixture-source', 'fixture-nonce'] } = {}) {
   const module = {}, calls = { native: [], parent: [], output: [] };
@@ -14,6 +16,14 @@ function execute({ electron = false, main = false, args = ['--native-child', 'fi
 }
 
 describe('native bead CLI dispatch', () => {
+  it.each([
+    ['D:\\a\\repo\\node_modules\\pdfjs-dist\\cmaps', 'D:/a/repo/node_modules/pdfjs-dist/cmaps/'],
+    ['D:\\a\\repo\\node_modules\\pdfjs-dist\\standard_fonts\\', 'D:/a/repo/node_modules/pdfjs-dist/standard_fonts/'],
+    ['/tmp/deps/pdfjs-dist/cmaps/', '/tmp/deps/pdfjs-dist/cmaps/'],
+  ])('formats a local PDF.js asset directory with the required trailing forward slash: %s', (input, expected) => {
+    expect(pdfAssetDirectory(input)).toBe(expected);
+  });
+
   it.each([false, 'foreign'])('runs the Electron child when default_app imports the entry with require.main=%s', main => {
     const calls = execute({ electron: true, main });
     expect(calls.native).toEqual([[path.resolve('fixture-directory'), path.resolve('fixture-source'), 'fixture-nonce']]);

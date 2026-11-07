@@ -13,6 +13,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const errorsOf = error => String(error?.stack || error);
+const pdfAssetDirectory = directory => directory.replaceAll('\\', '/').replace(/\/+$/, '') + '/';
 const requiredFiles = ['bead-source.cjs', 'bead-raster-orientation.cjs', 'bead-pattern.runtime.cjs', 'bead-document.cjs', 'bead-exports.cjs', 'bead-export-helpers.cjs', 'bead-pdf-layout.cjs', 'bead-pdf-printer.cjs', 'cpu-tasks.cjs', 'cpu-worker.cjs', 'image-reference-normalization.cjs', 'image-output-formats.cjs', 'artifact-store.cjs'];
 
 function argumentsFor(args) {
@@ -274,7 +275,7 @@ async function inspectPdfs(directory, output, report, runtime) {
   catch (error) { report.rendering = { status: 'unavailable', reason: `PDF rendering dependency could not load; actual PDFs retained: ${errorsOf(error)}` }; throw Error(report.rendering.reason); }
   for (const entry of report.pdfs) {
     const bytes = fs.readFileSync(path.join(directory, entry.file));
-    const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, cMapUrl: path.join(pdfRoot, 'cmaps') + path.sep, cMapPacked: true, standardFontDataUrl: path.join(pdfRoot, 'standard_fonts') + path.sep });
+    const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, cMapUrl: pdfAssetDirectory(path.join(pdfRoot, 'cmaps')), cMapPacked: true, standardFontDataUrl: pdfAssetDirectory(path.join(pdfRoot, 'standard_fonts')) });
     const pdf = await loading.promise;
     try {
       assert.equal(pdf.numPages, entry.plannedPages); const pageTexts = [];
@@ -336,4 +337,4 @@ else if (require.main === module) {
   else runProbe(process.argv.slice(2)).catch(error => { process.stderr.write(errorsOf(error) + '\n'); process.exitCode = 1; });
 }
 
-module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment };
+module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment, pdfAssetDirectory };
