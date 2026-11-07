@@ -100,7 +100,8 @@ function isolatedEnvironment(directory, runtime) {
   const env = {};
   for (const name of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'ComSpec', 'COMSPEC', 'LANG', 'LC_ALL', 'DISPLAY', 'WAYLAND_DISPLAY']) if (process.env[name]) env[name] = process.env[name];
   const profile = path.join(directory, 'profile');
-  Object.assign(env, { TEMP: directory, TMP: directory, HOME: profile, USERPROFILE: profile, APPDATA: path.join(profile, 'Roaming'), LOCALAPPDATA: path.join(profile, 'Local'), XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: path.join(profile, 'cache'), NODE_PATH: path.join(runtime.directory, 'node_modules'), UV_THREADPOOL_SIZE: '2' });
+  for (const location of [profile, path.join(profile, 'Roaming'), path.join(profile, 'Local'), path.join(profile, 'cache'), path.join(profile, 'session')]) fs.mkdirSync(location, { recursive: true });
+  Object.assign(env, { TEMP: directory, TMP: directory, HOME: profile, USERPROFILE: profile, APPDATA: path.join(profile, 'Roaming'), LOCALAPPDATA: path.join(profile, 'Local'), XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: path.join(profile, 'cache'), NODE_PATH: path.join(runtime.directory, 'node_modules'), UV_THREADPOOL_SIZE: '2', ELECTRON_ENABLE_LOGGING: '1' });
   return env;
 }
 
@@ -118,10 +119,10 @@ function stopOwnedChild(pid) {
 async function launchNative(directory, source, runtime, nonce) {
   return new Promise(resolve => {
     const child = spawn(runtime.executable, [__filename, '--native-child', directory, source.directory, nonce], { env: isolatedEnvironment(directory, runtime), windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '', settled = false;
-    child.stdout.on('data', () => undefined);
+    let stdout = '', stderr = '', settled = false;
+    child.stdout.on('data', bytes => { stdout = (stdout + bytes.toString('utf8')).slice(-12000); });
     child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString('utf8')).slice(-12000); });
-    const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve({ pid: child.pid, stderr, ...value }); };
+    const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve({ pid: child.pid, stdout, stderr, ...value }); };
     const timer = setTimeout(() => { stopOwnedChild(child.pid); finish({ exitCode: null, error: 'Native bead verification exceeded 120 seconds' }); }, 120000);
     child.once('error', error => finish({ exitCode: null, error: errorsOf(error) }));
     child.once('exit', (code, signal) => finish({ exitCode: code, signal }));
@@ -148,8 +149,9 @@ function documentFor(pattern, reference, settings) {
 }
 
 async function nativeFixture(directory, sourceRoot, nonce) {
+  writeJson(path.join(directory, 'report.json'), { status: 'failed', phase: 'native-entry', processIds: [process.pid], failures: [] });
   const { app, nativeImage, BrowserWindow } = require('electron');
-  const started = performance.now(), report = { status: 'failed', electron: process.versions.electron, chromium: process.versions.chrome, platform: process.platform, modelCalls: 0, outboundRequests: 0, windows: { created: 0, destroyed: 0, shown: 0 }, workerTasks: [], pdfs: [], processIds: [process.pid], failures: [] };
+  const started = performance.now(), report = { status: 'failed', phase: 'configuring-profile', electron: process.versions.electron, chromium: process.versions.chrome, platform: process.platform, modelCalls: 0, outboundRequests: 0, windows: { created: 0, destroyed: 0, shown: 0 }, workerTasks: [], pdfs: [], processIds: [process.pid], failures: [] };
   let printer, tasks, store, source; const activeWorkers = new Set(), workerExits = [];
   const persist = () => writeJson(path.join(directory, 'report.json'), { ...report, nativeElapsedMs: performance.now() - started });
   const fail = error => { report.failures.push(errorsOf(error)); persist(); };
@@ -161,6 +163,7 @@ async function nativeFixture(directory, sourceRoot, nonce) {
   process.once('uncaughtException', fatal); process.once('unhandledRejection', fatal);
   const watchdog = setTimeout(() => fatal(Error('Hidden native fixture exceeded 110 seconds')), 110000);
   try {
+    persist();
     ownsDirectory(directory, nonce); lowerPriority();
     fs.mkdirSync(path.join(directory, 'profile/session'), { recursive: true });
     app.setPath('userData', path.join(directory, 'profile')); app.setPath('sessionData', path.join(directory, 'profile/session')); app.disableHardwareAcceleration();
@@ -171,7 +174,8 @@ async function nativeFixture(directory, sourceRoot, nonce) {
       window.once('show', () => { report.windows.shown++; }); window.once('closed', () => { report.windows.destroyed++; });
       window.webContents.once('did-finish-load', () => { const pid = window.webContents.getOSProcessId(); if (pid) report.processIds.push(pid); });
     });
-    await app.whenReady();
+    report.phase = 'waiting-for-ready'; persist(); await app.whenReady();
+    report.phase = 'source-validation'; persist();
     const load = createRequire(path.join(sourceRoot, 'package.json')), { PNG } = load('pngjs'), { Worker } = require('node:worker_threads');
     const core = load('./electron/bead-pattern.runtime.cjs');
     report.sourceVersion = readJson(path.join(sourceRoot, 'package.json')).version;
@@ -218,7 +222,7 @@ async function nativeFixture(directory, sourceRoot, nonce) {
       assert.equal(sha256((await store.read(reference.id)).buffer), sha256(jpeg));
       report.sourceExif = { ...report.sourceExif, status: 'passed', preview: preview.getSize(), raster: { width: oriented.raster.width, height: oriented.raster.height }, topBGRA: top, bottomBGRA: bottom, originalUnchanged: true };
     } catch (error) { report.sourceExif = { ...report.sourceExif, status: 'failed', error: errorsOf(error) }; fail(error); }
-    const palette = fixturePalette(sourceRoot); report.expectedText = { version: palette.version, license: palette.license, longCode: 'LONGCODE1234' };
+    const palette = fixturePalette(sourceRoot); report.expectedText = { version: palette.version, license: palette.license, longCode: 'LONGCODE1234' }; report.phase = 'file-export'; persist();
     for (const [columns, rows, name] of [[8, 8, 'small8x8'], [61, 81, 'grid61x81']]) {
       const settings = { columns, rows, fit: 'contain', maxColors: 0, alphaThreshold: 128, boardColumns: 4, boardRows: 4 };
       let pattern = await tasks.run('bead', { raster: decoded.raster, settings, palette });
@@ -240,7 +244,7 @@ async function nativeFixture(directory, sourceRoot, nonce) {
     assert.equal(activeWorkers.size, 0); assert.equal(BrowserWindow.getAllWindows().length, 0); assert.equal(report.windows.created, 2); assert.equal(report.windows.destroyed, 2); assert.equal(report.windows.shown, 0);
     assert.equal(report.outboundRequests, 0); assert.equal(report.pdfPrinterSecurity?.restrictiveCspLoaded, true); assert.equal(Object.keys(require.cache).some(file => file === path.join(sourceRoot, 'electron/main.cjs')), false);
     report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(metric => metric.pid)])];
-    report.workerDispatch = 'production createCpuTasks -> cpu-worker.cjs'; report.windows.remaining = 0; report.status = report.failures.length ? 'failed' : 'passed';
+    report.workerDispatch = 'production createCpuTasks -> cpu-worker.cjs'; report.windows.remaining = 0; report.phase = 'native-complete'; report.status = report.failures.length ? 'failed' : 'passed';
   } catch (error) { fail(error); }
   finally {
     clearTimeout(watchdog);
@@ -292,6 +296,8 @@ async function runProbe(args) {
     child = await launchNative(temporary, source, runtime, nonce);
     const nativeReport = fs.existsSync(path.join(temporary, 'report.json')) ? readJson(path.join(temporary, 'report.json')) : { failures: [child.error || `Electron exited ${child.exitCode} without a report: ${child.stderr}`] };
     Object.assign(result, nativeReport, { commit: result.commit, sourceMode: source.mode, requestedSource: options.sourceRoot, exitCode: child.exitCode });
+    if (child.error || child.exitCode !== 0 || !result.sourceHashes) result.childDiagnostics = { phase: result.phase || 'before-native-entry', stdout: child.stdout, stderr: child.stderr };
+    if (!result.sourceHashes) throw Error(`Native verification stopped during ${result.phase || 'before-native-entry'} (Electron exit ${child.exitCode}): ${child.error || child.stderr || child.stdout || result.failures.join('\n') || 'No native diagnostics'}`);
     if (source.expectedHashes) assert.deepEqual(result.sourceHashes, source.expectedHashes, 'Executed production CJS hashes differ from the requested source');
     if (result.pdfs?.length) await inspectPdfs(temporary, options.output, result, runtime);
     if (child.error) result.failures.push(child.error);
@@ -314,4 +320,4 @@ if (require.main === module) {
   else runProbe(process.argv.slice(2)).catch(error => { process.stderr.write(errorsOf(error) + '\n'); process.exitCode = 1; });
 }
 
-module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource };
+module.exports = { argumentsFor, jpegOrientation6, ownsDirectory, executionSource, isolatedEnvironment };
