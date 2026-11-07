@@ -257,7 +257,8 @@ async function inspectPdfs(directory, output, report, runtime) {
   try { pdfjs = await import(pathToFileURL(path.join(pdfRoot, 'legacy/build/pdf.mjs')).href); }
   catch (error) { report.rendering = { status: 'unavailable', reason: `PDF.js dependency could not load; actual PDFs retained: ${errorsOf(error)}` }; throw Error(report.rendering.reason); }
   let canvas;
-  try { canvas = runtime.load('@napi-rs/canvas'); } catch { report.rendering = { status: 'unavailable', reason: 'Optional @napi-rs/canvas is unavailable; retained PDFs require visual review' }; }
+  try { canvas = createRequire(packageFile)('@napi-rs/canvas'); }
+  catch (error) { report.rendering = { status: 'unavailable', reason: `PDF rendering dependency could not load; actual PDFs retained: ${errorsOf(error)}` }; throw Error(report.rendering.reason); }
   for (const entry of report.pdfs) {
     const bytes = fs.readFileSync(path.join(directory, entry.file));
     const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, cMapUrl: path.join(pdfRoot, 'cmaps') + path.sep, cMapPacked: true, standardFontDataUrl: path.join(pdfRoot, 'standard_fonts') + path.sep });
@@ -269,14 +270,16 @@ async function inspectPdfs(directory, output, report, runtime) {
       for (const value of [report.expectedText.version, report.expectedText.license, report.expectedText.longCode]) assert.ok(all.includes(compact(value)), `${entry.name} PDF lost full version, licence or long colour code`);
       if (entry.chartPages === 9) assert.ok(compact(pageTexts[8]).includes('列61–61·行81–81'), 'The last chart tile lost global row/column coordinates');
       entry.textVerified = true; entry.pdfjsPages = pdf.numPages; entry.output = path.join(output, entry.file); entry.renderedPages = [];
-      if (canvas && entry.chartPages === 9) for (const number of [1, 9, 10]) {
+      if (entry.chartPages === 9) for (const number of [1, 9, 10]) {
         const page = await pdf.getPage(number), viewport = page.getViewport({ scale: 1.4 }), surface = canvas.createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
         await page.render({ canvas: surface, canvasContext: surface.getContext('2d'), viewport }).promise;
         const file = path.join(output, `${entry.name}-page${number}.png`); fs.writeFileSync(file, surface.toBuffer('image/png')); entry.renderedPages.push(file); page.cleanup();
       }
     } finally { await loading.destroy(); }
   }
-  if (canvas) report.rendering = { status: 'passed', engine: 'PDF.js with @napi-rs/canvas', pages: report.pdfs.flatMap(entry => entry.renderedPages) };
+  const pages = report.pdfs.flatMap(entry => entry.renderedPages);
+  assert.equal(pages.length, 3, 'The native PDF acceptance requires rendered pages 1, 9 and 10');
+  report.rendering = { status: 'passed', engine: 'PDF.js with @napi-rs/canvas', pages };
 }
 
 async function runProbe(args) {

@@ -66,7 +66,7 @@ export const BeadCanvas = forwardRef<BeadCanvasHandle, Props>(function BeadCanva
   useEffect(() => { if (disabled) commitStroke(); }, [disabled, commitStroke]);
   useLayoutEffect(() => () => { commitStroke(); if (frame.current !== undefined) cancelAnimationFrame(frame.current); }, [commitStroke]);
   useEffect(() => { const up = () => { space.current = false; }; window.addEventListener('keyup', up); window.addEventListener('blur', up); return () => { window.removeEventListener('keyup', up); window.removeEventListener('blur', up); }; }, []);
-  useEffect(() => { const observer = new MutationObserver(schedule); observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette', 'class', 'style'] }); return () => observer.disconnect(); }, [schedule]);
+  useEffect(() => { const observer = new MutationObserver(schedule); observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-app-theme', 'data-app-palette', 'class', 'style'] }); return () => observer.disconnect(); }, [schedule]);
   useEffect(() => {
     const element = canvas.current; if (!element) return;
     const wheel = (event: WheelEvent) => { event.preventDefault(); setZoom(value => Math.max(.25, Math.min(16, value * (event.deltaY < 0 ? 1.12 : 1 / 1.12)))); };

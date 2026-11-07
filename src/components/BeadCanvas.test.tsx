@@ -49,4 +49,13 @@ describe('拼豆Canvas实际手势与性能边界', () => {
     await fixture(2, 256); expect(container.querySelectorAll('canvas')).toHaveLength(1); expect(container.querySelectorAll('*').length).toBeLessThan(100);
     await act(async () => { for (let count = 0; count < 16; count++) container.querySelector<HTMLButtonElement>('[aria-label="放大拼豆画布"]')!.click(); }); fills = 0; drawFrames(); expect(fills).toBeGreaterThan(0); expect(fills).toBeLessThan(2000);
   });
+  it('生产主题和配色attribute变化会安排重绘，不等待下一次手绘', async () => {
+    const oldTheme = document.documentElement.getAttribute('data-app-theme'), oldPalette = document.documentElement.getAttribute('data-app-palette'), observe = vi.spyOn(MutationObserver.prototype, 'observe');
+    await fixture(); drawFrames(); const before = fills;
+    expect(observe).toHaveBeenCalledWith(document.documentElement, expect.objectContaining({ attributeFilter: ['data-app-theme', 'data-app-palette', 'class', 'style'] }));
+    await act(async () => document.documentElement.setAttribute('data-app-theme', 'dark')); expect(frames.size).toBe(1); drawFrames(); expect(fills).toBeGreaterThan(before);
+    await act(async () => document.documentElement.setAttribute('data-app-palette', 'blue')); expect(frames.size).toBe(1);
+    if (oldTheme === null) document.documentElement.removeAttribute('data-app-theme'); else document.documentElement.setAttribute('data-app-theme', oldTheme);
+    if (oldPalette === null) document.documentElement.removeAttribute('data-app-palette'); else document.documentElement.setAttribute('data-app-palette', oldPalette);
+  });
 });
