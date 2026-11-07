@@ -33,6 +33,11 @@ beforeEach(() => {
   previousStorage = Array.from({ length: localStorage.length }, (_, index): [string, string] => { const key = localStorage.key(index)!; return [key, localStorage.getItem(key)!]; });
   localStorage.clear(); desktopDescriptor = Object.getOwnPropertyDescriptor(window, 'desktop'); Object.defineProperty(window, 'desktop', { configurable: true, value: undefined });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true); vi.stubGlobal('fetch', vi.fn(() => { throw Error('No provider or network calls in mode fixture'); }));
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
   container = document.createElement('div'); document.body.append(container);
   for (const [name, value] of [['initialized', true], ['panel-open', true], ['focus', false], ['tool', 'ai']] as const) writeDisclosure(studioPreferenceKey('images', { workspaceId: project.workspaceId, projectId: project.id }, name), value);
   localStorage.setItem(imageDraftKey(project.id), JSON.stringify({ prompt: '生成描述', refinePrompt: '精修要求', mode: 'create', generationModelId: 'generation-model', editingModelId: 'editing-model', references: [{ id: a.id, name: a.name }] }));
