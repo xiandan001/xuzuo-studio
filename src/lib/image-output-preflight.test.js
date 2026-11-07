@@ -18,6 +18,15 @@ function fixture(dynamic = false) {
   return { input, dependencies, source, markup, files, read, edit };
 }
 describe('Markup preflight without generation calls', () => {
+  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])('accepts GIF edits from static project references on %s without model calls', async modelId => {
+    const f = fixture(); delete f.edit.imageMarkupId;
+    Object.assign(f.edit, { name: '静态参考图制作动效', imageOutputFormat: 'gif', imageFrameCount: 6, imageFrameDurationMs: 200, imageSize: 'auto' });
+    f.input.models[0].modelId = modelId;
+    expect((await preflight(f.input, f.dependencies)).ok).toBe(true);
+    f.input.models[0].modelId = 'gpt-image-2.5-flare';
+    const unavailable = await preflight(f.input, f.dependencies);
+    expect(unavailable.ok).toBe(false); expect(unavailable.errors.some(text => text.includes('仅支持GPT Image 2.6'))).toBe(true);
+  });
   it('actual engine admission rejects an Office SVG source before producer calls, run creation or fees', async () => {
     const f = fixture(true), ownedRoot = path.resolve('work'), directory = await fs.mkdtemp(path.join(ownedRoot, 'office-vector-preflight-')), execute = vi.fn();
     f.input.project.kind = f.input.workflow.outputKind = 'word'; f.input.models[0].capabilities.push('text');

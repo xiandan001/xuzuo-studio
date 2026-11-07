@@ -219,6 +219,8 @@ function registerRuntime(credentials) {
   });
   handle('status', () => ({ available: true }));
   handle('save-image-markup', input => withProjectWrite(input?.projectId, () => require('./image-markup.cjs').saveImageMarkup(artifactStore, input)));
+  const prepareAnimationReference = require('./generated-animation-reference.cjs').createGeneratedAnimationReference({ artifactStore, liveEngine });
+  handle('prepare-generated-animation-reference', input => withProjectWrite(input?.projectId, async () => { await editorProject(input?.projectId); if (movingArtifacts.has(input?.sourceArtifactId)) throw Error('这份动画正在移动，请稍后再试。'); return prepareAnimationReference(input); }));
   handle('customer-quote-export', input => withProjectWrite(input?.projectId, () => quoteExporter.export(input)));
   handle('automation-snapshot', workspaceId => automationCenter.snapshot(workspaceId));
   handle('automation-planning-start', input => automationPlanning.start(input));
@@ -348,7 +350,7 @@ function registerRuntime(credentials) {
   handle('import-files', projectId => withProjectWrite(projectId, async () => {
     if (!projectId) throw new Error('请先选择导入资料所属的项目。');
     await editorProject(projectId);
-    const result = await dialog.showOpenDialog(mainWindow, { title: '选择工作流参考文件', properties: ['openFile', 'multiSelections'], filters: [{ name: '参考文字、Office、图片与音视频', extensions: ['txt', 'md', 'json', 'csv', 'docx', 'pptx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'mp3', 'wav', 'm4a', 'mp4'] }] });
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择工作流参考文件', properties: ['openFile', 'multiSelections'], filters: [{ name: '参考文字、Office、图片与音视频', extensions: ['txt', 'md', 'json', 'csv', 'docx', 'pptx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'm4a', 'mp4'] }] });
     if (result.canceled) return [];
     const files = await artifactStore.importPaths(result.filePaths, { projectId });
     const location = (await workspaceStorage.list()).projects.find(project => project.projectId === projectId);

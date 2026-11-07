@@ -1,8 +1,12 @@
 import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 const require = createRequire(import.meta.url);
 const { PNG: PngCodec } = require('pngjs');
 const { createModelRuntime } = require('../../electron/model-runtime.cjs');
+const { createArtifactStore } = require('../../electron/artifact-store.cjs');
 const { imageOptionsError } = require('../../electron/image-output-options.cjs');
 const { imageType } = require('../../electron/provider-media.cjs');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aq3sAAAAASUVORK5CYII=', 'base64');
@@ -28,7 +32,8 @@ describe('Image output advanced options admission', () => {
     ['gpt-image-2.5-flare', 'image-generation', { outputFormat: 'svg' }],
     ['gpt-image-2.6', 'image-generation', { outputFormat: 'gif' }],
     ['gpt-image-2.6-flare-future', 'image-generation', { outputFormat: 'svg' }],
-    ['gpt-image-2.6-flare', 'image-editing', { outputFormat: 'gif' }],
+    ['gpt-image-2.6-flare', 'image-editing', { outputFormat: 'svg' }],
+    ['gpt-image-2.5-flare', 'image-editing', { outputFormat: 'gif' }],
     ['gpt-image-2.6-sunburst', 'image-generation', { outputFormat: 'svg', count: 2 }],
     ['gpt-image-2.5-sunburst', 'image-generation', { complexity: 'low' }],
     ['custom-image', 'image-generation', { quality: 'max' }],
@@ -82,6 +87,40 @@ describe('Image API advanced request and exact bytes', () => {
     expect(JSON.parse(f.calls[0].init.body)).toMatchObject({ output_format: 'gif', frame_count: 2, frame_duration_ms: 200, size: 'auto' });
     expect(result.usage).toMatchObject({ imageOutputFormat: 'gif', images: 1, outputTokens: 196 });
     expect(f.writes[0]).toMatchObject({ name: 'image-1.gif', mimeType: 'image/gif' }); expect(f.writes[0].buffer).toEqual(GIF);
+  });
+  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])('edits static references into a real stored GIF through multipart without stream, partial images or mask: %s', async modelId => {
+    const temporary = await fs.realpath(os.tmpdir()), directory = await fs.mkdtemp(path.join(temporary, 'xuzuo-gif-edit-protocol-'));
+    const store = createArtifactStore({ directory });
+    const animation = Buffer.from(GIF.toString('hex').replaceAll('21f9040102000000', '21f9040114000000'), 'hex');
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(url).toBe('https://fixture.example/v1/images/edits');
+      expect(init.body).toBeInstanceOf(FormData);
+      const body = init.body;
+      expect(body.get('model')).toBe(modelId); expect(body.get('output_format')).toBe('gif');
+      expect(body.get('frame_count')).toBe('2'); expect(body.get('frame_duration_ms')).toBe('200'); expect(body.get('size')).toBe('auto'); expect(body.get('n')).toBe('1');
+      for (const name of ['stream', 'partial_images', 'mask', 'output_compression']) expect(body.has(name)).toBe(false);
+      const references = body.getAll('image[]');
+      expect(references.map(file => [file.name, file.type])).toEqual([['source.png', 'image/png'], ['detail.webp', 'image/webp']]);
+      expect(Buffer.from(await references[0].arrayBuffer())).toEqual(PNG); expect(Buffer.from(await references[1].arrayBuffer())).toEqual(WEBP);
+      return new Response(JSON.stringify({ data: [{ b64_json: animation.toString('base64') }], usage }), { headers: { 'content-type': 'application/json', 'x-request-id': 'fixture-gif-edit' } });
+    });
+    try {
+      const source = await store.write({ projectId: 'project-1', name: 'source.png', mimeType: 'image/png', buffer: PNG, preserveOriginalName: true });
+      const detail = await store.write({ projectId: 'project-1', name: 'detail.webp', mimeType: 'image/webp', buffer: WEBP, preserveOriginalName: true });
+      const withSecret = vi.fn(async (_id, _connection, action) => action('fixture-only-secret'));
+      const runtime = createModelRuntime({ artifactStore: store, credentialStore: { withSecret }, fetchImpl });
+      const input = request('image-editing', { outputFormat: 'gif', frameCount: 2, frameDurationMs: 200, size: 'auto' });
+      input.model.modelId = modelId; input.attachments = [source, detail];
+      const result = await runtime.execute(input), saved = result.artifacts[0];
+      expect(fetchImpl).toHaveBeenCalledTimes(1); expect(result.providerRequestId).toBe('fixture-gif-edit');
+      expect(result.usage).toMatchObject({ images: 1, imageOutputFormat: 'gif', inputTokens: 30, outputTokens: 196 });
+      expect(saved.mimeType).toBe('image/gif'); expect(saved.name).toMatch(/\.gif$/); expect(imageType((await store.read(saved.id)).buffer)).toMatchObject({ mimeType: 'image/gif', frames: 2 });
+      expect(await fs.readFile(saved.path)).toEqual(animation); expect((await store.read(source.id)).buffer).toEqual(PNG); expect((await store.read(detail.id)).buffer).toEqual(WEBP);
+    } finally {
+      await store.drain();
+      expect(path.dirname(directory)).toBe(temporary); expect(path.basename(directory)).toMatch(/^xuzuo-gif-edit-protocol-/); expect((await fs.lstat(directory)).isSymbolicLink()).toBe(false);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
   it('keeps an optimized animation with a clear actual-frame warning and no automatic paid retry', async () => {
     const f = fixture(GIF); const result = await f.runtime.execute(request('image-generation', { outputFormat: 'gif', frameCount: 9 }));

@@ -244,6 +244,16 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         return bridge.inspectImageArtifact(id);
       },
     } : {}),
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.prepareGeneratedAnimationReference === 'function' ? {
+      async prepareGeneratedAnimationReference(input: import('../live-types').GeneratedAnimationReferenceInput) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.prepareGeneratedAnimationReference) throw new Error('当前桌面后台不支持继续修改动画。');
+        if (optionsRef.current.projects.some(project => project.id === input.projectId && project.purgedAt)) throw new Error('项目已永久移除，不能再修改其动画。');
+        const result = await bridge.prepareGeneratedAnimationReference(input);
+        if (result.reference) inventoryCache.invalidate(input.projectId);
+        return result;
+      },
+    } : {}),
     async thumbnailArtifact(id) {
       const bridge = window.desktop?.runtime; if (!bridge) throw new Error('请在桌面版预览真实产物。');
       const metadata = updatedArtifacts[id] || trashedArtifacts?.find(item => item.id === id);

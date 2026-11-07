@@ -1,6 +1,7 @@
 import type { AssetProvenance } from './asset-types';
 import type { ModelConfiguration, ModelConnection, WorkflowDefinition, WorkflowRun } from './configuration-types';
 import type { LedgerEntry, Project } from './types';
+import type { ImageOutputOptions } from './image-options-types';
 
 export interface ArtifactMetadata { id: string; name: string; mimeType: string; bytes: number; path: string; kind: 'text' | 'image' | 'audio' | 'video' | 'office' | 'other'; createdAt: string; runId?: string; projectId?: string; trashedAt?: string; unavailable?: boolean; unavailableReason?: string; provenance?: AssetProvenance; }
 export interface ModelUsage {
@@ -38,8 +39,11 @@ export interface LivePreflight { ok: boolean; errors: string[]; issues?: LivePre
 export interface LiveSnapshot { delta?: boolean; runs: WorkflowRun[]; ledger: LedgerEntry[]; revision?: number; }
 export interface ArtifactPreview { mimeType: string; dataUrl?: string; text?: string; documentSource?: boolean; sourceRevision?: number; thumbnail?: boolean; width?: number; height?: number; originalWidth?: number; originalHeight?: number; transparency?: 'present' | 'unknown'; }
 export interface ImageArtifactInspection { id: string; mimeType: string; bytes: number; }
+export interface GeneratedAnimationReferenceInput { projectId: string; sourceArtifactId: string; sourceSha256?: string; pngBytes?: Uint8Array; }
+export interface GeneratedAnimationReference { sourceArtifactId: string; sourceSha256: string; prompt: string; imageOptions: ImageOutputOptions; mimeType: 'image/gif'; width: number; height: number; sourceBytes?: Uint8Array; reference?: ArtifactMetadata; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
+  prepareGeneratedAnimationReference?: (input: GeneratedAnimationReferenceInput) => Promise<GeneratedAnimationReference>;
   saveImageMarkup?: (input: { projectId: string; sourceArtifactId: string; dataUrl: string }) => Promise<ArtifactMetadata>;
   startChecked?: (input: LiveStartRequest) => Promise<LiveCheckedStartResult>;
   lookupStart?: (input: LiveStartLookup) => Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }>;

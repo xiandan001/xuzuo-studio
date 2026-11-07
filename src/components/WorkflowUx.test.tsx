@@ -36,6 +36,14 @@ describe('工作流配置和错误修复视图', () => {
     expect(workflowImageIssue(image, 'gpt-image-2.5-flare')).toContain('仅支持 GPT Image 2.6');
     expect(workflowImageIssue({ ...image, imageSize: '1024x1024' }, 'gpt-image-2.6-flare')).toContain('帧尺寸请选择自动');
   });
+  it('2.6静态参考图精修可输出GIF，界面区分本应用动图与外部GIF', () => {
+    const image: WorkflowStep = { ...step('first', '参考图动效'), kind: 'image-editing', modelConfigId: 'image-model', credentialId: 'key-one', imageOutputFormat: 'gif', imageFrameCount: 6, imageFrameDurationMs: 200, imageSize: 'auto', count: 1 };
+    const imageProps = { ...props, configuration: { ...props.configuration, models: props.configuration.models.map(model => model.id === 'image-model' ? { ...model, modelId: 'gpt-image-2.6-sunburst', capabilities: ['image-editing' as const] } : model) } };
+    const html = renderToStaticMarkup(<WorkflowEditor props={imageProps} initial={{ name: 'GIF精修', description: '', outputKind: 'image', steps: [image] }} onClose={() => undefined} />);
+    expect(workflowImageIssue(image, 'gpt-image-2.6-sunburst')).toBeUndefined();
+    expect(html).toContain('静态参考图制作 GIF'); expect(html).toContain('本应用动图可继续修改'); expect(html).toContain('外部 GIF 暂不支持直接编辑'); expect(html).toContain('SVG 仍仅支持文字生成');
+    expect(html).not.toContain('精修及带参考图生成仅支持 PNG');
+  });
   it('第三步错误可直接打开第三步，最大输出范围与执行端一致', () => {
     const initial = { name: '三步测试', description: '', outputKind: 'word' as const, steps: [step('first', '第一步'), step('second', '第二步'), step('third', '第三步')] };
     const html = renderToStaticMarkup(<WorkflowEditor props={props} initial={initial} initialStepId="third" initialField="maxOutputTokens" onClose={() => undefined} />);

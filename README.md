@@ -267,6 +267,8 @@ OpenAI 已在 **2026-09-24 关闭 Videos API 和 Sora 2 视频模型**，本版�
 ## Office 与画面质量边界
 
 - 可生成实际的、可编辑的 PPTX、DOCX、XLSX 文件。项目 JSON、账本 CSV、报价 JSON 及示意 SVG 仍是各自的数据或预览文件，不冒充 Office 成品。
+- GPT Image 2.6 Sunburst／Flare 可用 PNG、JPEG、WebP 静态参考图生成 GIF，账户需具备 GIF 预览权限；SVG 输出仍仅用于文字生成。接口依据见 [OpenAI GIF 指南](https://developers.openai.com/api/docs/guides/image-generation#generate-animated-gif-output)。
+- 图片工作台的 GIF 操作按来源区分：静态图片可作为动画参考；本应用有完整生成记录的 GIF 可准备全尺寸静态参考，结合原描述和新的修改要求生成新版本，原动图及费用记录保留；外部 GIF 直接编辑暂不支持，不会静默转成静态图。继续修改不承诺逐帧或无损保留。ChatGPT 网页下载的 GIF 不会带入原会话，在本应用中属于外部文件。
 - 生成可编辑文件不等于完整 Office 编辑器。当前不承诺复杂原稿导入后无损保留动画、特殊图表、母版、嵌入对象、字体或逐页版式；复杂稿件须打开成品逐页检查。
 - 写入公式不等于已经完成正确重算。不承诺全部 Excel 函数、外部链接、宏或复杂依赖的计算兼容性，关键结果必须重新计算并用已知样本校验。
 - 已进行的 WPS 小样本打开与页面检查，只是对应样本的 QA 证据，不代表所有 Office 文件、复杂版式或全部公式都已验证。

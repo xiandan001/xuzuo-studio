@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowRun } from '../configuration-types';
 import type { ArtifactMetadata } from '../live-types';
-import { followGalleryImage, imageArtifactTarget, imageCapability, imageCreationDescription, imageReferenceIds, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, updateImageDraft } from './image-studio';
+import { followGalleryImage, imageArtifactTarget, imageCapability, imageCreationDescription, imageReferenceIds, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, updateImageDraft, withAnimationReference } from './image-studio';
 import { MAX_IMAGE_QUANTITY, validImageQuantity } from './image-quantity';
 
 const file = (id: string, kind: ArtifactMetadata['kind'] = 'image'): ArtifactMetadata => ({ id, name: `${id}.${kind === 'image' ? 'png' : 'txt'}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain', bytes: 20, path: `files/${id}`, kind, projectId: 'project', createdAt: '2026-10-30T01:00:00Z' });
@@ -10,18 +10,45 @@ function run(id: string, artifacts: ArtifactMetadata[], updatedAt: string, workf
 }
 
 describe('图片工作台的真实结果与描述', () => {
+  it('动画绑定只持久化来源元数据，真实任务仅用PNG且新选动画不能借用旧参考', () => {
+    const creation = updateImageDraft(readImageDraft(null, '原生成描述'), { references: [{ id: 'create-a', name: '生成参考.png' }], refinePrompt: '最新要求：改成蓝色', imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 6, imageFrameDurationMs: 300 } });
+    const draft = withAnimationReference(updateImageDraft(creation, { mode: 'refine' }), { sourceArtifactId: 'gif-one', sourceSha256: 'a'.repeat(64), prompt: '原动画中的星星缓慢升起', imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 2, imageFrameDurationMs: 200 }, mimeType: 'image/gif', width: 1, height: 1, reference: file('frame-png'), sourceBytes: new Uint8Array([71, 73, 70]) });
+    const payload = imageTaskRequest(draft, 'gif-one').parameters;
+    expect(payload).toMatchObject({ attachmentIds: ['frame-png'], imageOutputFormat: 'gif', imageFrameCount: 6, imageFrameDurationMs: 300 });
+    expect(payload.prompt).toContain('原动画中的星星缓慢升起'); expect(payload.prompt.endsWith('最新要求：改成蓝色')).toBe(true); expect(draft.refinePrompt).toBe('最新要求：改成蓝色');
+    expect(imageTaskRequest(draft, 'gif-two').parameters.attachmentIds).toEqual([]);
+    const serialized = JSON.stringify(draft); expect(serialized).not.toContain('sourceBytes'); expect(serialized).not.toContain('pngBytes');
+    expect(readImageDraft(serialized, '').animationReference).toEqual(draft.animationReference);
+    const manual = updateImageDraft(draft, { references: [{ id: 'manual', name: '手动原图.png' }], galleryBaseId: undefined });
+    expect(manual.animationReference).toBeUndefined(); expect(imageTaskRequest(manual, 'gif-two').parameters.attachmentIds).toEqual(['manual']);
+    expect(updateImageDraft(draft, { mode: 'create' }).references.map(reference => reference.id)).toEqual(['create-a']);
+  });
+  it('非GIF表单隐藏的旧帧参数不覆盖动画来源默认值', () => {
+    const current = updateImageDraft(readImageDraft(null, '描述'), { mode: 'refine', imageOptions: { imageOutputFormat: 'png', imageFrameCount: 16, imageFrameDurationMs: 2000 } });
+    const draft = withAnimationReference(current, { sourceArtifactId: 'gif-one', sourceSha256: 'a'.repeat(64), prompt: '原动画描述', imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 9, imageFrameDurationMs: 120 }, mimeType: 'image/gif', width: 1, height: 1, reference: file('frame-png') });
+    expect(imageTaskRequest(draft, 'gif-one').parameters).toMatchObject({ imageFrameCount: 9, imageFrameDurationMs: 120, imageOutputFormat: 'gif' });
+  });
   it('生成参考A与精修B/C分别保留，切换和JSON重载后的真实任务附件不串用', () => {
-    const a = { id: 'create-a', name: '生成参考A.png' }, b = { id: 'result-b', name: '产物B.png' }, c = { id: 'refine-c', name: '精修参考C.png' };
+    const a = { id: 'create-a', name: '生成参考A.png' }, b = { id: 'result-b', name: '产物B.png' }, b2 = { id: 'result-b2', name: '新产物B2.png' }, c = { id: 'refine-c', name: '精修参考C.png' };
     const creation = updateImageDraft(readImageDraft(null, '生成描述'), { references: [a] });
     expect(imageTaskRequest(creation, b.id).parameters.attachmentIds).toEqual([a.id]);
     const refinement = updateImageDraft(creation, { mode: 'refine' });
     expect(refinement.references).toEqual([]); expect(imageTaskRequest(refinement, b.id).parameters.attachmentIds).toEqual([b.id]);
     const extra = importImageReferences(refinement, [c], b);
     expect(imageTaskRequest(extra, b.id).parameters.attachmentIds).toEqual([b.id, c.id]);
+    expect(isGalleryImageBase(extra)).toBe(true);
+    expect(readImageDraft(JSON.stringify(extra), '').galleryBaseId).toBe(b.id);
+    expect(importImageReferences(extra, [c], b).galleryBaseId).toBe(b.id);
+    const removedExtra = updateImageDraft(extra, { references: [b] });
+    expect(imageTaskRequest(followGalleryImage(removedExtra, b2), b2.id).parameters.attachmentIds).toEqual([b2.id]);
     const back = updateImageDraft(extra, { mode: 'create' });
     expect(back.references).toEqual([a]); expect(imageTaskRequest(back, b.id).parameters.attachmentIds).toEqual([a.id]);
     const restored = readImageDraft(JSON.stringify(back), '');
-    expect(imageTaskRequest(updateImageDraft(restored, { mode: 'refine' }), b.id).parameters.attachmentIds).toEqual([b.id, c.id]);
+    const followed = followGalleryImage(updateImageDraft(restored, { mode: 'refine' }), b2);
+    expect(imageTaskRequest(followed, b2.id).parameters.attachmentIds).toEqual([b2.id, c.id]);
+    expect(followGalleryImage(followed, b2)).toBe(followed);
+    expect(followGalleryImage(extra, c).references).toEqual([c]);
+    expect(followGalleryImage({ ...extra, references: [b, c, c] }, b2).references).toEqual([b2, c]);
     expect(creation.references).toEqual([a]); expect(creation.refinePrompt).toBe(restored.refinePrompt);
   });
   it('明确替换精修基底和Gallery跟随仍有效，生成参考不被替换', () => {
@@ -29,10 +56,12 @@ describe('图片工作台的真实结果与描述', () => {
     const creation = updateImageDraft(readImageDraft(null, '描述'), { references: [a] });
     const explicit = updateImageDraft(creation, { mode: 'refine', references: [base], galleryBaseId: base.id });
     expect(followGalleryImage(explicit, next).references).toEqual([next]);
-    const manual = updateImageDraft(explicit, { references: [base], galleryBaseId: undefined });
+    const extra = { id: 'manual-extra', name: '手动额外参考.png' };
+    const manual = updateImageDraft(explicit, { references: [base, extra], galleryBaseId: undefined });
     expect(followGalleryImage(manual, next)).toBe(manual);
+    expect(imageTaskRequest(readImageDraft(JSON.stringify(manual), ''), next.id).parameters.attachmentIds).toEqual([base.id, extra.id]);
     const back = updateImageDraft(manual, { mode: 'create' });
-    expect(back.references).toEqual([a]); expect(updateImageDraft(back, { mode: 'refine' }).references).toEqual([base]);
+    expect(back.references).toEqual([a]); expect(updateImageDraft(back, { mode: 'refine' }).references).toEqual([base, extra]);
   });
   it('精修额外参考去重并把原图计入12张上限，拒绝时不改变草稿', () => {
     const b = { id: 'base', name: '原图.png' }, draft = updateImageDraft(readImageDraft(null, '描述'), { mode: 'refine' });
@@ -73,7 +102,7 @@ describe('图片工作台的真实结果与描述', () => {
     expect(content.images.map(item => item.id)).toEqual(['legacy-result', 'partial-result', 'new-result']);
     expect(content.artifacts.map(item => item.id)).toEqual(expect.arrayContaining(['person', 'clothes', 'unknown-origin']));
   });
-  it('仅Gallery自动单一基底跟随选中结果，手动/多参考与旧草稿不被换掉', () => {
+  it('仅标记的Gallery自动基底跟随选中结果，手动多参考与旧草稿不被换掉', () => {
     const reference = { id: 'original', name: '原图.png' }, next = { id: 'new-result', name: '新结果.png' };
     const auto = { ...readImageDraft(null, '需求'), mode: 'refine' as const, references: [reference], galleryBaseId: reference.id };
     expect(isGalleryImageBase(auto)).toBe(true);

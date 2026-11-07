@@ -40,7 +40,8 @@ import { MAX_IMAGE_QUANTITY, validImageQuantity } from '../lib/image-quantity';
 import { inspectImageReference, readImageReferencePreviews } from '../lib/image-reference-inspection';
 import { PurposeTemplates } from '../components/PurposeTemplates';
 import { ProjectReferences } from '../components/ProjectReferences';
-import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft } from '../lib/image-studio';
+import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTarget, imageCreationDescription, imageDraftKey, imageDraftPurpose, imageMissingReferences, imageTaskRequest, importImageReferences, isGalleryImageBase, projectImageContent, readImageDraft, selectImageUseTemplate, updateImageDraft, withAnimationReference } from '../lib/image-studio';
+import { prepareAnimationReference } from '../lib/generated-animation-reference';
 import { availableImageUseTemplates, imageUseTemplateSnapshot } from '../lib/image-use-templates';
 import type { ImageDraft } from '../lib/image-studio';
 import './studios.css';
@@ -65,16 +66,18 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   const layout = useStudioLayout('images', { workspaceId: project.workspaceId, projectId: project.id });
   const realModels = props.configuration.models.filter(model => model.enabled && !model.demo && props.configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled && !connection.demo));
   const useTemplates = availableImageUseTemplates(props.configuration.useTemplates, props.workspaceId);
+  const [initialImage] = useState(() => projectImageContent(props.workflowRunner.runs, project.id, props.workflowRunner.trashedArtifacts).images[0]);
   const [draft, setDraft] = useState<ImageDraft>(() => {
     let raw: string | null = null;
     try { raw = localStorage.getItem(imageDraftKey(project.id)); } catch { /* The form remains usable without browser storage. */ }
-    const saved = readImageDraft(raw, project.description);
+    const restored = readImageDraft(raw, project.description);
+    const saved = initialImage ? followGalleryImage(restored, initialImage) : restored;
     const purpose = useTemplates.find(item => item.id === saved.preset);
     return { ...saved, ...(saved.presetSnapshot || !purpose ? {} : { presetSnapshot: imageUseTemplateSnapshot(purpose) }) };
   });
   const imageElement = useRef<{ id: string; image: HTMLImageElement } | undefined>(undefined);
   const [imageMetadata, setImageMetadata] = useState<ImageDeliveryMetadata & { id?: string }>({});
-  const [selectedImageId, setSelectedImageId] = useState(() => projectImageContent(props.workflowRunner.runs, project.id, props.workflowRunner.trashedArtifacts).images[0]?.id || draft.references[0]?.id || '');
+  const [selectedImageId, setSelectedImageId] = useState(() => initialImage?.id || draft.references[0]?.id || '');
   const edits = useEditHistory<ImageEditSnapshot>();
   const scopedEdits = useScopedTextHistory();
   const [textSelection, setTextSelection] = useState<{ field: 'prompt' | 'refinePrompt'; start: number; end: number; text: string }>();
@@ -85,6 +88,9 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   if (editSnapshot.current.draft !== draft || editSnapshot.current.selectedImageId !== selectedImageId) editSnapshot.current = { draft, selectedImageId };
   const [importing, setImporting] = useState(false);
   const [restoringImage, setRestoringImage] = useState(false);
+  const [preparingAnimation, setPreparingAnimation] = useState(false);
+  const animationPreparation = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => animationPreparation.current?.abort(), []);
   const [checkingReferences, setCheckingReferences] = useState(Boolean(draft.references.length));
   const [referenceError, setReferenceError] = useState('');
   const [referencePreview, setReferencePreview] = useState<string>();
@@ -134,30 +140,37 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   const needsModelSetup = currentModels.length === 0;
   const active = props.workflowRunner.runs.find(run => isProductionRun(run) && run.projectId === project.id && ['running', 'paused'].includes(run.status));
   const reviewing = props.workflowRunner.runs.some(run => run.projectId === project.id && run.status === 'waiting-review');
-  const busy = restoringImage || Boolean(active) || project.status === 'processing' && !reviewing;
+  const busy = restoringImage || preparingAnimation || Boolean(active) || project.status === 'processing' && !reviewing;
   const realEntries = props.ledger.filter(entry => entry.projectId === project.id && entry.billingMode === 'live');
   const costSummary = summarizeCosts(realEntries);
   const purpose = imageDraftPurpose(draft);
   const missingReferences = imageMissingReferences(draft, selectedImage?.id);
   const purposeNeedsReferences = draft.mode === 'create' && missingReferences > 0;
   const currentPurposeAvailable = useTemplates.some(item => item.id === draft.preset);
-  const refinementNeedsImage = draft.mode === 'refine' && !task.parameters.attachmentIds.length;
+  const animationSource = draft.mode === 'refine' && selectedImage?.mimeType === 'image/gif' && (!draft.references.length || draft.animationReference) ? selectedImage : undefined;
+  const staleAnimationReference = !!draft.animationReference && draft.animationReference.sourceArtifactId !== selectedImage?.id;
+  const refinementNeedsImage = draft.mode === 'refine' && !task.parameters.attachmentIds.length && !animationSource;
   const quantityValid = validImageQuantity(draft.quantity);
   const outputIssue = imageOutputIssue(draft.imageOptions, currentModel?.modelId, task.parameters.capability, task.parameters.imageBackground);
-  const vectorSourceIssue = draft.mode === 'refine' && !draft.references.length && selectedImage && !RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? 'SVG／GIF 成品可预览和下载，但此接口不能直接精修它们；请选择 PNG、JPEG 或 WebP 原图。' : '';
-  const quantityLabel = quantityValid ? `${draft.quantity} 张` : '数量待填写';
-  const generationLabel = `${draft.mode === 'refine' ? '开始精修' : draft.references.length ? '按参考图生成' : '生成图片'}${quantityValid ? ` · ${quantityLabel}` : ''}`;
-  const ready = Boolean(!outputIssue && !vectorSourceIssue && quantityValid && currentModel && selectedCredential && task.parameters.prompt.trim() && !busy && !checkingReferences && !referenceError && !importing && !purposeNeedsReferences && !refinementNeedsImage);
+  const vectorSourceIssue = animationSource && !props.workflowRunner.prepareGeneratedAnimationReference ? '请使用支持继续修改动画的新版桌面应用。' : draft.mode === 'refine' && !draft.references.length && selectedImage?.mimeType === 'image/svg+xml' ? 'SVG 成品可预览和下载；请选择 PNG、JPEG 或 WebP 原图。' : '';
+  const quantityUnit = animationSource || draft.imageOptions?.imageOutputFormat === 'gif' ? '份' : '张';
+  const quantityLabel = quantityValid ? `${draft.quantity} ${quantityUnit}` : '数量待填写';
+  const generationLabel = `${draft.mode === 'refine' ? animationSource ? '继续修改动画' : '开始精修' : draft.references.length ? '按参考图生成' : '生成图片'}${quantityValid ? ` · ${quantityLabel}` : ''}`;
+  const ready = Boolean(!outputIssue && !vectorSourceIssue && quantityValid && currentModel && selectedCredential && task.parameters.prompt.trim() && !busy && (animationSource || !checkingReferences && !referenceError) && !importing && !purposeNeedsReferences && !refinementNeedsImage);
   const referenceKey = draft.references.map(reference => reference.id).join('|');
   const trashedReferenceKey = draft.references.filter(reference => props.workflowRunner.trashedArtifacts?.some(artifact => artifact.id === reference.id)).map(reference => reference.id).join('|');
   const runtimeAvailable = props.workflowRunner.runtimeStatus.available;
   const deliveryTarget = imageArtifactTarget(props.workflowRunner.runs, project.id, selectedImage);
   const requiresTransparency = deliveryTarget.background === 'transparent';
-  const generationIssue: StudioActionIssue | undefined = studioActionIssue({ ready: true, busy: importing ? 'importing' : checkingReferences ? 'references' : '', taskStatus: active?.status || (busy ? 'running' : undefined), input: task.parameters.prompt, inputLabel: draft.mode === 'refine' ? '修改要求' : '画面描述', modelId: currentModel?.id, modelCount: currentModels.length }) || (outputIssue ? { message: outputIssue, action: '选择输出格式', target: 'format' } : vectorSourceIssue ? { message: vectorSourceIssue, action: '选择栅格原图', target: 'references' } : !quantityValid ? { message: `请输入 1–${MAX_IMAGE_QUANTITY} 的整数作为图片数量。`, action: '填写图片数量', target: 'quantity' } : referenceError ? { message: referenceError, action: '重新导入参考图', target: 'references' } : purposeNeedsReferences ? { message: `此用途还需要 ${missingReferences} 张参考图。`, action: '导入参考图片', target: 'references' } : refinementNeedsImage ? { message: '请先选择或导入要精修的图片。', action: '导入原图', target: 'references' } : undefined);
+  const generationIssue: StudioActionIssue | undefined = studioActionIssue({ ready: true, busy: importing ? 'importing' : checkingReferences && !animationSource ? 'references' : '', taskStatus: active?.status || (busy ? 'running' : undefined), input: task.parameters.prompt, inputLabel: draft.mode === 'refine' ? '修改要求' : '画面描述', modelId: currentModel?.id, modelCount: currentModels.length }) || (outputIssue ? { message: outputIssue, action: '选择输出格式', target: 'format' } : vectorSourceIssue ? { message: vectorSourceIssue, action: '选择栅格原图', target: 'references' } : !quantityValid ? { message: `请输入 1–${MAX_IMAGE_QUANTITY} 的整数作为图片数量。`, action: '填写图片数量', target: 'quantity' } : referenceError && !animationSource ? { message: referenceError, action: '重新导入参考图', target: 'references' } : purposeNeedsReferences ? { message: `此用途还需要 ${missingReferences} 张参考图。`, action: '导入参考图片', target: 'references' } : refinementNeedsImage ? { message: '请先选择或导入要精修的图片。', action: '导入原图', target: 'references' } : undefined);
   const actionStatusId = `image-action-status-${project.id}`;
   const inspectImageMetadata = (id: string, image: HTMLImageElement) => { imageElement.current = { id, image }; setImageMetadata({ id, ...(requiresTransparency ? inspectDeliveryImage(image) : { width: image.naturalWidth, height: image.naturalHeight, transparency: 'unknown' as const }) }); };
   useEffect(() => { const loaded = imageElement.current; if (loaded && loaded.id === selectedImage?.id) inspectImageMetadata(loaded.id, loaded.image); }, [requiresTransparency, selectedImage?.id]);
-  function changeImage(nextDraft: ImageDraft, imageId = editSnapshot.current.selectedImageId, group?: string, recordScoped = true) {
+  function changeImage(nextDraft: ImageDraft, imageId?: string, group?: string, recordScoped = true) {
+    const currentImage = imageId === undefined ? selectedImage : images.find(image => image.id === imageId);
+    imageId ??= editSnapshot.current.selectedImageId;
+    if (animationPreparation.current && (imageId !== editSnapshot.current.selectedImageId || nextDraft.mode !== editSnapshot.current.draft.mode || nextDraft.references !== editSnapshot.current.draft.references)) cancelAnimationPreparation();
+    if (currentImage && isGalleryImageBase(nextDraft) && nextDraft.galleryBaseId !== currentImage.id) nextDraft = followGalleryImage(nextDraft, currentImage);
     const sourceId = nextDraft.references[0]?.id || (nextDraft.mode === 'refine' ? imageId : undefined);
     if (nextDraft.markupSourceId && sourceId !== nextDraft.markupSourceId) nextDraft = { ...nextDraft, markupSourceId: undefined, imageOptions: { ...nextDraft.imageOptions, imageMarkupId: undefined } };
     if (recordScoped) {
@@ -253,7 +266,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   useEffect(() => {
     let current = true;
     setReferencePreview(undefined); setReferenceError('');
-    if (!draft.references.length) { setCheckingReferences(false); return; }
+    if (!draft.references.length || staleAnimationReference) { setCheckingReferences(false); return; }
     if (!runtimeAvailable) { setCheckingReferences(false); setReferenceError('参考图保存在桌面应用中，请打开 EXE 核对，或重新导入、移除参考图。'); return; }
     setCheckingReferences(true);
     void (async () => {
@@ -266,7 +279,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     return () => { current = false; };
   // Names do not change the managed file IDs that must be checked.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [referenceKey, trashedReferenceKey, runtimeAvailable, referenceRevision]);
+  }, [referenceKey, trashedReferenceKey, runtimeAvailable, referenceRevision, staleAnimationReference]);
 
   useEffect(() => {
     const application = props.promptToApply;
@@ -326,10 +339,12 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       const selected = await runnerRef.current.importFiles(project.id);
       if (!alive.current) return;
       if (editSnapshot.current.draft.mode !== mode) { props.notify('图片已保留在项目中；操作模式已变化，当前参考图未改动。', 'info'); return; }
+      if (selected.some(file => file.mimeType === 'image/gif')) throw Error('外部GIF暂不支持直接精修。文件仍保留；请从本应用生成记录继续修改动画，或选择静态图片。');
       const files = selected.filter(file => file.kind === 'image' && RASTER_IMAGE_TYPES.has(file.mimeType));
       if (!files.length) { if (selected.length) props.notify('请选择图片格式的参考文件。', 'info'); return; }
       if (files.length !== selected.length) props.notify('本次仅使用图片，已忽略其它格式的文件。', 'info');
       if (files.length > MAX_IMAGE_REFERENCES) { props.notify(`每次最多使用 ${MAX_IMAGE_REFERENCES} 张参考图，请重新选择。`, 'error'); return; }
+      if (animationSource) { await prepareAnimation(animationSource, false, files); return; }
       const base = selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? { id: selectedImage.id, name: selectedImage.name } : undefined;
       changeImage(importImageReferences(editSnapshot.current.draft, files.map(({ id, name }) => ({ id, name })), base));
     } catch (cause) { if (alive.current) setActionError(workflowPublicError(cause, '参考图导入未完成，请重新选择。')); }
@@ -340,7 +355,34 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     layout.openPanel('ai');
     requestAnimationFrame(() => { if (!alive.current) return; const field = workbench.current?.querySelector<HTMLTextAreaElement>('.ig-prompt'); field?.focus(); field?.scrollIntoView({ block: 'nearest', behavior: 'auto' }); });
   }
+  function cancelAnimationPreparation() {
+    animationPreparation.current?.abort(); animationPreparation.current = undefined; setPreparingAnimation(false);
+  }
+  async function prepareAnimation(artifact: ArtifactMetadata, submit = false, extra: ArtifactMetadata[] = []) {
+    if (animationPreparation.current) return;
+    const controller = new AbortController(), selection = editSnapshot.current.selectedImageId;
+    animationPreparation.current = controller; setPreparingAnimation(true); setActionError('');
+    const current = () => alive.current && !controller.signal.aborted && animationPreparation.current === controller && editSnapshot.current.selectedImageId === selection;
+    try {
+      const prepared = await prepareAnimationReference(runnerRef.current, project.id, artifact.id, controller.signal, editSnapshot.current.draft.animationReference);
+      if (!current()) return;
+      let next = withAnimationReference(updateImageDraft(editSnapshot.current.draft, { mode: 'refine' }), prepared);
+      if (extra.length) next = importImageReferences(next, extra.map(({ id, name }) => ({ id, name })));
+      animationPreparation.current = undefined; setPreparingAnimation(false);
+      changeImage(next, artifact.id);
+      if (!submit) return;
+      const model = studioProjectModel(realModels.filter(item => item.capabilities.includes('image-editing')), next.editingModelId, editingBinding);
+      const credentialId = studioProjectCredential(props.configuration.credentials, model, credentialIds['image-editing'], editingBinding);
+      const preparedTask = imageTaskRequest({ ...next, editingModelId: model?.id || '' }, artifact.id, model?.modelId);
+      const issue = imageOutputIssue(next.imageOptions, model?.modelId, 'image-editing', preparedTask.parameters.imageBackground);
+      if (issue) throw Error(issue);
+      if (!model || !credentialId) throw Error('请选择支持此动画修改的图片模型与调用账户。');
+      props.onGenerate(project.id, 'AI 精修', preparedTask.count, undefined, { ...preparedTask.parameters, credentialId });
+    } catch (cause) { if (!controller.signal.aborted && alive.current) setActionError(workflowPublicError(cause, '动画修改准备未完成，原文件与费用仍保留。')); }
+    finally { if (animationPreparation.current === controller) { animationPreparation.current = undefined; if (alive.current) setPreparingAnimation(false); } }
+  }
   function refineImage(artifact: ArtifactMetadata) {
+    if (artifact.mimeType === 'image/gif') { void prepareAnimation(artifact); layout.openPanel('ai'); return; }
     if (!RASTER_IMAGE_TYPES.has(artifact.mimeType)) { setActionError('SVG／GIF 可直接预览和下载；当前接口不支持将它们作为精修原图，请选择 PNG、JPEG 或 WebP。'); layout.openPanel('ai'); return; }
     setTextSelection(undefined);
     changeImage(updateImageDraft(editSnapshot.current.draft, { mode: 'refine', references: [{ id: artifact.id, name: artifact.name }], galleryBaseId: artifact.id }), artifact.id);
@@ -350,7 +392,11 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   function selectImage(id: string) {
     setTextSelection(undefined);
     const image = images.find(item => item.id === id);
-    if (image) changeImage(followGalleryImage(editSnapshot.current.draft, image), id);
+    if (image) {
+      const current = editSnapshot.current.draft;
+      const next = current.animationReference && RASTER_IMAGE_TYPES.has(image.mimeType) ? updateImageDraft(current, { references: [{ id: image.id, name: image.name }, ...current.references.slice(1).filter(item => item.id !== image.id)], animationReference: undefined, galleryBaseId: image.id }) : followGalleryImage(current, image);
+      changeImage(next, id);
+    }
   }
 
   async function saveImage(artifact: ArtifactMetadata) {
@@ -362,9 +408,10 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     finally { savingImage.current = false; if (alive.current) setSaving(false); }
   }
 
-  function generate() {
+  async function generate() {
     if (!ready) return;
     setActionError('');
+    if (animationSource) { await prepareAnimation(animationSource, true); return; }
 
     props.onGenerate(project.id, draft.mode === 'refine' ? 'AI 精修' : images.length ? '重新生成' : '初次生成', task.count, undefined, { ...task.parameters, credentialId: selectedCredential });
   }
@@ -420,11 +467,13 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       {project.budgetCents != null && <p className="ig-budget">项目金额上限：{budgetLabel(project.budgetCents)}</p>}
       <button className="btn btn-primary" disabled={needsModelSetup ? busy || importing || checkingReferences : !ready} aria-label={needsModelSetup ? '配置图片模型' : generationLabel} aria-describedby={generationIssue || imageKeyIssue || actionError || reviewing ? actionStatusId : undefined} onClick={() => needsModelSetup ? props.navigate('models') : generate()}>{busy && active?.status !== 'paused' ? <LoaderCircle size={17} className="spin" /> : draft.mode === 'refine' ? <WandSparkles size={17} /> : <Sparkles size={17} />}{needsModelSetup ? '配置图片模型' : generationLabel}</button>
       {actionStatus}
-      <p className="studio-ai-fee-note">{quantityValid && draft.quantity > 1 ? `逐张生成 ${draft.quantity} 张 · ` : ''}调用费用自动记录</p>
+      {preparingAnimation && <p role="status">正在准备修改…<button type="button" className="ig-link" aria-label="取消动画准备" onClick={cancelAnimationPreparation}>取消</button></p>}
+      <p className="studio-ai-fee-note">{quantityValid && draft.quantity > 1 ? `${quantityUnit === '份' ? '逐份制作' : '逐张生成'} ${draft.quantity} ${quantityUnit} · ` : ''}调用费用自动记录</p>
     </div>
   }>
     <div className="ig-label-row"><label htmlFor={`image-prompt-${project.id}`}>{draft.mode === 'refine' ? '修改要求' : '画面描述'}</label><button className="ig-link" aria-label="提示词模板" onClick={() => setPromptPickerOpen(true)}><BookOpen size={14} />模板</button></div>
     <textarea id={`image-prompt-${project.id}`} className="field ig-prompt" rows={4} onSelect={selectPromptText} value={draft.mode === 'refine' ? draft.refinePrompt : draft.prompt} onChange={event => updateDraft(draft.mode === 'refine' ? { refinePrompt: event.target.value } : { prompt: event.target.value })} placeholder={draft.mode === 'refine' ? '例如：保留人物和构图，把背景换成蓝色。' : '描述想要的画面，也可以添加参考图片。'} />
+    {animationSource && <p className="ig-inline-note">保留原动画与费用，按本次修改要求生成新版本。</p>}
     {templateOffer && draft.mode === 'create' && <div className="ig-template-offer"><p>要用模板内容替换当前描述吗？</p><div><button onClick={() => { updateDraft({ prompt: templateOffer }); setTemplateOffer(undefined); }}>应用模板</button><button onClick={() => setTemplateOffer(undefined)}>保留原文</button></div></div>}
     {optimizedPrompt && appliedOptimizationId !== optimizedPrompt.id && <section className="ig-optimization"><strong>优化后的描述</strong>{optimization?.id === optimizedPrompt.id ? <><pre>{optimization.text}</pre><button className="btn btn-secondary" onClick={() => { updateDraft({ prompt: optimization.text, mode: 'create' }); setAppliedOptimizationId(optimization.id); setOptimization(undefined); props.notify('已将优化结果应用到画面描述，未调用新模型。'); }}><Check size={15} />应用描述</button></> : <button className="ig-link" disabled={readingOptimization} onClick={() => { void readOptimization(); }}>{readingOptimization ? <LoaderCircle size={14} className="spin" /> : <FileText size={14} />}查看并应用</button>}</section>}
     <div className="studio-ai-attachments">
@@ -434,10 +483,10 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     </div>
     {!!draft.references.length && <AiSettingsSection rememberKey={layout.rememberKey('images:references')} title="参考图片" summary={`${draft.references.length} 张`}>
       <div className="ig-reference-list">{draft.references.map((reference, index) => <div key={reference.id}><span title={reference.name}>{index + 1}. {reference.name}</span><button aria-label={`移除参考图 ${reference.name}`} disabled={busy || importing} onClick={() => updateDraft({ references: draft.references.filter(item => item.id !== reference.id) })}><X size={15} /></button></div>)}</div>
-      {referencePreview && <img className="ig-reference-preview" src={referencePreview} alt={`参考图 ${draft.references[0].name}`} />}
+      {referencePreview && !staleAnimationReference && <img className="ig-reference-preview" src={referencePreview} alt={`参考图 ${draft.references[0].name}`} />}
     </AiSettingsSection>}
     {checkingReferences && <p className="ig-inline-note" role="status"><LoaderCircle size={14} className="spin" />正在读取参考图…</p>}
-    {referenceError && <div className="ig-inline-error" role="alert"><p>{referenceError}</p>{runtimeAvailable && <button className="ig-link" onClick={() => setReferenceRevision(value => value + 1)}>重新核对</button>}</div>}
+    {referenceError && !animationSource && <div className="ig-inline-error" role="alert"><p>{referenceError}</p>{runtimeAvailable && <button className="ig-link" onClick={() => setReferenceRevision(value => value + 1)}>重新核对</button>}</div>}
     {!runtimeAvailable && <p className="ig-inline-note">请在桌面应用中导入参考图。</p>}
     <div className="studio-ai-model-row"><span>模型</span><Select aria-label="图片实际使用模型" value={currentModel?.id || ''} onValueChange={chooseImageModel} options={currentModels.map(model => ({ value: model.id, label: model.name, description: imageFormatModelDisabled(draft.imageOptions?.imageOutputFormat, model.modelId) ? `${model.modelId} · 当前格式仅 GPT Image 2.6 可用` : model.modelId, disabled: imageFormatModelDisabled(draft.imageOptions?.imageOutputFormat, model.modelId), group: props.configuration.connections.find(connection => connection.id === model.connectionId)?.name }))} placeholder="选择图片模型" /></div>
     <AiSettingsSection rememberKey={layout.rememberKey('images:account')} title="调用账户" summary={imageCredentials.find(key => key.id === selectedCredential)?.name || '请选择账户'} defaultOpen={!!imageKeyIssue}>{imageCredentialControl}<button className="ig-link" onClick={() => props.navigate('models')}><Settings2 size={14} />管理模型与账户</button></AiSettingsSection>
@@ -459,7 +508,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
   useEditorShortcuts(workbench, !busy && !importing && !saving, { save: async () => { if (!selectedImage) return false; await saveImage(selectedImage); return true; }, undo: () => moveHistory('undo'), redo: () => moveHistory('redo') }, target => target instanceof HTMLTextAreaElement && target.classList.contains('ig-prompt'));
 
   function openTool(tool: StudioTool) {
-    if (tool === 'ai' && selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) && draft.mode === 'create') { refineImage(selectedImage); return; }
+    if (tool === 'ai' && selectedImage && (RASTER_IMAGE_TYPES.has(selectedImage.mimeType) || selectedImage.mimeType === 'image/gif') && draft.mode === 'create') { refineImage(selectedImage); return; }
     layout.togglePanel(tool);
   }
   useStudioToolRequests(props.workspaceId, project.id, tool => { layout.openPanel(tool); });

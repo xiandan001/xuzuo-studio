@@ -61,6 +61,7 @@ export interface StudioConfiguration {
   refreshCredentials: () => Promise<void>;
 }
 export interface WorkflowRunner {
+  prepareGeneratedAnimationReference?: (input: import('./live-types').GeneratedAnimationReferenceInput) => Promise<import('./live-types').GeneratedAnimationReference>;
   inventoryRevision?: number;
   thumbnailArtifact?: (id: string) => Promise<import('./live-types').ArtifactPreview>;
   inspectImageArtifact?: (id: string) => Promise<import('./live-types').ImageArtifactInspection>;

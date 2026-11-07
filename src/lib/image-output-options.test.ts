@@ -11,9 +11,12 @@ describe('2.6格式入口与实际请求保持一致', () => {
     expect(imageFormatModelDisabled('png', 'gpt-image-2.5-sunburst')).toBe(false);
     expect(imageFormatModelDisabled(undefined, 'custom-image')).toBe(false);
   });
-  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])('%s仅生成开放SVG/GIF，精修置灰且说明原因', model => {
+  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])('%s文字生成开放SVG/GIF，静态参考图编辑开放GIF而不开放SVG', model => {
     expect(imageFormatOptions(model, 'image-generation').filter(option => ['svg', 'gif'].includes(option.value)).every(option => !option.disabled)).toBe(true);
-    expect(imageFormatOptions(model, 'image-editing').filter(option => ['svg', 'gif'].includes(option.value)).every(option => option.disabled && option.description.includes('仅文字生成'))).toBe(true);
+    expect(imageFormatOptions(model, 'image-editing').find(option => option.value === 'svg')).toMatchObject({ disabled: true, description: expect.stringContaining('仅文字生成') });
+    expect(imageFormatOptions(model, 'image-editing').find(option => option.value === 'gif')).toMatchObject({ disabled: false, description: expect.stringContaining('静态参考图') });
+    expect(imageOutputIssue({ imageOutputFormat: 'gif' }, model, 'image-editing')).toBeUndefined();
+    expect(imageOutputIssue({ imageOutputFormat: 'svg' }, model, 'image-editing')).toContain('SVG 仅支持文字生成');
   });
   it.each(['gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2.6', 'imagen-latest', 'custom-image'])('%s不能误启SVG或GIF', model => {
     expect(imageFormatOptions(model, 'image-generation').filter(option => ['svg', 'gif'].includes(option.value)).every(option => option.disabled && option.description.includes('2.6'))).toBe(true);
@@ -32,6 +35,14 @@ describe('2.6格式入口与实际请求保持一致', () => {
     expect(quickImageWorkflowSteps(first, []).map(step => [step.count, step.imageOutputFormat])).toEqual([[1, 'svg'], [1, 'svg'], [1, 'svg']]);
     expect(readImageOutputOptions({ imageOutputFormat: 'executable', imageMarkupId: '../outside' })).toEqual({});
     expect(pickImageOutputOptions({ imageOutputFormat: 'svg', ignored: 'not forwarded' } as never)).toEqual({ imageOutputFormat: 'svg' });
+  });
+  it('GIF按参考图生成与精修均保留编辑能力、静态附件和动画参数', () => {
+    const draft = { ...readImageDraft(null, '让产品轻轻摇动并自然循环'), editingModelId: 'gif-editor', references: [{ id: 'still-source', name: '产品.png' }], imageOptions: { imageOutputFormat: 'gif' as const, imageFrameCount: 6, imageFrameDurationMs: 205 } };
+    for (const mode of ['create', 'refine'] as const) {
+      const task = imageTaskRequest({ ...draft, mode }, 'selected-result', 'gpt-image-2.6-flare');
+      expect(task.parameters).toMatchObject({ capability: 'image-editing', attachmentIds: ['still-source'], modelConfigId: 'gif-editor', imageOutputFormat: 'gif', imageSize: 'auto', imageFrameCount: 6, imageFrameDurationMs: 210 });
+      expect(imageOutputIssue(task.parameters, 'gpt-image-2.6-flare', task.parameters.capability)).toBeUndefined();
+    }
   });
   it('无效帧数/时长/压缩在界面拦住，不能把透明JPEG提交', () => {
     for (const value of [0, 1, 17, 2.5, NaN]) expect(imageOutputIssue({ imageOutputFormat: 'gif', imageFrameCount: value }, 'gpt-image-2.6-flare')).toContain('帧数');

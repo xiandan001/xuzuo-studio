@@ -7,13 +7,14 @@ export function imageFormatModelDisabled(format: ImageOutputFormat | undefined, 
 }
 export function imageFormatOptions(modelId: string, capability: string) {
   const special = isImage26(modelId) && capability === 'image-generation';
+  const animation = isImage26(modelId) && ['image-generation', 'image-editing'].includes(capability);
   const reason = !isImage26(modelId) ? '仅 GPT Image 2.6 Sunburst／Flare 支持' : '仅文字生成可用，精修及参考图生成不支持';
   return [
     { value: 'png', label: 'PNG 图片', description: '默认，支持透明背景' },
     { value: 'jpeg', label: 'JPEG 图片', description: '文件较小，不支持透明背景' },
     { value: 'webp', label: 'WebP 图片', description: '支持透明背景与压缩' },
     { value: 'svg', label: 'SVG 矢量图 · 仅 2.6', disabled: !special, description: special ? '静态矢量，仅生成；费用含图像及作者模型' : reason },
-    { value: 'gif', label: 'GIF 动图 · 仅 2.6', disabled: !special, description: special ? '仅生成，账户还需开通 GIF 预览权限' : reason },
+    { value: 'gif', label: 'GIF 动图 · 仅 2.6', disabled: !animation, description: animation ? '支持文字或静态参考图制作，账户需开通 GIF 预览权限' : !isImage26(modelId) ? reason : '仅图片生成或编辑步骤可用' },
   ];
 }
 export function effectiveImageOptions(options: ImageOutputOptions = {}, modelId = '', capability = 'image-generation'): ImageOutputOptions {
@@ -29,7 +30,9 @@ export function effectiveImageOptions(options: ImageOutputOptions = {}, modelId 
 }
 export function imageOutputIssue(options: ImageOutputOptions = {}, modelId = '', capability = 'image-generation', background = 'auto'): string | undefined {
   const format = options.imageOutputFormat || 'png';
-  if (['svg', 'gif'].includes(format) && (!isImage26(modelId) || capability !== 'image-generation')) return !isImage26(modelId) ? 'SVG、GIF 仅支持 GPT Image 2.6 Sunburst／Flare，请选择对应模型或其他输出格式。' : 'SVG、GIF 仅支持文字生成，精修和带参考图生成请改用 PNG、JPEG 或 WebP。';
+  if (['svg', 'gif'].includes(format) && !isImage26(modelId)) return 'SVG、GIF 仅支持 GPT Image 2.6 Sunburst／Flare，请选择对应模型或其他输出格式。';
+  if (format === 'svg' && capability !== 'image-generation') return 'SVG 仅支持文字生成，精修和带参考图生成请改用 PNG、JPEG、WebP 或 GIF。';
+  if (format === 'gif' && !['image-generation', 'image-editing'].includes(capability)) return 'GIF 仅支持图片生成或编辑步骤。';
   if (format === 'gif' && (!Number.isInteger(options.imageFrameCount ?? 9) || options.imageFrameCount! < 2 || options.imageFrameCount! > 16)) return 'GIF 帧数请输入 2–16 的整数。';
   if (format === 'gif' && (!Number.isInteger(options.imageFrameDurationMs ?? 200) || (options.imageFrameDurationMs ?? 200) < 20 || (options.imageFrameDurationMs ?? 200) > 2000)) return '每帧时长请输入 20–2000 毫秒，按10毫秒取整。';
   if (['jpeg', 'webp'].includes(format) && options.imageCompression !== undefined && (!Number.isInteger(options.imageCompression) || options.imageCompression < 0 || options.imageCompression > 100)) return '压缩质量请输入 0–100 的整数，或留空使用默认值。';

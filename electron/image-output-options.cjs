@@ -13,7 +13,8 @@ function imageOptionsError(modelId, kind, options = {}) {
   if (!FORMATS.includes(format)) return '图片输出格式需要为PNG、JPEG、WebP、SVG或GIF。';
   if (options.quality !== undefined && (!modern || !QUALITIES.includes(options.quality))) return '所选型号不支持此图片质量设置；2.5/2.6可选auto、low、medium、high、xhigh或max。';
   if (options.complexity !== undefined && (!IMAGE26.test(modelId) || !['low', 'medium', 'high'].includes(options.complexity))) return '复杂度设置仅支持GPT Image 2.6，需为low、medium或high。';
-  if (['svg', 'gif'].includes(format) && (!IMAGE26.test(modelId) || kind !== 'image-generation')) return 'SVG和动画GIF仅支持GPT Image 2.6的图片生成，不能用于图片编辑。';
+  if (['svg', 'gif'].includes(format) && !IMAGE26.test(modelId)) return 'SVG和动画GIF仅支持GPT Image 2.6 Sunburst或Flare。';
+  if (format === 'svg' && kind !== 'image-generation') return 'SVG仅支持图片生成；图片编辑请使用PNG、JPEG、WebP或GIF。';
   if (format === 'svg' && (options.count ?? 1) !== 1) return '单次SVG生成仅支持1张；多张请拆成独立步骤。';
   if (format === 'gif' && options.size !== undefined && options.size !== 'auto') return '动画GIF当前使用auto帧尺寸。';
   if ((options.frameCount !== undefined || options.frameDurationMs !== undefined) && format !== 'gif') return '动画帧数和时长仅用于GIF输出。';
