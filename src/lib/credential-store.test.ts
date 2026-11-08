@@ -25,6 +25,10 @@ const { createCredentialStore, isTrustedCredentialSender } = require('../../elec
   createCredentialStore: (options: CreateStoreOptions) => CredentialsBridge & { withSecret: <T>(id: string, connectionId: string, action: (secret: string) => Promise<T>) => Promise<T> };
   isTrustedCredentialSender: (event: SenderEvent, contents: Contents, applicationUrl: string) => boolean;
 };
+const { CredentialStoreError, credentialErrorMessage } = require('../../electron/credential-errors.cjs') as {
+  CredentialStoreError: new (code: string) => Error & { code: string };
+  credentialErrorMessage: (code: unknown) => string | undefined;
+};
 
 function fixtures() {
   const files = new Map<string, string>();
@@ -73,6 +77,63 @@ describe('桌面凭证库', () => {
     await expect(store.withSecret(entry.id, 'other-connection', async () => true)).rejects.toThrow();
     await store.setEnabled({ id: entry.id, enabled: false });
     await expect(store.withSecret(entry.id, 'test-connection', async () => true)).rejects.toThrow();
+  });
+
+  it('解密失败保留固定原因，不执行生成回调，也不泄露原生错误或在刷新时重复申请授权', async () => {
+    const { options, safeStorage, files, filename } = fixtures();
+    const store = createCredentialStore({ ...options, platform: 'darwin' });
+    const entry = await store.save(input()), original = files.get(filename);
+    let decryptions = 0, callbacks = 0;
+    const privateDetail = `native-error-${input().secret}-private-file-path`;
+    safeStorage.decryptStringAsync = async () => { decryptions++; throw Object.assign(new Error(privateDetail), { code: -128 }); };
+    const failure = await store.withSecret(entry.id, 'test-connection', async () => { callbacks++; return true; }).then(
+      () => { throw new Error('Expected credential decryption failure'); },
+      error => error as Error & { code: string; cause?: unknown },
+    );
+    expect(failure).toBeInstanceOf(CredentialStoreError);
+    expect(failure.code).toBe('CREDENTIAL_DECRYPT_FAILED');
+    expect(failure.message).toBe(credentialErrorMessage('CREDENTIAL_DECRYPT_FAILED'));
+    expect(failure.message).toContain('钥匙串'); expect(failure.message).toContain('本次生成请求未发送');
+    expect(failure.cause).toBeUndefined(); expect(failure.stack).not.toContain(privateDetail);
+    expect(JSON.stringify(failure)).not.toContain(input().secret);
+    for (let index = 0; index < 5; index++) expect(await store.status()).toMatchObject({ requiresAuthorization: true });
+    expect(decryptions).toBe(1); expect(callbacks).toBe(0); expect(files.get(filename)).toBe(original);
+  });
+
+  it.each(['', '   ', null, 42])('解密返回不可用结果 %j 时不派发请求或改写凭证', async result => {
+    const { store, safeStorage, files, filename } = fixtures();
+    const entry = await store.save(input()), original = files.get(filename); let callbacks = 0;
+    safeStorage.decryptStringAsync = async () => ({ result: result as string, shouldReEncrypt: false });
+    await expect(store.withSecret(entry.id, 'test-connection', async () => { callbacks++; return true; })).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPT_FAILED', message: credentialErrorMessage('CREDENTIAL_DECRYPT_FAILED') });
+    expect(callbacks).toBe(0); expect(files.get(filename)).toBe(original);
+  });
+
+  it('凭证缺失、停用及连接不匹配和凭证库损坏分别报告，不触发系统解密', async () => {
+    const { store, safeStorage, files, filename } = fixtures(); const entry = await store.save(input());
+    let decryptions = 0, callbacks = 0;
+    safeStorage.decryptStringAsync = async () => { decryptions++; throw new Error('must not decrypt'); };
+    const action = async () => { callbacks++; return true; };
+    await expect(store.withSecret('missing', 'test-connection', action)).rejects.toMatchObject({ code: 'CREDENTIAL_NOT_FOUND' });
+    await expect(store.withSecret(entry.id, 'other-connection', action)).rejects.toMatchObject({ code: 'CREDENTIAL_NOT_FOUND' });
+    await store.setEnabled({ id: entry.id, enabled: false });
+    await expect(store.withSecret(entry.id, 'test-connection', action)).rejects.toMatchObject({ code: 'CREDENTIAL_NOT_FOUND' });
+    const broken = '{broken-vault'; files.set(filename, broken);
+    await expect(store.withSecret(entry.id, 'test-connection', action)).rejects.toMatchObject({ code: 'CREDENTIAL_STORE_UNREADABLE' });
+    expect(files.get(filename)).toBe(broken); expect(decryptions).toBe(0); expect(callbacks).toBe(0);
+  });
+
+  it('只有固定错误码可产生公开文案，不接收任意原生错误文本', () => {
+    expect(credentialErrorMessage('unknown-native-secret')).toBeUndefined();
+    expect(credentialErrorMessage('__proto__')).toBeUndefined();
+    expect(credentialErrorMessage(null)).toBeUndefined();
+    const error = new CredentialStoreError(input().secret);
+    expect(error.code).toBe('CREDENTIAL_INVALID'); expect(error.message).not.toContain(input().secret);
+    expect(error.message).toBe(credentialErrorMessage('CREDENTIAL_INVALID'));
+  });
+
+  it('成功解密后的生成回调错误保持原身份，不误判为钥匙串失败', async () => {
+    const { store } = fixtures(); const entry = await store.save(input()); const providerFailure = new Error('synthetic-provider-failure');
+    await expect(store.withSecret(entry.id, 'test-connection', async () => { throw providerFailure; })).rejects.toBe(providerFailure);
   });
   it('磁盘与返回值都不包含明文密钥，列表仅含约定元数据', async () => {
     const { store, files, filename } = fixtures();

@@ -1,4 +1,5 @@
 const { ModelRuntimeError, failure, checkedUrl, createContext, ensureActive, progress } = require('./provider-http.cjs');
+const { CredentialStoreError, credentialErrorMessage } = require('./credential-errors.cjs');
 const { executeText } = require('./provider-text.cjs');
 const { executeImages, executeAudio } = require('./provider-media.cjs');
 const { executeVideo, VIDEO_TIMEOUT_MS } = require('./provider-video.cjs');
@@ -154,6 +155,10 @@ function createModelRuntime({ credentialStore, artifactStore, fetchImpl = fetch,
       });
     } catch (error) {
       if (error instanceof ModelRuntimeError) throw error;
+      if (error instanceof CredentialStoreError) {
+        const message = credentialErrorMessage(error.code);
+        if (message) throw failure(error.code, message, context);
+      }
       throw failure('EXECUTION_FAILED', '无法读取本机附件、凭证或保存结果，请检查当前配置后重试。', context);
     } finally { context.cleanup(); }
   }

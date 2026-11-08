@@ -16,6 +16,7 @@ type FetchMock = (url: string, init: RequestInit) => Promise<Response>;
 interface RuntimeOptions { credentialStore: { withSecret: (id: string, connectionId: string, action: (secret: string) => Promise<RuntimeResult>) => Promise<RuntimeResult> }; artifactStore: ArtifactStore; fetchImpl: FetchMock; }
 const require = createRequire(import.meta.url);
 const { createModelRuntime } = require('../../electron/model-runtime.cjs') as { createModelRuntime: (options: RuntimeOptions) => Runtime };
+const { CredentialStoreError, credentialErrorMessage } = require('../../electron/credential-errors.cjs');
 const FAKE_KEY = 'fixture-only-credential-4729';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aq3sAAAAASUVORK5CYII=', 'base64');
 
@@ -60,6 +61,25 @@ function fixture(fetcher: FetchMock = async () => jsonResponse({ choices: [{ mes
 afterEach(() => { vi.useRealTimers(); });
 
 describe('真实模型协议适配（只用 fake fetch 和假凭证）', () => {
+  it.each(['CREDENTIAL_DECRYPT_FAILED', 'CREDENTIAL_STORE_UNREADABLE', 'CREDENTIAL_NOT_FOUND', 'CREDENTIAL_INVALID'])('保留可信凭证错误 %s，并在发请求前停止', async code => {
+    const f = fixture();
+    f.withSecret.mockImplementation(async () => { throw new CredentialStoreError(code); });
+    let error: unknown;
+    try { await f.runtime.execute(request()); } catch (caught) { error = caught; }
+    expect(error).toMatchObject({ name: 'ModelRuntimeError', code, message: credentialErrorMessage(code), requestStarted: false });
+    expect(f.calls).toHaveLength(0); expect(f.writes).toHaveLength(0);
+    expect(String(error)).not.toContain(FAKE_KEY);
+  });
+
+  it('不把任意凭证错误原文或伪造code透传到界面', async () => {
+    const f = fixture();
+    f.withSecret.mockImplementation(async () => { throw Object.assign(new Error(FAKE_KEY), { code: 'CREDENTIAL_DECRYPT_FAILED' }); });
+    let error: unknown;
+    try { await f.runtime.execute(request()); } catch (caught) { error = caught; }
+    expect(error).toMatchObject({ code: 'EXECUTION_FAILED', requestStarted: false });
+    expect(String(error)).not.toContain(FAKE_KEY); expect(f.calls).toHaveLength(0);
+  });
+
   it.each([
     ['openai-chat', { choices: [{ message: { content: '第一段\n第二段' }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }],
     ['openai-responses', { id: 'resp-test', status: 'completed', output: [{ type: 'reasoning', summary: [] }, { type: 'message', content: [{ type: 'output_text', text: '第一段' }] }, { type: 'message', content: [{ type: 'output_text', text: '第二段' }] }], usage: { input_tokens: 12, output_tokens: 5, total_tokens: 17 } }],

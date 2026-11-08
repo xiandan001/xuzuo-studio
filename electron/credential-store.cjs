@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { CredentialStoreError } = require('./credential-errors.cjs');
 
 const MAX_SECRET_LENGTH = 8192;
 
@@ -62,7 +63,7 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
     try { return validateEntries(JSON.parse(await fileSystem.readFile(filename, 'utf8'))); }
     catch (error) {
       if (error?.code === 'ENOENT') return [];
-      throw new Error('无法读取本机凭证库，原文件已保留。');
+      throw new CredentialStoreError('CREDENTIAL_STORE_UNREADABLE');
     }
   }
 
@@ -113,14 +114,15 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
   }
 
   async function withSecret(id, connectionId, action) {
-    if (!validText(id, 160) || !validText(connectionId, 160) || typeof action !== 'function') throw new Error('请选择有效的模型凭证。');
+    if (!validText(id, 160) || !validText(connectionId, 160) || typeof action !== 'function') throw new CredentialStoreError('CREDENTIAL_INVALID');
     const entries = await serial(readEntries);
     const entry = entries.find(item => item.id === id && item.connectionId === connectionId && item.enabled);
-    if (!entry) throw new Error('凭证不存在、已停用或不属于当前连接。');
+    if (!entry) throw new CredentialStoreError('CREDENTIAL_NOT_FOUND');
     let secret;
-    try { secret = (await safeStorage.decryptStringAsync(Buffer.from(entry.ciphertext, 'base64'))).result; encryptionReady = true; }
-    catch { encryptionReady = false; throw new Error('系统无法解密这条凭证，请确认当前系统账户的钥匙串授权，或重新录入。'); }
-    if (typeof secret !== 'string' || !secret) throw new Error('凭证内容不可用，请重新录入。');
+    try { secret = (await safeStorage.decryptStringAsync(Buffer.from(entry.ciphertext, 'base64'))).result; }
+    catch { encryptionReady = false; throw new CredentialStoreError('CREDENTIAL_DECRYPT_FAILED'); }
+    if (typeof secret !== 'string' || !secret.trim()) { encryptionReady = false; throw new CredentialStoreError('CREDENTIAL_DECRYPT_FAILED'); }
+    encryptionReady = true;
     try { return await action(secret); }
     finally { secret = undefined; }
   }
