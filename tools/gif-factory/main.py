@@ -147,12 +147,12 @@ def main():
     result = render(value, folder)
     print(json.dumps({'stage': 'complete', 'elapsedMs': round((time.perf_counter() - began) * 1000),
                       'processPeakMemoryBytes': peak_memory_bytes(), 'entries': len(result['outputs'])}), file=sys.stderr, flush=True)
-    print(json.dumps(result, ensure_ascii=False), flush=True)
+    print(json.dumps(result, ensure_ascii=True), flush=True)
 
 
 if __name__ == '__main__':
     try:
         main()
     except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError) as error:
-        print(json.dumps({'error': str(error)}, ensure_ascii=False), flush=True)
+        print(json.dumps({'error': str(error)}, ensure_ascii=True), flush=True)
         raise SystemExit(1)

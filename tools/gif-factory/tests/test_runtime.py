@@ -1,7 +1,9 @@
 import copy
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -16,6 +18,52 @@ from manifest import STYLES, FULL_ACTIONS, TWO_STATES, validate
 
 
 class AnimationRuntimeTest(unittest.TestCase):
+    def cp1252_render(self, manifest, folder):
+        environment = {key: value for key, value in os.environ.items() if key.upper() in
+                       {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC'}}
+        environment.update(PYTHONIOENCODING='cp1252', PYTHONUTF8='0', PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1')
+        return subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'main.py'),
+                               'render', '--output', str(folder)],
+                              input=json.dumps(manifest, ensure_ascii=False).encode('utf-8'),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+                              timeout=20, check=False)
+
+    def test_cp1252_success_protocol_is_ascii_and_restores_chinese_warnings(self):
+        source = self.root / '中文原图集.png'
+        source.write_bytes(self.atlas.read_bytes())
+        folder = self.root / '中文成功输出'
+        folder.mkdir()
+        manifest = self.manifest()
+        manifest.update(title='中文动画协议回归', width=128, height=128)
+        manifest['atlases'][0]['path'] = str(source)
+        manifest['entries'][0]['caption'] = '你好'
+        result = self.cp1252_render(manifest, folder)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('ascii', errors='replace'))
+        self.assertTrue(result.stdout.isascii())
+        self.assertNotIn(b'UnicodeEncodeError', result.stderr)
+        response = json.loads(result.stdout.decode('ascii'))
+        self.assertTrue(any('本地轻动效' in warning for warning in response['outputs'][0]['report']['warnings']))
+        self.assertTrue((folder / response['outputs'][0]['gifPath']).is_file())
+        self.assertEqual(source.read_bytes(), self.atlas.read_bytes())
+
+    def test_cp1252_error_protocol_is_ascii_and_restores_chinese_error(self):
+        source = self.root / '中文错误原图集.png'
+        source.write_bytes(self.atlas.read_bytes())
+        folder = self.root / '中文失败输出'
+        folder.mkdir()
+        manifest = self.manifest()
+        manifest['title'] = '中文错误协议回归'
+        manifest['atlases'][0]['path'] = str(source)
+        manifest['entries'][0]['frames'][0]['crop'] = [0, 0, 10000, 64]
+        result = self.cp1252_render(manifest, folder)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stdout.isascii())
+        self.assertNotIn(b'UnicodeEncodeError', result.stderr)
+        response = json.loads(result.stdout.decode('ascii'))
+        self.assertIn('裁切范围超出了源图', response['error'])
+        self.assertEqual(list(folder.iterdir()), [])
+        self.assertEqual(source.read_bytes(), self.atlas.read_bytes())
+
     def test_light_motion_does_not_silently_ignore_additional_source_poses(self):
         value = self.manifest()
         value['entries'][0]['frames'].append(copy.deepcopy(value['entries'][0]['frames'][0]))
