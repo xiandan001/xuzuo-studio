@@ -20,14 +20,15 @@ async function json(filename) { assert((await ordinary(filename)).size <= 65536)
 const psLiteral = value => "'" + value.replaceAll("'", "''") + "'";
 async function audit(executable, profile, pids, startedAt, stop = false) {
   assert(pids.every(pid => Number.isSafeInteger(pid) && pid > 0));
+  const filter = `Name='${path.basename(executable).replaceAll("'", "''")}'`, auditStarted = Date.now();
   const script = `$ErrorActionPreference='Stop'; $exe=${psLiteral(executable)}; $profile=${psLiteral(profile)}; $known=@(${pids.join(',')}); $min=[long]${startedAt - 1000};
-    $found=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -ieq $exe -and (([DateTimeOffset]$_.CreationDate).ToUniversalTime().ToUnixTimeMilliseconds() -ge $min) -and (($known -contains [int]$_.ProcessId) -or ($_.CommandLine -and $_.CommandLine.IndexOf($profile,[StringComparison]::OrdinalIgnoreCase) -ge 0)) });
+    $found=@(Get-CimInstance Win32_Process -Filter ${psLiteral(filter)} -Property ExecutablePath,CreationDate,ProcessId,CommandLine | Where-Object { $_.ExecutablePath -ieq $exe -and (([DateTimeOffset]$_.CreationDate).ToUniversalTime().ToUnixTimeMilliseconds() -ge $min) -and (($known -contains [int]$_.ProcessId) -or ($_.CommandLine -and $_.CommandLine.IndexOf($profile,[StringComparison]::OrdinalIgnoreCase) -ge 0)) });
     ${stop ? 'foreach($item in $found){try{$p=[Diagnostics.Process]::GetProcessById($item.ProcessId);if($p.MainModule.FileName -ieq $exe -and [Math]::Abs(([DateTimeOffset]$p.StartTime).ToUniversalTime().ToUnixTimeMilliseconds()-([DateTimeOffset]$item.CreationDate).ToUniversalTime().ToUnixTimeMilliseconds()) -le 2){$p.Kill();if(!$p.WaitForExit(5000)){throw "Owned child did not exit"}}}catch [ArgumentException]{}}' : ''}
     ConvertTo-Json -Compress -InputObject @($found | ForEach-Object { [pscustomobject]@{pid=[int]$_.ProcessId} })`;
-  const child = spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '', expired = false; child.stdout.on('data', value => { stdout += value.toString().slice(0, Math.max(0, 65536 - stdout.length)); }); child.stderr.on('data', value => { stderr += value.toString().slice(0, Math.max(0, 1024 - stderr.length)); });
-  const timeout = setTimeout(() => { expired = true; child.kill(); }, 10000); timeout.unref();
-  try { const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }); assert(!expired && code === 0, 'Owned process audit failed: ' + stderr.slice(0, 512)); return JSON.parse(stdout.trim()); }
+  const timeout = setTimeout(() => { expired = true; child.kill(); }, 15000); timeout.unref();
+  try { const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }); assert(!expired && code === 0, 'Owned process audit failed: ' + JSON.stringify({ expired, code, elapsedMs: Date.now() - auditStarted, stderr: stderr.slice(0, 512) })); return JSON.parse(stdout.trim()); }
   finally { clearTimeout(timeout); }
 }
 async function phase(caseDirectory, mode, executable, owner) {
