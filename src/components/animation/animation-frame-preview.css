@@ -1,1 +1,90 @@
-.animation-studio .animation-preview-canvas.has-source-frame{height:auto;max-height:min(620px,65vh);min-height:200px;overflow:auto;display:block}.animation-frame-source{width:100%;min-width:0;line-height:1.6;color:var(--ui-fg);background:var(--ui-surface)}.animation-frame-source[hidden]{display:none!important}.animation-frame-source>header{padding:12px 14px;border:1px solid var(--ui-border);border-bottom:0;border-radius:9px 9px 0 0}.animation-frame-source strong{font-size:14px;display:block}.animation-frame-source small{display:block;font-size:12px;color:var(--ui-fg-secondary)}.animation-frame-source>small{padding:10px 14px;border:1px solid var(--ui-border);border-top:0;border-radius:0 0 9px 9px}.animation-studio .animation-source-atlas{position:relative;width:100%;line-height:0;overflow:hidden;border:1px solid var(--ui-border)}.animation-studio .animation-source-atlas>img{display:block;width:100%;height:auto;max-width:none;object-fit:initial}.animation-studio .animation-source-highlight{position:absolute;box-sizing:border-box;border:3px solid var(--ui-accent);box-shadow:inset 0 0 0 1px #ffffffb3;pointer-events:none}.animation-frame-source>p{padding:16px;font-size:13px;margin:0;line-height:1.7;color:var(--ui-fg-secondary)}.animation-frame-source>p[role=alert]{color:var(--ui-danger);background:var(--ui-danger-bg)}
+.animation-studio .animation-preview-canvas.has-source-frame {
+  display: block;
+  height: auto;
+  min-height: 200px;
+  max-height: min(560px, 62dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.animation-frame-source {
+  width: 100%;
+  min-width: 0;
+  line-height: 1.6;
+  color: var(--ui-fg);
+  background: var(--ui-surface);
+}
+
+.animation-frame-source[hidden] {
+  display: none !important;
+}
+
+.animation-frame-source > header {
+  padding: 12px 14px;
+  border: 1px solid var(--ui-border);
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+}
+
+.animation-frame-source strong {
+  display: block;
+  font-size: 14px;
+}
+
+.animation-frame-source small {
+  display: block;
+  font-size: 12px;
+  color: var(--ui-fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.animation-frame-source > small {
+  padding: 10px 14px;
+  border: 1px solid var(--ui-border);
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+}
+
+.animation-studio .animation-source-atlas {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+}
+
+.animation-studio .animation-source-atlas > img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: none;
+  object-fit: initial;
+}
+
+.animation-studio .animation-source-highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid var(--ui-accent);
+  box-shadow: inset 0 0 0 1px #ffffffb3;
+  pointer-events: none;
+}
+
+.animation-frame-source > p,
+.animation-frame-source > div > p {
+  padding: 16px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ui-fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.animation-frame-source p[role="alert"] {
+  color: var(--ui-danger);
+  background: var(--ui-danger-bg);
+}
+
+.animation-frame-source > div > .text-button {
+  margin: 0 16px 12px;
+}
