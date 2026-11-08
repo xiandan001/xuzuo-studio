@@ -34,6 +34,8 @@ jobs:
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked Electron runtime
         run: |
+          $lockedElectronVersion = (Get-Content node_modules/electron/package.json -Raw | ConvertFrom-Json).version
+          $env:ELECTRON_CUSTOM_FILENAME = "electron-v${lockedElectronVersion}-win32-x64.zip?download=1"
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             node node_modules/electron/install.js
             if ($LASTEXITCODE -eq 0) { break }
