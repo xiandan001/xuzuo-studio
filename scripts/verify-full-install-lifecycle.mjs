@@ -85,7 +85,7 @@ async function main() {
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted', 'Only a disposable GitHub-hosted runner may install this fixture');
   assert.equal((await fsp.realpath(process.env.GITHUB_WORKSPACE)).toLowerCase(), (await fsp.realpath(root)).toLowerCase());
   assert(process.env.RUNNER_TEMP && path.isAbsolute(process.env.RUNNER_TEMP)); assert(process.argv.length <= 3);
-  const sourcePackage = await json(path.join(root, 'package.json')); assert.equal(sourcePackage.version, '2.5.0');
+  const sourcePackage = await json(path.join(root, 'package.json')); assert.equal(sourcePackage.version, '2.5.1');
   const release = path.resolve(process.argv[2] || path.join(root, sourcePackage.build.directories.output)); inside(path.join(root, 'outputs'), release); await ordinary(release, true);
   reportFile = path.join(release, 'full-install-lifecycle.json'); await assert.rejects(fsp.lstat(reportFile), { code: 'ENOENT' });
   current = await json(path.join(release, 'package-verification.json')); assert.equal(current.passed, true); assert.equal(current.commit, process.env.GITHUB_SHA); assert.equal(current.version, sourcePackage.version);

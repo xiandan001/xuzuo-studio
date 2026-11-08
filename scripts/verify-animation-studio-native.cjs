@@ -9,7 +9,7 @@ const { spawn } = require('node:child_process');
 const { app, BrowserWindow, ipcMain, nativeImage, nativeTheme } = require('electron');
 const { PNG } = require('pngjs');
 const root = path.resolve(__dirname, '..'), sha = bytes => createHash('sha256').update(bytes).digest('hex'), began = Date.now();
-const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, actualAccountCharges: 0, syntheticLedger: true, errors: [], steps: [], screenshots: [], layouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, showOpacities: [], remaining: 0 } };
+const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, actualAccountCharges: 0, syntheticLedger: true, errors: [], steps: [], screenshots: [], layouts: [], shellLayouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, showOpacities: [], remaining: 0 } };
 let owner, temporary, window, service, store, engine, artifacts, workspaceStorage, tool, server, context, referencePath, lastProjectZip, nextImportZip = false, finishing = false, holdNext = false, releaseResponse, visibilityRound = false;
 const channels = [], children = [], calls = [], exportedFiles = [], projectId = 'animation-ui-project', workspaceId = 'animation-ui-workspace';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -58,6 +58,62 @@ async function layout(width, mode) {
   }, 'actual theme paint and layout', 3000); } catch (error) { if (value) report.layouts.push(value); throw Error(error.message + ': ' + JSON.stringify(value)); }
   value.paintMs = Date.now() - started; report.layouts.push(value); assert(value.passed);
 }
+async function shellLayout(width, height, mode, expanded) {
+  window.setContentSize(width, height);
+  await evaluate(`(()=>{const button=document.querySelector('.studio-run-status-heading button[aria-controls]');if(button.getAttribute('aria-expanded')!==${JSON.stringify(String(expanded))})button.click()})()`);
+  await dom(`document.querySelector('.studio-run-status-heading button[aria-controls]')?.getAttribute('aria-expanded')===${JSON.stringify(String(expanded))}`, 'actual task status expansion');
+  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  const value = await evaluate(`(()=>{
+    const studio=document.querySelector('.animation-studio'),content=document.querySelector('.content-images'),workspace=content.querySelector('.workspace-panel'),status=document.querySelector('.studio-run-status');
+    const rect=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+    studio.scrollTop=0;
+    return {width:innerWidth,height:innerHeight,mode:document.querySelector('.animation-mode-tabs [aria-selected=true]')?.textContent.trim(),expanded:!!document.querySelector('.studio-run-status-details'),studio:rect(studio),content:rect(content),workspace:rect(workspace),status:rect(status),sidebar:rect(document.querySelector('.sidebar')),header:rect(document.querySelector('.app-header')),footer:rect(document.querySelector('.statusbar')),overflow:getComputedStyle(studio).overflowY,contentOverflow:getComputedStyle(content).overflowY,clientWidth:studio.clientWidth,scrollWidth:studio.scrollWidth,clientHeight:studio.clientHeight,scrollHeight:studio.scrollHeight,documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth,backButton:!![...studio.querySelectorAll('.animation-page-heading button')].find(button=>button.textContent.includes('返回图片工作台'))};
+  })()`);
+  report.shellLayouts.push(value);
+  const detail = JSON.stringify(value);
+  assert.equal(value.width, width, detail); assert.equal(value.height, height, detail);
+  assert.equal(value.mode, mode === 'atlas' ? '角色图集' : 'GIF 动画工坊', detail); assert.equal(value.expanded, expanded, detail);
+  assert.equal(value.sidebar.width, 216, detail); assert.equal(value.header.height, 70, detail); assert.equal(value.footer.height, 24, detail);
+  assert(value.backButton && value.contentOverflow === 'hidden', detail);
+  assert(Math.abs(value.studio.width - value.content.width) <= 1, 'Animation studio must consume the available workspace width: ' + detail);
+  assert(Math.abs(value.studio.left - value.content.left) <= 1 && Math.abs(value.studio.right - value.content.right) <= 1, detail);
+  assert(Math.abs(value.studio.top - value.status.bottom) <= 1 && Math.abs(value.studio.bottom - value.content.bottom) <= 1, 'Animation studio must fit below task status and above the footer: ' + detail);
+  assert(value.content.top >= value.header.bottom - 1 && value.content.bottom <= value.footer.top + 1 && value.footer.bottom <= height + 1, detail);
+  assert(value.studio.height >= value.content.height * .5, detail);
+  assert(['auto', 'scroll'].includes(value.overflow) && value.scrollHeight > value.clientHeight + 20, 'Animation studio must own its vertical overflow: ' + detail);
+  assert(value.scrollWidth <= value.clientWidth + 1 && value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Workspace must not overflow horizontally: ' + detail);
+  value.bottom = await evaluate(`(()=>{
+    const studio=document.querySelector('.animation-studio'),content=document.querySelector('.content-images'),workspace=content.querySelector('.workspace-panel');
+    studio.scrollTop=studio.scrollHeight;
+    const bounds=studio.getBoundingClientRect(),footer=document.querySelector('.statusbar').getBoundingClientRect();
+    const buttons=[...document.querySelectorAll('.animation-export>.animation-button-row button')].map(button=>{const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {label:button.textContent.trim(),top:r.top,bottom:r.bottom,left:r.left,right:r.right,visible:r.width>0&&r.height>0&&r.top>=bounds.top&&r.bottom<=Math.min(bounds.bottom,footer.top)&&r.left>=bounds.left&&r.right<=bounds.right,hit:!!hit&&(button===hit||button.contains(hit))}});
+    return {scrollTop:studio.scrollTop,maximum:studio.scrollHeight-studio.clientHeight,documentScrollTop:document.scrollingElement.scrollTop,contentScrollTop:content.scrollTop,workspaceScrollTop:workspace.scrollTop,buttons};
+  })()`);
+  assert(value.bottom.scrollTop > 0 && Math.abs(value.bottom.scrollTop - value.bottom.maximum) <= 1, JSON.stringify(value));
+  assert.equal(value.bottom.documentScrollTop, 0, JSON.stringify(value)); assert.equal(value.bottom.contentScrollTop, 0, JSON.stringify(value)); assert.equal(value.bottom.workspaceScrollTop, 0, JSON.stringify(value));
+  assert.deepEqual(value.bottom.buttons.map(button => button.label), ['拆分图片 ZIP', '导出整套 ZIP', '可编辑工程 ZIP', '保存当前样片流程']);
+  assert(value.bottom.buttons.every(button => button.visible && button.hit), 'Every actual bottom export control must be reachable through studio scrolling: ' + JSON.stringify(value));
+  value.passed = true;
+  await evaluate("document.querySelector('.animation-studio').scrollTop=0");
+}
+async function shellLayoutMatrix() {
+  const before = calls.length;
+  const count = report.shellLayouts.length;
+  let legacyFailure;
+  await evaluate(`(()=>{const style=document.createElement('style');style.id='legacy-animation-root-layout';style.textContent='.animation-studio{width:auto!important;flex:0 1 auto!important;min-height:auto!important;overflow:visible!important}';document.head.append(style)})()`);
+  try { await shellLayout(1440, 1000, 'atlas', false); }
+  catch (error) { legacyFailure = error; report.legacyShellLayout = { rejected: true, error: error.message, layout: report.shellLayouts.at(-1) }; }
+  finally { await evaluate("document.getElementById('legacy-animation-root-layout')?.remove()"); report.shellLayouts.splice(count); }
+  assert(legacyFailure instanceof assert.AssertionError && legacyFailure.message.startsWith('Animation studio must consume the available workspace width:'), 'The production-shell layout oracle must reject the original shrinking root CSS');
+  assert.equal(calls.length, before);
+  for (const mode of ['atlas', 'gif']) {
+    await click('[role="tab"]', mode === 'atlas' ? '角色图集' : 'GIF 动画工坊');
+    for (const [width, height] of [[1440, 1000], [960, 1000], [1440, 720], [960, 720]]) for (const expanded of [false, true]) await shellLayout(width, height, mode, expanded);
+  }
+  assert.equal(report.shellLayouts.length, 16); assert.equal(calls.length, before);
+  await click('[role="tab"]', '角色图集'); await shellLayout(1440, 1000, 'atlas', false);
+  report.shellLayoutChecksWithoutHttp = true;
+}
 function image(columns = 1, rows = 1, marker = 0, opaque = false) { const size = 256, png = new PNG({ width: columns * size, height: rows * size }); if (opaque) for (let at = 0; at < png.data.length; at += 4) { png.data[at] = 240; png.data[at + 1] = 244; png.data[at + 2] = 247; png.data[at + 3] = 255; } for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) for (let y = 32; y < 220; y++) for (let x = 32; x < 224; x++) { const head = ((x - 128) / 57) ** 2 + ((y - 91) / 50) ** 2 < 1, body = x > 86 && x < 170 && y > 125 && y < 216, arm = ((x - (column % 2 ? 196 : 60)) / 15) ** 2 + ((y - (column % 2 ? 100 : 165)) / 35) ** 2 < 1; if (head || body || arm) { const at = ((row * size + y) * png.width + column * size + x) * 4; png.data[at] = 50 + (marker * 17 + column * 30 + row * 40) % 160; png.data[at + 1] = 130; png.data[at + 2] = 180; png.data[at + 3] = 255; } } return PNG.sync.write(png); }
 async function initialize() {
   const directory = path.join(temporary, 'native'); await fsp.mkdir(directory);
@@ -88,7 +144,7 @@ async function initialize() {
 }
 async function scenario() {
   await dom(`document.querySelector('[aria-label="动画制图模型"]')`, 'production animation controls');
-  await step('atlas-reference-model-key-sample', async () => { await layout(1440, 'light'); await openSection('制图模型与 Key'); await select('动画制图模型', '合成 PNG 模型'); await select('动画制图Key', '虚构测试 Key'); await fill('角色作品数量', '3'); await click('button', '上传参考图'); await fill('动画创作需求', '原创几何吉祥物，角色一致，先做一份样片。'); await click('button', '先制作一份样片'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries[0].status, 'ready'); assert.equal(value.document.referenceArtifactIds.length, 1); assert.equal(calls.length, 1); await capture('01-atlas-light-1440.png', '.animation-preview'); });
+  await step('atlas-reference-model-key-sample', async () => { await shellLayoutMatrix(); await layout(1440, 'light'); await openSection('制图模型与 Key'); await select('动画制图模型', '合成 PNG 模型'); await select('动画制图Key', '虚构测试 Key'); await fill('角色作品数量', '3'); await click('button', '上传参考图'); await fill('动画创作需求', '原创几何吉祥物，角色一致，先做一份样片。'); await click('button', '先制作一份样片'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries[0].status, 'ready'); assert.equal(value.document.referenceArtifactIds.length, 1); assert.equal(calls.length, 1); await capture('01-atlas-light-1440.png', '.animation-preview'); });
   await step('sample-approval-and-two-item-expansion', async () => { await click('button', '认可样片'); await dom(`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('按样片扩展')&&!e.disabled)`, 'sample accepted'); await click('button', '按样片扩展'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries.filter(entry => entry.status === 'ready').length, 3); assert.equal(calls.length, 2); });
   await step('existing-atlas-to-local-gif-and-playback', async () => { const before = calls.length; await click('[role="tab"]', 'GIF 动画工坊'); await click('button', '重新合成'); await idle(); assert.equal(calls.length, before); await click('button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'only selected GIF playing'); await capture('02-gif-light-1440.png', '.animation-preview'); await click('button', '暂停预览'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'static covers after pause'); report.singlePlaybackVerified = true; });
   await step('free-caption-speed-undo-redo', async () => { const before = calls.length, ledger = structuredClone((await engine.snapshot()).ledger); await fill('当前条目文案', '继续加油'); await click('[aria-label="撤销动画编辑"]'); await click('[aria-label="重做动画编辑"]'); await click('summary', '画布、速度与图集设置'); await fill('播放帧率', '20'); await fill('循环时长（毫秒）', '400'); await click('button', '重新合成'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.loopMs, 400); assert.equal(value.document.entries[0].inspection.loopMs, 400); assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger); report.localCaptionAndSpeedWithoutHttp = true; });
