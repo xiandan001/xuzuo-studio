@@ -34,7 +34,7 @@ async function finish(error) {
 const deadline = setTimeout(() => { void finish(Error('MARKET_UI_45_SECOND_DEADLINE')); }, 45000);
 async function evaluate(source) { let timer; try { return await Promise.race([window.webContents.executeJavaScript(source, true), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('MARKET_DOM_READ_TIMEOUT')), 3000); })]); } finally { clearTimeout(timer); } }
 async function until(check, label, timeout = 5000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await delay(25); } throw Error('Timed out: ' + label); }
-async function domWait(source, label) { await until(() => evaluate(source), label); }
+async function domWait(source, label) { await until(() => evaluate(`Boolean(${source})`), label); }
 async function click(selector, text) { await domWait(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'});return Boolean(e&&!e.disabled)})()`, text || selector); await evaluate(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'});e.click();})()`); }
 async function capture(name, selector) {
   if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`);
