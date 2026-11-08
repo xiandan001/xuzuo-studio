@@ -26,6 +26,7 @@ async function finish(error) {
   if (finishing) return; finishing = true; clearTimeout(deadline); if (error) { report.errors.push(String(error.stack || error)); process.stderr.write('Marketplace probe failure: ' + String(error.stack || error) + '\n'); }
   checkpoint('shutdown');
   try { await bounded(browser?.shutdown(), 'browser shutdown', 6000); } catch (cause) { report.errors.push(String(cause)); }
+  try { await until(() => BrowserWindow.getAllWindows().length === 0 && remoteContents.every(contents => contents.isDestroyed()), 'all platform contents destroyed'); } catch (cause) { report.errors.push(String(cause)); }
   if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)])];
   report.remainingWindows = BrowserWindow.getAllWindows().length; report.remainingRemoteViews = remoteContents.filter(contents => !contents.isDestroyed()).length;
   if (report.remainingWindows || report.remainingRemoteViews || report.shown !== report.windowsCreated || report.windowsCreated !== 4) report.errors.push('Expected four displayed isolated CI windows and no remaining windows/views');
