@@ -25,14 +25,25 @@ function createAnimationTool({ executablePath, directory, developmentPython = 'p
   let tail = Promise.resolve(), active, closed = false, quiescing = false, cachedStatus, probing;
   const stops = new Set();
   const blocked = () => closed || quiescing;
-  async function ordinary(filename, kind = 'file') {
-    const resolved = path.resolve(filename), root = path.parse(resolved).root; let current = root;
-    for (const part of resolved.slice(root.length).split(path.sep).filter(Boolean)) {
+  async function inspectComponents(filename, kind) {
+    const root = path.parse(filename).root; let current = root;
+    for (const part of filename.slice(root.length).split(path.sep).filter(Boolean)) {
       current = path.join(current, part); const info = await fs.lstat(current);
-      if (info.isSymbolicLink() || (current === resolved ? kind === 'file' ? !info.isFile() : !info.isDirectory() : !info.isDirectory())) throw Error('动画素材或工作目录不是常规本机文件。');
+      if (info.isSymbolicLink() || (current === filename ? kind === 'file' ? !info.isFile() : !info.isDirectory() : !info.isDirectory())) throw Error('动画素材或工作目录不是常规本机文件。');
     }
-    if ((await fs.realpath(resolved)).toLowerCase() !== resolved.toLowerCase()) throw Error('动画素材或工作目录发生了重定向。');
-    return fs.stat(resolved);
+  }
+  async function ordinary(filename, kind = 'file') {
+    const resolved = path.resolve(filename); await inspectComponents(resolved, kind);
+    const canonical = await fs.realpath(resolved);
+    if (canonical.toLowerCase() === resolved.toLowerCase()) return fs.stat(resolved);
+    const originalRoot = path.parse(resolved).root, canonicalRoot = path.parse(canonical).root;
+    const originalParts = resolved.slice(originalRoot.length).split(path.sep), canonicalParts = canonical.slice(canonicalRoot.length).split(path.sep);
+    const shortName = /^(?=.{1,8}(?:\.|$))[^\\/. ]{1,6}~[1-9]\d{0,5}(?:\.[^\\/. ]{1,3})?$/i;
+    if (process.platform !== 'win32' || originalRoot.toLowerCase() !== canonicalRoot.toLowerCase() || originalParts.length !== canonicalParts.length || originalParts.some((part, index) => part.toLowerCase() !== canonicalParts[index].toLowerCase() && !shortName.test(part))) throw Error('动画素材或工作目录发生了重定向。');
+    const before = await fs.stat(resolved); await inspectComponents(canonical, kind);
+    const target = await fs.stat(canonical), after = await fs.stat(resolved);
+    if (before.dev !== target.dev || before.ino !== target.ino || after.dev !== target.dev || after.ino !== target.ino || (await fs.realpath(resolved)).toLowerCase() !== canonical.toLowerCase()) throw Error('动画素材或工作目录身份发生了改变。');
+    return after;
   }
   async function command() {
     const bundled = executablePath || path.join(process.resourcesPath || path.resolve(__dirname, '..'), 'animation-tool', 'xuzuo-animation.exe');

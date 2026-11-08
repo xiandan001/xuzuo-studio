@@ -45,13 +45,52 @@ async function fixture(options = {}) {
     })().catch(error => { child.stdout.end(JSON.stringify({ error: error.message })); child.exitCode = 1; child.emit('close', 1); }); });
     return child;
   });
-  f.tool = createAnimationTool({ executablePath: executable, directory, spawnProcess, terminateProcess: async child => { f.stops.push(child); child.kill(); }, ...options });
+  const changes = typeof options === 'function' ? await options(f) : options;
+  f.tool = createAnimationTool({ executablePath: executable, directory, spawnProcess, terminateProcess: async child => { f.stops.push(child); child.kill(); }, ...changes });
   f.output = async name => { const target = path.join(directory, name); await fs.mkdir(target); return target; };
   f.manifest = manifest; owned.push(f); return f;
 }
 afterEach(async () => { for (const f of owned.splice(0)) { f.hold = false; f.releases.splice(0).forEach(resolve => resolve()); await f.tool.shutdown(); const directory = await fs.realpath(f.directory); expect(path.dirname(directory)).toBe(await fs.realpath(os.tmpdir())); expect(path.basename(directory)).toMatch(/^xuzuo-animation-node-/); await fs.rm(directory, { recursive: true, force: true }); } vi.restoreAllMocks(); });
 
 describe('offline animation process adapter (synthetic helper protocol, no Python/GUI/model)', () => {
+  it('accepts a same-layer DOS short alias only after canonical component and file identity checks', async () => {
+    let shortSource;
+    const f = await fixture(async value => {
+      const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
+      const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
+      shortSource = path.join(alias, 'source.png');
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+    });
+    await expect(f.tool.status()).resolves.toEqual({ available: true });
+    const manifest = { ...f.manifest, atlases: [{ id: 'source', path: shortSource }] };
+    await expect(f.tool.run(manifest, await f.output('short-source-output'))).resolves.toBeTruthy();
+    expect(f.rendered[0].input.atlases[0].path).toBe(shortSource);
+    expect(await fs.readFile(f.source)).toEqual(png());
+  });
+  it('does not treat arbitrary canonical redirects as DOS aliases', async () => {
+    const f = await fixture(async value => {
+      const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'normal-redirect');
+      const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+    });
+    await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
+  });
+  it('rejects an alias whose file identity changes even if its spelling looks like DOS 8.3', async () => {
+    const f = await fixture(async value => {
+      const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
+      const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: async filename => { const stat = await fs.stat(map(filename)); return filename.startsWith(alias + path.sep) ? Object.assign(Object.create(stat), { ino: stat.ino + 1 }) : stat; } } };
+    });
+    await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
+  });
+  it('rejects junction and symlink components even when their names look like DOS 8.3', async () => {
+    const f = await fixture(async value => {
+      const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
+      const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => filename === alias ? Promise.resolve({ isSymbolicLink: () => true, isDirectory: () => true }) : fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+    });
+    await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
+  });
   it('scrubs credentials, proxies and Python injection environment', () => {
     const clean = cleanEnvironment({ PATH: 'safe', SystemRoot: 'C:/Windows', OPENAI_API_KEY: 'secret', ANTHROPIC_API_KEY: 'secret', HTTPS_PROXY: 'secret', GITHUB_TOKEN: 'secret', PYTHONPATH: 'inject', NODE_OPTIONS: 'inject' });
     expect(clean.PATH).toBe('safe'); expect(clean.PYTHONNOUSERSITE).toBe('1'); expect(clean.PYTHONDONTWRITEBYTECODE).toBe('1'); expect(Object.keys(clean).some(key => /KEY|TOKEN|PROXY|PYTHONPATH|NODE_OPTIONS/.test(key))).toBe(false);

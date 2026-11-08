@@ -13,7 +13,7 @@ function createAnimationComposition({ directory, artifactStore, tool, core, file
     return fs.readFile(resolved);
   }
   async function run(document, entries, signal, operation, exportFrames = false) {
-    await checkedDirectory(fs, root, true); const temporary = await fs.mkdtemp(path.join(root, 'render-'));
+    await checkedDirectory(fs, root, true); const ownedRoot = await fs.realpath(root), temporary = await fs.mkdtemp(path.join(ownedRoot, 'render-'));
     const active = () => { if (signal?.aborted) throw Object.assign(Error('本地合成已取消，源稿和费用保留。'), { name: 'AbortError' }); };
     try {
       active(); const atlases = [], sources = []; let sourceBytes = 0, sourcePixels = 0;
@@ -34,7 +34,7 @@ function createAnimationComposition({ directory, artifactStore, tool, core, file
       return await operation({ result, temporary, outputDirectory, sources, active });
     } finally {
       const actual = await fs.realpath(temporary).catch(() => undefined);
-      if (actual && path.dirname(actual).toLowerCase() === root.toLowerCase() && /^render-[A-Za-z0-9]+$/.test(path.basename(actual))) await fs.rm(actual, { recursive: true, force: true }).catch(() => undefined);
+      if (actual && path.dirname(actual).toLowerCase() === ownedRoot.toLowerCase() && /^render-[A-Za-z0-9]+$/.test(path.basename(actual))) await fs.rm(actual, { recursive: true, force: true }).catch(() => undefined);
     }
   }
   return {
