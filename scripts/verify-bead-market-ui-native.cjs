@@ -1,0 +1,94 @@
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+const { pathToFileURL } = require('node:url');
+const { app, BrowserWindow, ipcMain } = require('electron');
+
+const root = path.resolve(__dirname, '..'), started = Date.now(), sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const report = { passed: false, phase: 'prepare', commit: process.env.GITHUB_SHA, syntheticMarketplace: true, actualNativeDataAndFiles: true, normalApplicationStarted: false, userProfileAccessed: false, providerCalls: 0, externalRequests: 0, errors: [], windows: { created: 0, shown: 0, remaining: 0 }, rendererProcessIds: [], processIds: [process.pid], screenshots: [], layouts: [], steps: [] };
+let owner, temporary, window, market, beadStore, artifacts, closing = false, nativeDocument;
+const channels = [], delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+function ordinary(filename, directory = false) { const info = fs.lstatSync(filename); assert(!info.isSymbolicLink()); assert(directory ? info.isDirectory() : info.isFile()); assert.equal(fs.realpathSync(filename).toLowerCase(), path.resolve(filename).toLowerCase()); return info; }
+function prepare() {
+  assert.equal(process.platform, 'win32'); assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true'); assert.match(report.commit || '', /^[a-f0-9]{40}$/); assert(process.env.RUNNER_TEMP && process.env.GITHUB_WORKSPACE);
+  assert.equal(fs.realpathSync(root).toLowerCase(), fs.realpathSync(process.env.GITHUB_WORKSPACE).toLowerCase()); assert(path.isAbsolute(process.argv[2] || '')); temporary = path.resolve(process.argv[2]); ordinary(temporary, true); assert.equal(path.dirname(temporary).toLowerCase(), fs.realpathSync(process.env.RUNNER_TEMP).toLowerCase()); assert.match(path.basename(temporary), /^xuzuo-bead-market-ui-[A-Za-z0-9-]+$/);
+  const filename = path.join(temporary, 'owner.json'); assert(ordinary(filename).size < 100000); owner = JSON.parse(fs.readFileSync(filename, 'utf8')); assert.equal(owner.kind, 'xuzuo-bead-market-ui'); assert.equal(owner.commit, report.commit); assert.match(owner.nonce, /^[a-f0-9-]{36}$/); report.nonce = owner.nonce;
+  for (const key of ['dist', 'output']) ordinary(owner[key], true);
+  assert.equal(owner.dist, path.join(root, 'work/bead-market-ui-dist')); assert.equal(owner.output, path.join(root, 'work/bead-market-ui-output'));
+  for (const [relative, digest] of Object.entries(owner.files)) { assert(!relative.split('/').includes('..')); const file = path.join(owner.dist, relative); assert(ordinary(file).size < 16 * 1024 * 1024); assert.equal(sha(fs.readFileSync(file)), digest); }
+  for (const [relative, digest] of Object.entries(owner.sources)) { assert(/^(?:src|scripts)\//.test(relative) && !relative.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, relative))), digest); }
+  const profile = path.join(temporary, 'profile'); ordinary(profile, true); app.setPath('userData', profile); app.setPath('sessionData', profile); app.disableHardwareAcceleration();
+}
+app.on('window-all-closed', () => {});
+async function finish(error) {
+  if (closing) return; closing = true; clearTimeout(deadline); if (error) report.errors.push(String(error.stack || error));
+  try { await market?.shutdown(); await Promise.all([beadStore?.drain(), artifacts?.drain()]); } catch (cause) { report.errors.push(String(cause)); }
+  if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)])];
+  for (const current of BrowserWindow.getAllWindows()) current.destroy(); for (const channel of channels) ipcMain.removeHandler(channel);
+  report.windows.remaining = BrowserWindow.getAllWindows().length; if (report.windows.remaining || report.windows.created !== 1 || report.windows.shown || report.rendererProcessIds.length !== 1) report.errors.push('Expected one hidden renderer and zero residual windows');
+  report.elapsedMs = Date.now() - started; report.passed = !report.errors.length;
+  if (owner && temporary) fs.writeFileSync(path.join(temporary, 'native-report.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' }); process.stdout.write(JSON.stringify({ passed: report.passed, phase: report.phase, errors: report.errors }) + '\n'); app.exit(report.passed ? 0 : 1);
+}
+const deadline = setTimeout(() => { void finish(Error('MARKET_UI_45_SECOND_DEADLINE')); }, 45000);
+async function evaluate(source) { let timer; try { return await Promise.race([window.webContents.executeJavaScript(source, true), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('MARKET_DOM_READ_TIMEOUT')), 3000); })]); } finally { clearTimeout(timer); } }
+async function until(check, label, timeout = 5000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await delay(25); } throw Error('Timed out: ' + label); }
+async function domWait(source, label) { await until(() => evaluate(source), label); }
+async function click(selector, text) { await domWait(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'});return Boolean(e&&!e.disabled)})()`, text || selector); await evaluate(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'});e.click();})()`); }
+async function capture(name, selector) {
+  if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`);
+  await evaluate(`Promise.all([...document.images].filter(i=>i.getClientRects().length).map(i=>i.decode().catch(()=>{}))).then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`); await delay(180);
+  const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); const filename = `${String(report.screenshots.length + 1).padStart(2, '0')}-${name}.png`; fs.writeFileSync(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) });
+}
+async function layout(width, theme) {
+  window.setContentSize(width, 1000); await delay(160);
+  const result = await evaluate(`(()=>({width:innerWidth,theme:document.documentElement.dataset.appTheme,document:document.documentElement.scrollWidth,body:document.body.scrollWidth,overflow:[...document.querySelectorAll('.bead-market button,.bead-market input,.bead-market textarea,.brand-color-picker button')].filter(e=>e.getClientRects().length).map(e=>({text:(e.getAttribute('aria-label')||e.textContent||'').trim().slice(0,60),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})).filter(x=>x.left < -1 || x.right > innerWidth+1).slice(0,10)}))()`);
+  result.passed = result.width === width && result.theme === theme && result.document <= width + 1 && result.body <= width + 1 && !result.overflow.length; report.layouts.push(result); assert(result.passed, 'Actual viewport/overflow mismatch: ' + JSON.stringify(result));
+}
+async function step(name, operation) { report.phase = name; const began = Date.now(); await operation(); report.steps.push({ name, durationMs: Date.now() - began }); }
+async function initializeNative() {
+  const workspaceStorage = require('../electron/workspace-storage.cjs').createWorkspaceStorage({ directory: path.join(temporary, 'native') }), workspace = path.join(temporary, 'workspace'); await fsp.mkdir(workspace);
+  artifacts = require('../electron/artifact-store.cjs').createArtifactStore({ directory: path.join(temporary, 'artifacts'), workspaceStorage }); workspaceStorage.setArtifactMigrator((id, destination, options) => artifacts.migrateProject(id, destination, options));
+  await workspaceStorage.bindRoot({ workspaceId: 'market-ui-workspace', name: '合成采购验收', directory: workspace, projects: [] }); await workspaceStorage.ensureProject({ projectId: 'market-ui-project', workspaceId: 'market-ui-workspace', name: '合成采购验收' });
+  beadStore = require('../electron/bead-store.cjs').createBeadStore({ workspaceStorage }); const bead = require('../electron/bead-pattern.runtime.cjs'), palette = { id: 'market-ui-palette', name: '合成MARD二色参考', brand: 'MARD', version: 'test-v1', sourceUrl: 'https://example.invalid/synthetic', sourceNote: 'Synthetic CI fixture, not a vendor color card', license: 'MIT synthetic fixture', colors: [{ code: 'H1', name: '黑色', hex: '#111111', rgb: [17, 17, 17], kind: 'solid', automatic: true }, { code: 'H2', name: '白色', hex: '#ffffff', rgb: [255, 255, 255], kind: 'solid', automatic: true }] };
+  nativeDocument = await beadStore.save({ projectId: 'market-ui-project', expectedRevision: 0, document: { type: 'xuzuo-bead-document', version: 1, id: 'market-ui-document', projectId: 'market-ui-project', revision: 0, title: '合成采购图纸', settings: { ...bead.DEFAULT_BEAD_SETTINGS, rows: 8, columns: 8 }, pattern: { type: 'xuzuo-bead-pattern', version: 1, rows: 8, columns: 8, palette, cells: [...Array(32).fill(1), ...Array(32).fill(2)] }, procurement: { copies: 40, lossPercent: 0, defaultPackSize: 1000, stock: { H1: 80, H2: 280 }, packSizes: {} }, updatedAt: new Date().toISOString() } });
+  const csv = '\uFEFF平台,商品链接,店铺ID,店铺名称,品牌,珠径,色号,每包粒数,每包价格,运费\n' + 'taobao,https://item.taobao.com/item.htm?id=12345678901,shop-a,合成同店A,MARD,2.6,H1,1000,2.00,5.00\n' + 'taobao,https://item.taobao.com/item.htm?id=12345678902,shop-a,合成同店A,MARD,2.6,H2,1000,3.00,5.00\n' + 'pdd,https://mobile.yangkeduo.com/goods.html?goods_id=12345678903,shop-b,合成店B,MARD,2.6,H2,1000,1.00,\n'; const csvPath = path.join(temporary, '合成材料报价.csv'); await fsp.writeFile(csvPath, csv, { flag: 'wx' });
+  const noAI = { extract: async () => { report.providerCalls++; throw Error('CI must not invoke a provider'); }, cancel: async () => {}, isProjectBusy: () => false, drain: async () => {}, prepareClose: async () => {}, shutdown: async () => {} };
+  market = require('../electron/bead-market.cjs').createBeadMarket({ workspaceStorage, artifactStore: artifacts, readDocument: projectId => beadStore.read({ projectId }), ai: noAI, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [csvPath] }) }, fetchImpl: async url => { const platform = require('../electron/bead-market-sources-url.cjs').platformForUrl(url), links = { '1688': 'https://detail.1688.com/offer/123456789.html', taobao: 'https://item.taobao.com/item.htm?id=123456789', pdd: 'https://mobile.yangkeduo.com/goods.html?goods_id=123456789' }, data = { '@type': 'Product', name: '明确合成页面商品，不是真实报价', url: links[platform], brand: { name: 'MARD' }, additionalProperty: [{ name: '色号', value: 'H1' }, { name: '珠径', value: '2.6mm' }, { name: '每包', value: '1000粒' }], offers: { '@type': 'Offer', priceCurrency: 'CNY', price: '1.90' } }; return new Response(`<script type="application/ld+json">${JSON.stringify(data)}</script>`, { headers: { 'content-type': 'text/html;charset=utf-8' } }); }, onChanged: value => { if (window && !window.isDestroyed()) window.webContents.send('bead-market:changed', value); } });
+  const trusted = event => window && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === pathToFileURL(path.join(owner.dist, 'bead-market-ui.html')).href;
+  function handle(name, action) { channels.push(name); ipcMain.handle(name, (event, input) => { assert(trusted(event), 'Untrusted fixture sender'); return action(input); }); }
+  for (const method of ['read', 'save', 'query', 'cancel', 'openSource', 'captureSource', 'importLinks', 'importFile', 'extractImage', 'commitImport', 'export']) handle('runtime:bead-market-' + method, input => market[method](input));
+  handle('runtime:bead-read', input => beadStore.read(input));
+  handle('runtime:save-artifact', async id => { const file = await artifacts.read(id); assert.equal(file.projectId, 'market-ui-project'); report.savedArtifactId = id; return { saved: false }; });
+}
+async function scenario() {
+  await step('choose-diameter-and-query-three-sources', async () => {
+    await domWait(`Boolean(document.querySelector('[aria-label="拼豆采购珠径"]'))`, 'procurement controls'); await layout(1440, 'light');
+    await click('[aria-label="拼豆采购珠径"]'); await click('[role="option"]', '2.6'); await domWait(`!([...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='开始比价')?.disabled)`, 'diameter before query'); await click('button', '开始比价');
+    await until(async () => (await market.read({ projectId: 'market-ui-project' })).state.lastQuery?.status === 'complete', 'three synthetic sources done'); const value = await market.read({ projectId: 'market-ui-project' }); assert.equal(value.state.offers.length, 3); assert(value.state.offers.every(offer => offer.verification === 'candidate')); assert(value.prices.every(price => !price.eligible)); report.initialCandidates = 3; await domWait(`document.querySelector('.bm-source-cards')?.textContent.includes('已读取')`, 'query status visible'); await capture('sources-light-1440', '.bm-source-cards');
+  });
+  await step('real-csv-preview-review-and-save', async () => {
+    await click('button', '补充报价'); await click('button', '导入报价表'); await domWait(`document.querySelector('[aria-label="检查导入的材料报价"]')`, 'actual CSV preview');
+    await evaluate(`(()=>{const label=[...document.querySelectorAll('.bm-import-dialog label')].find(e=>e.textContent.includes('我已对照来源核对所选报价'));if(!label)throw Error('review checkbox missing');label.querySelector('input').click()})()`); await click('.bm-import-dialog button', '保存已核对报价');
+    await until(async () => (await market.read({ projectId: 'market-ui-project' })).state.offers.filter(offer => offer.verification === 'reviewed').length === 3, 'confirmed CSV persisted');
+    await domWait(`!document.querySelector('.bm-import-dialog')`, 'preview closed'); await click('button', '采用材料低价组合');
+    await until(async () => { const value = await market.read({ projectId: 'market-ui-project' }); return value.cart?.materialCents === 500; }, 'material low quote applied'); const partial = await market.read({ projectId: 'market-ui-project' }); assert.equal(partial.cart.totalCents, undefined); assert.equal(partial.cart.complete, false); report.unknownShippingNotZero = true;
+    await click('button', '优先少分店采购'); await until(async () => (await market.read({ projectId: 'market-ui-project' })).cart?.totalCents === 1200, 'known same-store cart'); const complete = await market.read({ projectId: 'market-ui-project' }); assert.equal(complete.cart.stores.length, 1); assert.equal(complete.cart.shippingCents, 500); assert.equal(complete.cart.materialCents, 700); report.sameStoreShippingOnce = true; report.cartTotalCents = 1200; await capture('cart-light-1440', '.bm-source-cards');
+  });
+  await step('real-excel-hyperlinks-and-color-picker', async () => {
+    await click('button', '导出采购Excel'); await until(() => Boolean(report.savedArtifactId), 'actual XLSX export'); const file = await artifacts.read(report.savedArtifactId), Zip = require('jszip'), zip = await Zip.loadAsync(file.buffer, { checkCRC32: true }); assert(zip.file('xl/workbook.xml')); const relationships = Object.keys(zip.files).filter(name => /^xl\/worksheets\/_rels\/.*\.rels$/.test(name)); let linked = 0; for (const name of relationships) { const xml = await zip.file(name).async('string'); linked += (xml.match(/relationships\/hyperlink/g) || []).length; } assert(linked >= 2); report.xlsx = { bytes: file.buffer.length, sha256: sha(file.buffer), hyperlinks: linked }; fs.writeFileSync(path.join(owner.output, 'procurement.xlsx'), file.buffer, { flag: 'wx' });
+    await click('[aria-label="使用森野绿意色系"]'); await domWait(`document.querySelector('[aria-label="已选品牌颜色"]')?.children.length===3`, 'visible multi-color selection'); assert.equal(await evaluate(`JSON.parse(JSON.stringify(localStorage.getItem('market-ui-color'))).includes('#28634c')`), true); await capture('brand-colors-light-1440', '.market-fixture-brand');
+  });
+  await step('dark-and-narrow-layout', async () => { await click('button', '切到黑夜'); await layout(960, 'dark'); await capture('market-dark-960', '.bead-market'); await layout(1440, 'dark'); });
+  const final = await market.read({ projectId: 'market-ui-project' }); report.nativeState = { offers: final.state.offers.length, reviewed: final.state.offers.filter(offer => offer.verification === 'reviewed').length, selected: final.state.selections, totalCents: final.cart.totalCents }; assert.deepEqual(await beadStore.read({ projectId: 'market-ui-project' }), nativeDocument); report.originalBeadUnchanged = true;
+}
+async function run() {
+  await app.whenReady(); await initializeNative();
+  window = new BrowserWindow({ show: false, frame: false, width: 1440, height: 1000, useContentSize: true, webPreferences: { preload: path.join(root, 'electron/preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } }); report.windows.created++;
+  window.on('show', () => { report.windows.shown++; void finish(Error('QA window must remain hidden')); }); const contents = window.webContents; contents.setWindowOpenHandler(() => ({ action: 'deny' })); contents.on('will-navigate', event => event.preventDefault()); contents.on('will-redirect', event => event.preventDefault()); contents.on('render-process-gone', () => { void finish(Error('MARKET_UI_RENDER_PROCESS_GONE')); });
+  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false)); contents.session.setPermissionCheckHandler(() => false);
+  contents.session.webRequest.onBeforeRequest((details, callback) => { const local = details.url.startsWith(pathToFileURL(owner.dist + path.sep).href); const permit = local || details.url.startsWith('data:image/'); if (!permit) report.externalRequests++; callback({ cancel: !permit }); });
+  await contents.loadFile(path.join(owner.dist, 'bead-market-ui.html')); report.rendererProcessIds.push(contents.getOSProcessId()); await domWait(`Boolean(document.querySelector('.bead-market'))`, 'production React market panel'); window.setContentSize(1440, 1000); await delay(160); await scenario(); if (report.providerCalls || report.externalRequests) throw Error('Probe attempted external provider/network access'); await finish();
+}
+process.on('uncaughtException', error => { void finish(error); }); process.on('unhandledRejection', error => { void finish(error); }); try { prepare(); run().catch(error => { void finish(error); }); } catch (error) { void finish(error); }

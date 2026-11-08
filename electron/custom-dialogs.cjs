@@ -185,6 +185,7 @@ function createCustomDialogs({ app, BrowserWindow, ipcMain, getWindow, trustedSe
       window.webContents.on('render-process-gone', () => this.cancelPickers());
       window.on('closed', () => this.cancelPickers());
     },
+    getAppearance() { return { ...appearance }; },
     stats() { return { active: records.size, pickers: [...records.values()].filter(record => record.kind !== 'message').length, fallbackCount }; },
     dispose() { disposed = true; for (const record of [...records.values()]) finish(record, canceled(record)); locations.cancelPending?.(); for (const channel of channels) ipcMain.removeHandler(channel); },
   };

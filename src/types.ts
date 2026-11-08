@@ -166,6 +166,7 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  beadMarket?: import('./bead-market-types').BeadMarketBridge;
   business?: import('./business-types').BusinessBridge;
   commerceImages?: import('./commerce-image-types').CommerceImagesBridge;
   beads?: import('./bead-types').BeadBridge;

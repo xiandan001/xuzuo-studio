@@ -1,0 +1,54 @@
+import type { BeadMaterialSpec, BeadMarketOffer, BeadMarketPlatform, BeadMarketState } from '../bead-market-types';
+
+export const BEAD_MARKET_STATE_BYTES = 8 * 1024 * 1024;
+export const beadMarketId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown, limit: number, empty = true): value is string => typeof value === 'string' && value.length <= limit && (empty || !!value.trim()) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+const integer = (value: unknown, min = 0, max = 1000000000): value is number => Number.isSafeInteger(value) && Number(value) >= min && Number(value) <= max;
+const instant = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value)) && /T/.test(value);
+export const beadMarketNormalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/[®™]/g, '').replace(/\s+/g, ' ');
+export function beadMarketDiameter(value: string): string { const plain = value.normalize('NFKC').trim().replace(/\s*(?:mm|毫米)$/i, ''); return /^\d{1,2}(?:\.\d{1,3})?$/.test(plain) && Number(plain) > 0 && Number(plain) <= 20 ? String(Number(plain)) : ''; }
+export function beadMarketPlatformUrl(input: string, productOnly = true): { platform: BeadMarketPlatform; url: string } | undefined {
+  try {
+    const url = new URL(input); if (url.protocol !== 'https:' || url.username || url.password || url.port || input.length > 3000) return;
+    const host = url.hostname.toLowerCase(), platform = host === '1688.com' || host.endsWith('.1688.com') ? '1688' : host === 'taobao.com' || host.endsWith('.taobao.com') || host === 'tmall.com' || host.endsWith('.tmall.com') ? 'taobao' : host === 'yangkeduo.com' || host.endsWith('.yangkeduo.com') || host === 'pinduoduo.com' || host.endsWith('.pinduoduo.com') ? 'pdd' : undefined;
+    if (!platform) return;
+    const product = platform === '1688' ? host === 'detail.1688.com' && /^\/offer\/\d+\.html?$/.test(url.pathname) : platform === 'taobao' ? ['item.taobao.com', 'detail.tmall.com', 'h5.m.taobao.com', 'item.m.taobao.com', 'detail.m.tmall.com'].includes(host) && /\/(?:item|detail)\.htm[l]?$/.test(url.pathname) && /^\d+$/.test(url.searchParams.get('id') || '') : ['mobile.yangkeduo.com', 'mobile.pinduoduo.com'].includes(host) && /^\/(?:goods|goods1|goods2)\.html?$/.test(url.pathname) && /^\d+$/.test(url.searchParams.get('goods_id') || '');
+    if (productOnly && !product) return;
+    url.hash = '';
+    if (product) { const kept = new URLSearchParams(); for (const name of ['id', 'goods_id', 'skuId', 'sku_id']) { const value = url.searchParams.get(name); if (value !== null) kept.set(name, value); } url.search = kept.toString(); }
+    return { platform, url: url.href };
+  } catch { return; }
+}
+export function checkedBeadMaterialSpec(input: unknown): BeadMaterialSpec {
+  if (!object(input) || !text(input.brand, 120) || !text(input.series, 120) || !text(input.diameterMm, 30) || input.diameterMm && !beadMarketDiameter(input.diameterMm) || !text(input.paletteId, 160) || !text(input.paletteVersion, 160) || typeof input.allowCompatible !== 'boolean') throw Error('请核对品牌、系列、珠径和当前色卡。');
+  return { brand: input.brand.trim(), series: input.series.trim(), diameterMm: input.diameterMm ? beadMarketDiameter(input.diameterMm) : '', paletteId: input.paletteId, paletteVersion: input.paletteVersion, allowCompatible: input.allowCompatible };
+}
+export function checkedBeadMarketOffer(input: unknown): BeadMarketOffer {
+  if (!object(input) || !beadMarketId(input.id) || !['1688', 'taobao', 'pdd'].includes(String(input.platform)) || !text(input.url, 3000) || !text(input.title, 500) || !text(input.sellerId, 240) || !text(input.sellerName, 240) || !text(input.brand, 120) || !text(input.series, 120) || !text(input.diameterMm, 30) || input.diameterMm && !beadMarketDiameter(input.diameterMm) || !text(input.code, 40) || input.code && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(input.code) || !['solid', 'transparent', 'special'].includes(String(input.beadKind))) throw Error('报价商品或规格字段无效。');
+  if (input.compatibleWith !== undefined && !text(input.compatibleWith, 120)) throw Error('兼容色卡品牌无效。');
+  const link = input.url ? beadMarketPlatformUrl(input.url) : undefined;
+  if (input.url && (!link || link.platform !== input.platform)) throw Error('请使用对应平台的真实商品详情链接，搜索页不是商品链接。');
+  for (const field of ['packCount', 'priceCents'] as const) if (input[field] !== undefined && !integer(input[field], 1)) throw Error('每包粒数和商品金额需为正整数，金额以分保存。');
+  for (const field of ['shippingCents', 'freeShippingAboveCents'] as const) if (input[field] !== undefined && !integer(input[field])) throw Error('运费和满免门槛需为非负整数分，未知时留空。');
+  if (!integer(input.minPacks, 1, 1000000) || !Array.isArray(input.tiers) || input.tiers.length > 30 || input.tiers.some(tier => !object(tier) || !integer(tier.minPacks, 1, 1000000) || !integer(tier.priceCents, 1)) || new Set(input.tiers.map(tier => tier.minPacks)).size !== input.tiers.length) throw Error('请核对起订包数与阶梯价。');
+  if (input.packWeightGrams !== undefined && (!text(input.packWeightGrams, 30) || !/^\d+(?:\.\d{1,3})?$/.test(input.packWeightGrams) || Number(input.packWeightGrams) <= 0)) throw Error('按重量包装请填写正数克数，不自动推算粒数。');
+  if (!['regular', 'conditional', 'range', 'unknown'].includes(String(input.priceKind)) || !Array.isArray(input.conditions) || input.conditions.length > 20 || input.conditions.some(value => !text(value, 500, false)) || typeof input.conditionsAccepted !== 'boolean' || !['candidate', 'reviewed', 'page', 'api'].includes(String(input.verification)) || input.reviewedAt !== undefined && !instant(input.reviewedAt)) throw Error('报价条件或核对状态无效。');
+  const evidence = input.evidence;
+  if (!object(evidence) || !['page', 'link', 'image', 'table', 'manual'].includes(String(evidence.kind)) || !instant(evidence.capturedAt) || evidence.expiresAt !== undefined && !instant(evidence.expiresAt) || evidence.artifactId !== undefined && !beadMarketId(evidence.artifactId) || evidence.sha256 !== undefined && (typeof evidence.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.sha256)) || evidence.text !== undefined && !text(evidence.text, 20000) || evidence.url !== undefined && (!text(evidence.url, 3000) || !beadMarketPlatformUrl(evidence.url, false))) throw Error('报价证据与采集时间无效。');
+  return { id: input.id, platform: input.platform as BeadMarketPlatform, url: link?.url || '', title: input.title.trim(), sellerId: input.sellerId.trim(), sellerName: input.sellerName.trim(), brand: input.brand.trim(), ...(input.compatibleWith ? { compatibleWith: input.compatibleWith } : {}), series: input.series.trim(), diameterMm: input.diameterMm ? beadMarketDiameter(input.diameterMm) : '', code: input.code.toUpperCase(), beadKind: input.beadKind as BeadMarketOffer['beadKind'], ...(input.packCount !== undefined ? { packCount: input.packCount as number } : {}), ...(input.packWeightGrams ? { packWeightGrams: input.packWeightGrams } : {}), ...(input.priceCents !== undefined ? { priceCents: input.priceCents as number } : {}), minPacks: input.minPacks, tiers: input.tiers.map(row => ({ minPacks: row.minPacks, priceCents: row.priceCents })).sort((a, b) => a.minPacks - b.minPacks), ...(input.shippingCents !== undefined ? { shippingCents: input.shippingCents as number } : {}), ...(input.freeShippingAboveCents !== undefined ? { freeShippingAboveCents: input.freeShippingAboveCents as number } : {}), priceKind: input.priceKind as BeadMarketOffer['priceKind'], conditions: [...input.conditions] as string[], conditionsAccepted: input.conditionsAccepted, verification: input.verification as BeadMarketOffer['verification'], ...(input.reviewedAt ? { reviewedAt: input.reviewedAt } : {}), evidence: { kind: evidence.kind as BeadMarketOffer['evidence']['kind'], capturedAt: evidence.capturedAt, ...(evidence.url ? { url: beadMarketPlatformUrl(evidence.url as string, false)!.url } : {}), ...(evidence.artifactId ? { artifactId: evidence.artifactId as string } : {}), ...(evidence.sha256 ? { sha256: evidence.sha256 as string } : {}), ...(evidence.text ? { text: evidence.text as string } : {}), ...(evidence.expiresAt ? { expiresAt: evidence.expiresAt as string } : {}) } };
+}
+export function checkedBeadMarketState(input: unknown, projectId?: string): BeadMarketState {
+  if (!object(input) || input.version !== 1 || !beadMarketId(input.projectId) || projectId && input.projectId !== projectId || !integer(input.revision, 0) || !Array.isArray(input.offers) || input.offers.length > 1500 || !object(input.selections)) throw Error('材料报价资料无效或不属于当前项目。');
+  const offers = input.offers.map(checkedBeadMarketOffer), known = new Set(offers.map(row => row.id)); if (known.size !== offers.length) throw Error('报价编号重复。');
+  const selections = Object.entries(input.selections); if (selections.length > 512 || selections.some(([code, id]) => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(code) || typeof id !== 'string' || !known.has(id))) throw Error('采购选择关联了无效色号或已移除报价。');
+  const next: BeadMarketState = { version: 1, projectId: input.projectId, revision: input.revision, spec: checkedBeadMaterialSpec(input.spec), offers, selections: Object.fromEntries(selections) as Record<string, string> };
+  if (input.lastQuery !== undefined) {
+    const query = input.lastQuery;
+    if (!object(query) || !beadMarketId(query.id) || !text(query.fingerprint, 128000) || !['idle', 'querying', 'complete', 'needs-login', 'restricted', 'failed', 'cancelled'].includes(String(query.status)) || !instant(query.startedAt) || query.finishedAt !== undefined && !instant(query.finishedAt) || !Array.isArray(query.platforms) || query.platforms.length > 3 || query.platforms.some(p => !['1688', 'taobao', 'pdd'].includes(p)) || !Array.isArray(query.codes) || query.codes.length > 512 || query.codes.some(code => !text(code, 40, false)) || !object(query.sources)) throw Error('材料查询状态无效。');
+    for (const [platform, source] of Object.entries(query.sources)) if (!['1688', 'taobao', 'pdd'].includes(platform) || !object(source) || !['idle', 'querying', 'complete', 'needs-login', 'restricted', 'failed', 'cancelled'].includes(String(source.status)) || !text(source.message, 2000) || !instant(source.updatedAt) || !integer(source.count, 0, 1500) || source.searchUrl !== undefined && (!text(source.searchUrl, 3000) || beadMarketPlatformUrl(source.searchUrl, false)?.platform !== platform)) throw Error('平台来源状态无效。');
+    next.lastQuery = structuredClone(query) as unknown as BeadMarketState['lastQuery'];
+  }
+  if (new TextEncoder().encode(JSON.stringify(next)).length > BEAD_MARKET_STATE_BYTES) throw Error('材料报价资料超过8MB，请清理过期候选后再保存。');
+  return next;
+}

@@ -10,6 +10,7 @@ import { Select } from '../Select';
 import { RememberedDetails } from '../RememberedDetails';
 import { BusinessFormStatus } from './BusinessFormStatus';
 import { BusinessImagePreview } from './BusinessImagePreview';
+import { BrandColorPicker } from './BrandColorPicker';
 
 export type BusinessCommit = (change: (state: BusinessState) => BusinessState) => Promise<BusinessState | undefined>;
 const emptyBrand = (): BusinessBrand => ({ id: crypto.randomUUID(), name: '', contact: '', colors: ['#2463eb'], font: 'Microsoft YaHei', voice: '清楚、自然、可信', forbiddenClaims: ['不编造功效、认证、销量和商品参数'], approvedSampleIds: [], updatedAt: new Date().toISOString() });
@@ -59,7 +60,7 @@ function BrandForm({ initial, projectId, props, files, samples, guard, onSave }:
   return <div className="bs-form-grid">
     <label>客户／品牌名称<input className="field" aria-label="品牌名称" maxLength={120} value={value.name} onChange={event => update('name', event.target.value)} placeholder="例如：山野咖啡" /></label>
     <label>联系方式 <small>可选，不自动传给模型</small><input className="field" aria-label="客户联系方式" maxLength={300} value={value.contact} onChange={event => update('contact', event.target.value)} /></label>
-    <label>标准色 <small>多个色值用逗号分隔</small><input className="field" aria-label="品牌标准色" maxLength={150} value={value.colorText} onChange={event => update('colorText', event.target.value)} placeholder="#2463eb, #ffffff" /></label>
+    <BrandColorPicker value={value.colorText} onChange={text => update('colorText', text)} rememberKey={`business-brand:${initial.id}:color-codes`} brandName={value.name} />
     <label>字体<Select aria-label="品牌字体" value={value.font} onValueChange={font => update('font', font)} options={['Microsoft YaHei', 'SimSun', 'Arial', 'sans-serif'].map(font => ({ value: font, label: font }))} /></label>
     <label className="bs-full">表达风格<textarea className="field" aria-label="品牌表达风格" rows={2} maxLength={2000} value={value.voice} onChange={event => update('voice', event.target.value)} placeholder="例如：自然、温暖；卖点清楚，不使用夸张词" /></label>
     <label className="bs-full">不能改、不能说的内容<textarea className="field" aria-label="品牌禁用表达" rows={3} maxLength={4000} value={value.forbiddenText} onChange={event => update('forbiddenText', event.target.value)} /></label>

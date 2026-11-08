@@ -9,6 +9,8 @@ const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset
 const { purgedProjectAudit } = require('./backup-project-audits.cjs');
 const { isBusinessPath, isBusinessStatePath, validateBusinessBackup, businessForSelection, businessAfterRestore, remapBusinessAssistMarkers } = require('./business-backup.cjs');
 const { isCommerceImagePath, isCommerceOpaquePath, validateCommerceImageBackup, remapCommerceImage, renamedCommercePath } = require('./commerce-image-backup.cjs');
+const { isBeadMarketPath, validateBeadMarketBackup, remapBeadMarketBackup } = require('./bead-market-backup.cjs');
+const { isMarketAnalysisPath, checkedMarketAnalysis, remapMarketAnalysis } = require('./bead-market-ai-journal.cjs');
 const APP_VERSION = require('../package.json').version;
 const controlledPath = relative => {
   const parts = relative.split('/'), basename = parts.at(-1);
@@ -53,10 +55,16 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       artifact.sha256 ||= hash(bytes);
     }
     const commerceLinks = [], commerceSnapshots = new Map();
+    const materialOwners = new Map(manifest.locations.projects.map(project => { const workspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId); return [`workspaces/${workspace.workspaceId}/${path.relative(workspace.directory, project.directory).split(path.sep).join('/')}/.xuzuo/`, project.projectId]; }));
     for (const [relative, bytes] of files) {
       if (!relative.endsWith('.json')) continue;
       const parts = relative.split('/'), basename = parts.at(-1);
       if (isBusinessPath(relative)) validateBusinessBackup(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), relative);
+      if (isBeadMarketPath(relative) || isMarketAnalysisPath(relative)) {
+        const prefix = relative.slice(0, relative.lastIndexOf('/.xuzuo/') + '/.xuzuo/'.length), owner = materialOwners.get(prefix); if (!owner) throw Error('材料报价备份的位置没有对应项目，未恢复。');
+        const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        if (isBeadMarketPath(relative)) validateBeadMarketBackup(value, relative, owner); else checkedMarketAnalysis(value, owner);
+      }
       if (isCommerceImagePath(relative) && !isCommerceOpaquePath(relative)) {
         const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); validateCommerceImageBackup(value, relative);
         if (/\/exports\//.test(relative)) commerceLinks.push(value);
@@ -255,7 +263,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
         let value;
         try {
           const raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(original));
-          value = isCommerceImagePath(relative) || frozenSnapshot ? remapCommerceImage(raw, idMap, relative) : relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames);
+          value = isCommerceImagePath(relative) || frozenSnapshot ? remapCommerceImage(raw, idMap, relative) : isBeadMarketPath(relative) ? remapBeadMarketBackup(raw, idMap, relative) : isMarketAnalysisPath(relative) ? remapMarketAnalysis(raw, idMap) : relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames);
           if (isBusinessStatePath(relative)) value = businessAfterRestore(value, remap(manifest.records, idMap, pathMap, renamedNames).map(record => record.run));
           if (isCommerceImagePath(relative)) {
             const renamed = renamedCommercePath(relative, idMap, value).split('/');

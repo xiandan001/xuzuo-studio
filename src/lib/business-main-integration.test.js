@@ -17,6 +17,7 @@ function wiredRuntime() {
   const assist = generic('business-assist'); assist.isProjectBusy = () => false; assist.recover = pending; assist.assist = vi.fn(async () => ({ text: 'reply' }));
   const listing = generic('business-listing'); listing.export = vi.fn(async () => ({ artifacts: [] }));
   const commerce = generic('commerce-images'); commerce.save = vi.fn(async () => 'saved');
+  const marketBusy = new Set(), market = generic('bead-market'); market.isProjectBusy = id => marketBusy.has(id); market.isWorkspaceBusy = id => id === 'workspace' && marketBusy.size > 0; market.read = vi.fn(async input => ({ state: { projectId: input.projectId } })); market.save = vi.fn(async input => input); market.query = vi.fn(async () => ({ jobId: 'query' })); market.cancel = vi.fn(pending);
   const automation = generic('automation-center'); automation.getPlanningContext = vi.fn(async () => ({ project: { id: 'project', workspaceId: 'workspace', kind: 'image' }, models: ['model-meta'], connections: ['connection-meta'] })); automation.reserveProject = vi.fn(async () => pending);
   const batches = generic('batch-production'); batches.list = async () => [];
   const backup = generic('project-backup'); backup.exportBackup = vi.fn(async () => ({ files: 1 }));
@@ -34,9 +35,17 @@ function wiredRuntime() {
   vm.runInContext(fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8') + '\n;globalThis.testRuntime={registerRuntime,setClosing:value=>{runtimeClosing=value;},drain:()=>drainRuntime(),writeFailed:()=>closingWriteFailed};', context);
   context.testRuntime.registerRuntime({ list: async () => ['key-meta'] });
   const invoke = (name, input) => Promise.resolve().then(() => handlers.get('runtime:' + name)({}, input));
-  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog };
+  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy };
 }
 describe('真实main注册的业务IPC与生命周期接线（无Electron进程）', () => {
+  it('拼豆比价IPC使用原项目写保护和Key元数据，退出时保存取消可用且不能新查询', async () => {
+    const f = wiredRuntime(); await expect(f.invoke('bead-market-query', { projectId: 'project' })).resolves.toEqual({ jobId: 'query' }); expect(f.storage.assertNotPurged).toHaveBeenCalledWith('project'); expect(f.market.query).toHaveBeenCalledOnce();
+    expect(await f.captures['bead-market'].getContext({ workspaceId: 'workspace', projectId: 'project' })).toMatchObject({ credentials: ['key-meta'], project: { id: 'project' } });
+    f.context.testRuntime.setClosing(true); await expect(f.invoke('bead-market-read', { projectId: 'project' })).resolves.toEqual({ state: { projectId: 'project' } }); await expect(f.invoke('bead-market-save', { projectId: 'project' })).resolves.toBeTruthy(); await expect(f.invoke('bead-market-cancel', { projectId: 'project' })).resolves.toBeUndefined(); await expect(f.invoke('bead-market-query', { projectId: 'project' })).rejects.toThrow('退出');
+  });
+  it('平台窗口/报价后台任务参与项目目录互斥，原生退出先终止比价再关模型引擎', async () => {
+    const f = wiredRuntime(); f.marketBusy.add('project'); await expect(f.captures['project-purge'].withExclusive('project', async () => 'unsafe')).rejects.toThrow(); await expect(f.invoke('workspace-reconnect', { workspaceId: 'workspace' })).rejects.toThrow(); f.marketBusy.clear(); await f.context.testRuntime.drain(); expect(f.events.indexOf('bead-market:prepareClose')).toBeLessThan(f.events.indexOf('live-workflow-engine:shutdown'));
+  });
   it('模型上下文提供project/models/connections和Key元数据，准入接受项目ID并校验归属', async () => {
     const f = wiredRuntime(), options = f.captures['business-assist']; expect(await options.getContext({ workspaceId: 'workspace', projectId: 'project' })).toMatchObject({ project: { id: 'project' }, models: ['model-meta'], connections: ['connection-meta'], credentials: ['key-meta'] }); await options.assertAdmission('project'); expect(f.storage.assertNotPurged).toHaveBeenCalledWith('project');
   });

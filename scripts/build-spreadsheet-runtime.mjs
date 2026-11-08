@@ -32,3 +32,4 @@ fs.writeFileSync(path.join(root, 'electron/natural-automation-plan.runtime.cjs')
 await import('./build-bead-runtime.mjs');
 await import('./build-business-runtime.mjs');
 await import('./build-business-production-runtime.mjs');
+await import('./build-bead-market-runtime.mjs');

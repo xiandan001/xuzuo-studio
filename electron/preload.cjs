@@ -16,6 +16,10 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 });
 
 contextBridge.exposeInMainWorld('desktop', {
+  beadMarket: {
+    ...Object.fromEntries(['read', 'save', 'query', 'cancel', 'openSource', 'captureSource', 'importLinks', 'importFile', 'extractImage', 'commitImport', 'export'].map(method => [method, input => ipcRenderer.invoke(`runtime:bead-market-${method}`, input)])),
+    onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('bead-market:changed', handler); return () => ipcRenderer.removeListener('bead-market:changed', handler); },
+  },
   business: {
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('business:changed', handler); return () => ipcRenderer.removeListener('business:changed', handler); },
     ...Object.fromEntries(Object.entries({ snapshot: 'snapshot', save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery', prepare: 'prepare', start: 'start', control: 'control', listing: 'listing', deliver: 'deliver', adopt: 'adopt', assist: 'assist' }).map(([method, name]) => [method, input => ipcRenderer.invoke(`runtime:business-${name}`, input)])),
