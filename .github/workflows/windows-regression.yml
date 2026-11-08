@@ -32,6 +32,15 @@ jobs:
           package-manager-cache: false
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare locked Electron runtime
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { exit $LASTEXITCODE }
+            Start-Sleep -Seconds ($attempt * 5)
+          }
+          node -e "const fs=require('fs'),assert=require('assert/strict'),p=require('./node_modules/electron/package.json');assert.equal(fs.readFileSync('node_modules/electron/dist/version','utf8').trim().replace(/^v/,''),p.version);assert.equal(fs.readFileSync('node_modules/electron/dist/electron.exe').subarray(0,2).toString(),'MZ');"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
