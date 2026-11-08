@@ -66,7 +66,7 @@ try {
   report.buildMs = Math.round(performance.now() - buildStart);
   const files = await bundleFiles(dist); assert(Object.keys(files).includes('bead-market-ui.html'));
   const sources = {};
-  for (const relative of ['scripts/verify-bead-market-ui.mjs', 'scripts/verify-bead-market-ui-native.cjs', 'scripts/fixtures/bead-market-ui.tsx', 'scripts/fixtures/bead-market-ui.html', 'src/components/bead-market/BeadMarketPanel.tsx', 'src/components/bead-market/bead-market.css', 'src/components/business/BrandColorPicker.tsx']) sources[relative] = hash(await fs.readFile(path.join(root, relative)));
+  for (const relative of ['scripts/verify-bead-market-ui.mjs', 'scripts/verify-bead-market-ui-native.cjs', 'scripts/fixtures/bead-market-ui.tsx', 'scripts/fixtures/bead-market-ui.html', 'src/components/bead-market/BeadMarketPanel.tsx', 'src/components/bead-market/bead-market.css', 'src/components/business/BrandColorPicker.tsx', 'src/components/bead-market/BeadMarketSessions.tsx', 'src/components/bead-market/bead-market-sessions.css']) sources[relative] = hash(await fs.readFile(path.join(root, relative)));
   const owner = { kind: 'xuzuo-bead-market-ui', nonce, commit: report.commit, parentPid: process.pid, temporaryRoot, dist: await fs.realpath(dist), output: await fs.realpath(output), files, sources };
   await fs.mkdir(path.join(temporary, 'profile'), { recursive: true });
   await fs.writeFile(path.join(temporary, 'owner.json'), JSON.stringify(owner) + '\n', { flag: 'wx' });

@@ -18,6 +18,8 @@ function wiredRuntime() {
   const listing = generic('business-listing'); listing.export = vi.fn(async () => ({ artifacts: [] }));
   const commerce = generic('commerce-images'); commerce.save = vi.fn(async () => 'saved');
   const marketBusy = new Set(), market = generic('bead-market'); market.isProjectBusy = id => marketBusy.has(id); market.isWorkspaceBusy = id => id === 'workspace' && marketBusy.size > 0; market.read = vi.fn(async input => ({ state: { projectId: input.projectId } })); market.save = vi.fn(async input => input); market.query = vi.fn(async () => ({ jobId: 'query' })); market.cancel = vi.fn(pending);
+  const marketSessions = generic('bead-market-sessions'); marketSessions.sessions = vi.fn(async () => [{ platform: 'taobao', status: 'not-opened' }]); marketSessions.login = vi.fn(async () => ({ opened: true })); marketSessions.confirmLogin = vi.fn(async () => [{ platform: 'taobao', status: 'confirmed' }]); marketSessions.markNeedsLogin = vi.fn(pending);
+  const marketSources = generic('bead-market-sources'); marketSources.search = vi.fn(async () => ({ platform: 'taobao', status: 'needs-login', capturedAt: '2026-11-08T00:00:00.000Z', offers: [] }));
   const automation = generic('automation-center'); automation.getPlanningContext = vi.fn(async () => ({ project: { id: 'project', workspaceId: 'workspace', kind: 'image' }, models: ['model-meta'], connections: ['connection-meta'] })); automation.reserveProject = vi.fn(async () => pending);
   const batches = generic('batch-production'); batches.list = async () => [];
   const backup = generic('project-backup'); backup.exportBackup = vi.fn(async () => ({ files: 1 }));
@@ -35,9 +37,14 @@ function wiredRuntime() {
   vm.runInContext(fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8') + '\n;globalThis.testRuntime={registerRuntime,setClosing:value=>{runtimeClosing=value;},drain:()=>drainRuntime(),writeFailed:()=>closingWriteFailed};', context);
   context.testRuntime.registerRuntime({ list: async () => ['key-meta'] });
   const invoke = (name, input) => Promise.resolve().then(() => handlers.get('runtime:' + name)({}, input));
-  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy };
+  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions };
 }
 describe('真实main注册的业务IPC与生命周期接线（无Electron进程）', () => {
+  it('提前登录不依赖项目，查询受限更新登录状态，退出只允许读取而不追加确认', async () => {
+    const f = wiredRuntime(); await expect(f.invoke('bead-market-sessions')).resolves.toEqual([{ platform: 'taobao', status: 'not-opened' }]); await expect(f.invoke('bead-market-login', { platform: 'taobao' })).resolves.toEqual({ opened: true }); expect(f.storage.assertNotPurged).not.toHaveBeenCalled();
+    await f.captures['bead-market'].sources.search({ platform: 'taobao' }); expect(f.marketSessions.markNeedsLogin).toHaveBeenCalledWith('taobao', '2026-11-08T00:00:00.000Z'); await f.captures['bead-market-browser'].onLoginConfirmed({ platform: 'taobao' }); expect(f.marketSessions.confirmLogin).toHaveBeenCalledWith({ platform: 'taobao' });
+    f.context.testRuntime.setClosing(true); await expect(f.invoke('bead-market-sessions')).resolves.toBeTruthy(); await expect(f.invoke('bead-market-confirm-login', { platform: 'taobao' })).rejects.toThrow('退出'); await expect(f.invoke('bead-market-login', { platform: 'taobao' })).rejects.toThrow('退出'); await f.context.testRuntime.drain();
+  });
   it('拼豆比价IPC使用原项目写保护和Key元数据，退出时保存取消可用且不能新查询', async () => {
     const f = wiredRuntime(); await expect(f.invoke('bead-market-query', { projectId: 'project' })).resolves.toEqual({ jobId: 'query' }); expect(f.storage.assertNotPurged).toHaveBeenCalledWith('project'); expect(f.market.query).toHaveBeenCalledOnce();
     expect(await f.captures['bead-market'].getContext({ workspaceId: 'workspace', projectId: 'project' })).toMatchObject({ credentials: ['key-meta'], project: { id: 'project' } });

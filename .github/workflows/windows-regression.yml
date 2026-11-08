@@ -44,7 +44,7 @@ jobs:
       - name: Verify native commerce typography and image capture
         run: node_modules/electron/dist/electron.exe scripts/verify-commerce-native.cjs --output=work/commerce-native-output
       - name: Verify isolated marketplace capture browser
-        run: node_modules/electron/dist/electron.exe scripts/verify-bead-market-browser-native.cjs
+        run: node scripts/verify-bead-market-browser.mjs
       - name: Type check
         run: node node_modules/typescript/bin/tsc -b --pretty false
       - name: Build renderer
@@ -103,6 +103,7 @@ jobs:
             work/business-browser-output/report.json
             work/business-browser-output/*.png
             work/bead-market-browser-native-output/report.json
+            work/bead-market-browser-native-output/parent-report.json
             work/bead-market-browser-native-output/*.png
             work/bead-market-ui-output/report.json
             work/bead-market-ui-output/*.png

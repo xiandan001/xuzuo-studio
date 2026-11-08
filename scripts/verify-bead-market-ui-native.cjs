@@ -8,7 +8,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 
 const root = path.resolve(__dirname, '..'), started = Date.now(), sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const report = { passed: false, phase: 'prepare', commit: process.env.GITHUB_SHA, syntheticMarketplace: true, actualNativeDataAndFiles: true, normalApplicationStarted: false, userProfileAccessed: false, providerCalls: 0, externalRequests: 0, errors: [], windows: { created: 0, shown: 0, remaining: 0 }, rendererProcessIds: [], processIds: [process.pid], screenshots: [], layouts: [], steps: [] };
-let owner, temporary, window, market, beadStore, artifacts, closing = false, nativeDocument;
+let owner, temporary, window, market, beadStore, artifacts, marketSessions, workspaceStorage, closing = false, nativeDocument;
 const channels = [], delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 function ordinary(filename, directory = false) { const info = fs.lstatSync(filename); assert(!info.isSymbolicLink()); assert(directory ? info.isDirectory() : info.isFile()); assert.equal(fs.realpathSync(filename).toLowerCase(), path.resolve(filename).toLowerCase()); return info; }
 function prepare() {
@@ -24,7 +24,7 @@ function prepare() {
 app.on('window-all-closed', () => {});
 async function finish(error) {
   if (closing) return; closing = true; clearTimeout(deadline); if (error) report.errors.push(String(error.stack || error));
-  try { await market?.shutdown(); await Promise.all([beadStore?.drain(), artifacts?.drain()]); } catch (cause) { report.errors.push(String(cause)); }
+  try { await market?.shutdown(); await Promise.all([beadStore?.drain(), artifacts?.drain(), marketSessions?.drain()]); } catch (cause) { report.errors.push(String(cause)); }
   if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)])];
   for (const current of BrowserWindow.getAllWindows()) current.destroy(); for (const channel of channels) ipcMain.removeHandler(channel);
   report.windows.remaining = BrowserWindow.getAllWindows().length; if (report.windows.remaining || report.windows.created !== 1 || report.windows.shown || report.rendererProcessIds.length !== 1) report.errors.push('Expected one hidden renderer and zero residual windows');
@@ -43,12 +43,12 @@ async function capture(name, selector) {
 }
 async function layout(width, theme) {
   window.setContentSize(width, 1000); await delay(160);
-  const result = await evaluate(`(()=>({width:innerWidth,theme:document.documentElement.dataset.appTheme,document:document.documentElement.scrollWidth,body:document.body.scrollWidth,overflow:[...document.querySelectorAll('.bead-market button,.bead-market input,.bead-market textarea,.brand-color-picker button')].filter(e=>e.getClientRects().length).map(e=>({text:(e.getAttribute('aria-label')||e.textContent||'').trim().slice(0,60),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})).filter(x=>x.left < -1 || x.right > innerWidth+1).slice(0,10)}))()`);
+  const result = await evaluate(`(()=>({width:innerWidth,theme:document.documentElement.dataset.appTheme,document:document.documentElement.scrollWidth,body:document.body.scrollWidth,overflow:[...document.querySelectorAll('.bead-market button,.bead-market input,.bead-market textarea,.brand-color-picker button,.bm-sessions button')].filter(e=>e.getClientRects().length).map(e=>({text:(e.getAttribute('aria-label')||e.textContent||'').trim().slice(0,60),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})).filter(x=>x.left < -1 || x.right > innerWidth+1).slice(0,10)}))()`);
   result.passed = result.width === width && result.theme === theme && result.document <= width + 1 && result.body <= width + 1 && !result.overflow.length; report.layouts.push(result); assert(result.passed, 'Actual viewport/overflow mismatch: ' + JSON.stringify(result));
 }
 async function step(name, operation) { report.phase = name; const began = Date.now(); await operation(); report.steps.push({ name, durationMs: Date.now() - began }); }
 async function initializeNative() {
-  const workspaceStorage = require('../electron/workspace-storage.cjs').createWorkspaceStorage({ directory: path.join(temporary, 'native') }), workspace = path.join(temporary, 'workspace'); await fsp.mkdir(workspace);
+  workspaceStorage = require('../electron/workspace-storage.cjs').createWorkspaceStorage({ directory: path.join(temporary, 'native') }); const workspace = path.join(temporary, 'workspace'); await fsp.mkdir(workspace);
   artifacts = require('../electron/artifact-store.cjs').createArtifactStore({ directory: path.join(temporary, 'artifacts'), workspaceStorage }); workspaceStorage.setArtifactMigrator((id, destination, options) => artifacts.migrateProject(id, destination, options));
   await workspaceStorage.bindRoot({ workspaceId: 'market-ui-workspace', name: '合成采购验收', directory: workspace, projects: [] }); await workspaceStorage.ensureProject({ projectId: 'market-ui-project', workspaceId: 'market-ui-workspace', name: '合成采购验收' });
   beadStore = require('../electron/bead-store.cjs').createBeadStore({ workspaceStorage }); const bead = require('../electron/bead-pattern.runtime.cjs'), palette = { id: 'market-ui-palette', name: '合成MARD二色参考', brand: 'MARD', version: 'test-v1', sourceUrl: 'https://example.invalid/synthetic', sourceNote: 'Synthetic CI fixture, not a vendor color card', license: 'MIT synthetic fixture', colors: [{ code: 'H1', name: '黑色', hex: '#111111', rgb: [17, 17, 17], kind: 'solid', automatic: true }, { code: 'H2', name: '白色', hex: '#ffffff', rgb: [255, 255, 255], kind: 'solid', automatic: true }] };
@@ -56,9 +56,11 @@ async function initializeNative() {
   const csv = '\uFEFF平台,商品链接,店铺ID,店铺名称,品牌,珠径,色号,每包粒数,每包价格,运费\n' + 'taobao,https://item.taobao.com/item.htm?id=12345678901,shop-a,合成同店A,MARD,2.6,H1,1000,2.00,5.00\n' + 'taobao,https://item.taobao.com/item.htm?id=12345678902,shop-a,合成同店A,MARD,2.6,H2,1000,3.00,5.00\n' + 'pdd,https://mobile.yangkeduo.com/goods.html?goods_id=12345678903,shop-b,合成店B,MARD,2.6,H2,1000,1.00,\n'; const csvPath = path.join(temporary, '合成材料报价.csv'); await fsp.writeFile(csvPath, csv, { flag: 'wx' });
   const noAI = { extract: async () => { report.providerCalls++; throw Error('CI must not invoke a provider'); }, cancel: async () => {}, isProjectBusy: () => false, drain: async () => {}, prepareClose: async () => {}, shutdown: async () => {} };
   market = require('../electron/bead-market.cjs').createBeadMarket({ workspaceStorage, artifactStore: artifacts, readDocument: projectId => beadStore.read({ projectId }), ai: noAI, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [csvPath] }) }, fetchImpl: async url => { const platform = require('../electron/bead-market-sources-url.cjs').platformForUrl(url), links = { '1688': 'https://detail.1688.com/offer/123456789.html', taobao: 'https://item.taobao.com/item.htm?id=123456789', pdd: 'https://mobile.yangkeduo.com/goods.html?goods_id=123456789' }, data = { '@type': 'Product', name: '明确合成页面商品，不是真实报价', url: links[platform], brand: { name: 'MARD' }, additionalProperty: [{ name: '色号', value: 'H1' }, { name: '珠径', value: '2.6mm' }, { name: '每包', value: '1000粒' }], offers: { '@type': 'Offer', priceCurrency: 'CNY', price: '1.90' } }; return new Response(`<script type="application/ld+json">${JSON.stringify(data)}</script>`, { headers: { 'content-type': 'text/html;charset=utf-8' } }); }, onChanged: value => { if (window && !window.isDestroyed()) window.webContents.send('bead-market:changed', value); } });
+  marketSessions = require('../electron/bead-market-sessions.cjs').createBeadMarketSessions({ directory: path.join(temporary, 'native'), browser: { open: async input => { assert.equal(input.projectId, 'bead-market-platform-login'); assert.equal(input.mode, 'login'); report.platformLoginOpens = (report.platformLoginOpens || 0) + 1; return { opened: true }; } }, onChanged: () => { if (window && !window.isDestroyed()) window.webContents.send('bead-market:sessions-changed'); } });
   const trusted = event => window && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === pathToFileURL(path.join(owner.dist, 'bead-market-ui.html')).href;
   function handle(name, action) { channels.push(name); ipcMain.handle(name, (event, input) => { assert(trusted(event), 'Untrusted fixture sender'); return action(input); }); }
   for (const method of ['read', 'save', 'query', 'cancel', 'openSource', 'captureSource', 'importLinks', 'importFile', 'extractImage', 'commitImport', 'export']) handle('runtime:bead-market-' + method, input => market[method](input));
+  handle('runtime:bead-market-sessions', () => marketSessions.sessions()); handle('runtime:bead-market-login', input => marketSessions.login(input)); handle('runtime:bead-market-confirm-login', input => marketSessions.confirmLogin(input));
   handle('runtime:bead-read', input => beadStore.read(input));
   handle('runtime:save-artifact', async id => { const file = await artifacts.read(id); assert.equal(file.projectId, 'market-ui-project'); report.savedArtifactId = id; return { saved: false }; });
 }
@@ -81,6 +83,17 @@ async function scenario() {
     await click('[aria-label="使用森野绿意色系"]'); await domWait(`document.querySelector('[aria-label="已选品牌颜色"]')?.children.length===3`, 'visible multi-color selection'); assert.equal(await evaluate(`JSON.parse(JSON.stringify(localStorage.getItem('market-ui-color'))).includes('#28634c')`), true); await capture('brand-colors-light-1440', '.market-fixture-brand');
   });
   await step('dark-and-narrow-layout', async () => { await click('button', '切到黑夜'); await layout(960, 'dark'); await capture('market-dark-960', '.bead-market'); await layout(1440, 'dark'); });
+  await step('global-platform-login-without-project-writes', async () => {
+    await click('button', '切到白天'); await layout(960, 'light'); const directory = await workspaceStorage.projectDirectory('market-ui-project');
+    async function tree(base, relative = '', result = {}) { for (const entry of await fsp.readdir(path.join(base, relative), { withFileTypes: true })) { assert(!entry.isSymbolicLink()); const name = path.join(relative, entry.name); if (entry.isDirectory()) await tree(base, name, result); else result[name] = sha(await fsp.readFile(path.join(base, name))); } return result; }
+    const before = await tree(directory); await click('.market-fixture-platforms [aria-label="提前登录淘宝／天猫"]');
+    await until(async () => (await marketSessions.sessions()).find(item => item.platform === 'taobao').status === 'opened', 'native global login opened');
+    await domWait(`document.querySelector('.market-fixture-platforms [aria-label="确认淘宝／天猫已完成网页登录"]')`, 'explicit confirmation button'); await click('.market-fixture-platforms [aria-label="确认淘宝／天猫已完成网页登录"]');
+    await until(async () => (await marketSessions.sessions()).find(item => item.platform === 'taobao').status === 'confirmed', 'native explicit login confirmation');
+    await click('.market-fixture-platforms [aria-label="刷新平台登录记录"]'); await domWait(`document.querySelector('.market-fixture-platforms')?.textContent.includes('上次已确认登录')`, 'global login state refreshed');
+    const fresh = require('../electron/bead-market-sessions.cjs').createBeadMarketSessions({ directory: path.join(temporary, 'native'), browser: { open: async () => { throw Error('Readback cannot open a window'); } } }), stored = (await fresh.sessions()).find(item => item.platform === 'taobao'); assert.equal(stored.status, 'confirmed'); assert(stored.userConfirmedAt); await fresh.drain();
+    assert.deepEqual(await tree(directory), before); assert.equal(report.platformLoginOpens, 1); report.platformSessions = { passed: true, projectWrites: false, platform: 'taobao', status: stored.status, confirmedAt: stored.userConfirmedAt, apiAuthorizationClaimed: false, browserOpenSynthetic: true }; await capture('platform-login-light-960', '.market-fixture-platforms');
+  });
   const final = await market.read({ projectId: 'market-ui-project' }); report.nativeState = { offers: final.state.offers.length, reviewed: final.state.offers.filter(offer => offer.verification === 'reviewed').length, selected: final.state.selections, totalCents: final.cart.totalCents }; assert.deepEqual(await beadStore.read({ projectId: 'market-ui-project' }), nativeDocument); report.originalBeadUnchanged = true;
 }
 async function run() {

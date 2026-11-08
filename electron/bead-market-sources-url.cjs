@@ -1,7 +1,7 @@
 const CONFIG = Object.freeze({
-  '1688': { label: '1688', roots: ['1688.com', 'alibaba.com'], share: ['qr.1688.com'], search: 'https://s.1688.com/selloffer/offer_search.htm', parameter: 'keywords' },
-  taobao: { label: '淘宝／天猫', roots: ['taobao.com', 'tmall.com', 'alibaba.com'], share: ['m.tb.cn', 'e.tb.cn'], search: 'https://s.taobao.com/search', parameter: 'q' },
-  pdd: { label: '拼多多', roots: ['yangkeduo.com', 'pinduoduo.com'], share: ['p.pinduoduo.com'], search: 'https://mobile.yangkeduo.com/search_result.html', parameter: 'search_key' },
+  '1688': { label: '1688', home: 'https://www.1688.com/', roots: ['1688.com', 'alibaba.com'], share: ['qr.1688.com'], search: 'https://s.1688.com/selloffer/offer_search.htm', parameter: 'keywords' },
+  taobao: { label: '淘宝／天猫', home: 'https://www.taobao.com/', roots: ['taobao.com', 'tmall.com', 'alibaba.com'], share: ['m.tb.cn', 'e.tb.cn'], search: 'https://s.taobao.com/search', parameter: 'q' },
+  pdd: { label: '拼多多', home: 'https://mobile.yangkeduo.com/', roots: ['yangkeduo.com', 'pinduoduo.com'], share: ['p.pinduoduo.com'], search: 'https://mobile.yangkeduo.com/search_result.html', parameter: 'search_key' },
 });
 const under = (host, root) => host === root || host.endsWith('.' + root);
 function parsed(value) {

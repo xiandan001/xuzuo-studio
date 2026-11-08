@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 const require = createRequire(import.meta.url), { createBeadMarketBrowser } = require('../../electron/bead-market-browser.cjs');
+const { createBeadMarketSources } = require('../../electron/bead-market-sources.cjs');
 function fixture(options = {}) {
   const windows = [], views = [], handlers = new Map(), captures = [], sessions = [];
   class Contents extends EventEmitter {
@@ -17,9 +18,9 @@ function fixture(options = {}) {
     destroy() { if (this.destroyed) return; this.destroyed = true; this.webContents.close(); this.emit('closed'); }
   }
   class View { constructor(options) { this.options = options; this.webContents = new Contents(); views.push(this); } setBounds(value) { this.bounds = value; } }
-  const onCapture = vi.fn(options.onCapture || (async () => undefined)), onStatus = vi.fn();
-  const service = createBeadMarketBrowser({ BrowserWindow: Window, WebContentsView: View, ipcMain: { handle: (name, handler) => handlers.set(name, handler), removeHandler: name => handlers.delete(name) }, session: { fromPartition: name => { const result = { partition: name, setPermissionRequestHandler: handler => { result.requestHandler = handler; }, setPermissionCheckHandler: handler => { result.checkHandler = handler; } }; sessions.push(result); return result; } }, onCapture, onStatus, captureTimeoutMs: options.timeout || 5000 });
-  return { service, windows, views, handlers, captures, sessions, onCapture, onStatus };
+  const onCapture = vi.fn(options.onCapture || (async () => undefined)), onStatus = vi.fn(), onLoginConfirmed = vi.fn(options.onLoginConfirmed || (async () => undefined));
+  const service = createBeadMarketBrowser({ BrowserWindow: Window, WebContentsView: View, ipcMain: { handle: (name, handler) => handlers.set(name, handler), removeHandler: name => handlers.delete(name) }, session: options.session || { fromPartition: name => { const result = { partition: name, setPermissionRequestHandler: handler => { result.requestHandler = handler; }, setPermissionCheckHandler: handler => { result.checkHandler = handler; } }; sessions.push(result); return result; } }, onCapture, onStatus, onLoginConfirmed, captureTimeoutMs: options.timeout || 5000 });
+  return { service, windows, views, handlers, captures, sessions, onCapture, onStatus, onLoginConfirmed };
 }
 const input = { projectId: 'project-one', platform: 'taobao', url: 'https://item.taobao.com/item.htm?id=123456789' };
 describe('隔离平台采集窗口与真实生命周期约束', () => {
@@ -54,5 +55,28 @@ describe('隔离平台采集窗口与真实生命周期约束', () => {
     vi.useFakeTimers(); const f = fixture();
     try { await f.service.open(input); f.windows[0].visible = false; await vi.advanceTimersByTimeAsync(16000); expect(f.windows[0].destroyed).toBe(false); expect(f.service.isProjectBusy(input.projectId)).toBe(true); }
     finally { await f.service.shutdown(); vi.useRealTimers(); }
+  });
+  it('无项目也能先网页登录，明确确认只回传平台时间，不采商品、不声称API授权', async () => {
+    const f = fixture(); await f.service.open({ platform: 'taobao', mode: 'login' }); const window = f.windows[0], handler = [...f.handlers.values()][0], event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    expect(f.views[0].webContents.getURL()).toBe('https://www.taobao.com/'); expect(f.sessions[0].partition).toBe('persist:bead-market-taobao'); expect(await handler(event, 'state')).toMatchObject({ mode: 'login', title: '淘宝／天猫 · 平台登录' });
+    await expect(f.service.capture({ projectId: 'bead-market-platform-login', platform: 'taobao' })).rejects.toThrow(/登录窗口/); expect(f.onCapture).not.toHaveBeenCalled(); expect(f.onLoginConfirmed).not.toHaveBeenCalled();
+    await handler(event, 'capture'); expect(f.onLoginConfirmed).toHaveBeenCalledTimes(1); const meta = f.onLoginConfirmed.mock.calls[0][0]; expect(Object.keys(meta).sort()).toEqual(['confirmedAt', 'platform']); expect(meta.platform).toBe('taobao'); expect(Date.parse(meta.confirmedAt)).toBeGreaterThan(0); expect(window.destroyed).toBe(true); expect(f.onCapture).not.toHaveBeenCalled();
+    await f.service.open(input); expect(f.sessions[1].partition).toBe('persist:bead-market-taobao'); expect(f.service.isProjectBusy(input.projectId)).toBe(true); await f.service.shutdown();
+  });
+  it('提前登录与后续HTTP查询复用相同平台session，应用从不读取或转移Cookie', async () => {
+    let userLoggedIn = false; const instances = new Map(), names = [], session = { fromPartition(name) { names.push(name); if (!instances.has(name)) { const scoped = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, fetch: vi.fn(async (_url, options) => { expect(options.credentials).toBe('include'); return new Response(userLoggedIn ? '<script type="application/ld+json">' + JSON.stringify({ '@type': 'Product', name: '合成已登录页面', url: input.url, offers: { priceCurrency: 'CNY', price: '1.50' } }) + '</script>' : '<body>请先登录 扫码登录</body>', { headers: { 'content-type': 'text/html' } }); }) }; Object.defineProperty(scoped, 'cookies', { get() { throw Error('Application must not inspect Cookies'); } }); instances.set(name, scoped); } return instances.get(name); } };
+    const f = fixture({ session }), sources = createBeadMarketSources({ session });
+    try {
+      expect((await sources.details({ url: input.url })).status).toBe('needs-login'); await f.service.open({ platform: 'taobao', mode: 'login' }); userLoggedIn = true; // Only the fixture user action changes the simulated platform session.
+      const window = f.windows[0], handler = [...f.handlers.values()][0]; await handler({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, 'capture');
+      const result = await sources.details({ url: input.url }); expect(result.offers[0].priceCents).toBe(150); expect(instances.size).toBe(1); expect(names.every(name => name === 'persist:bead-market-taobao')).toBe(true); expect(f.onCapture).not.toHaveBeenCalled();
+    } finally { await sources.shutdown(); await f.service.shutdown(); }
+  });
+  it('同平台target blank登录链接在当前视图打开，外域与关闭后请求不导航或增窗', async () => {
+    const f = fixture(); await f.service.open({ platform: 'taobao', mode: 'login' }); const remote = f.views[0].webContents, navigate = vi.spyOn(remote, 'loadURL');
+    const allowed = remote.openHandler({ url: 'https://login.taobao.com/member/login.jhtml?redirectURL=https%3A%2F%2Fwww.taobao.com%2F' }); expect(allowed).toEqual({ action: 'deny' }); expect(navigate).toHaveBeenCalledWith('https://login.taobao.com/member/login.jhtml?redirectURL=https%3A%2F%2Fwww.taobao.com%2F'); expect(f.windows).toHaveLength(1); expect(f.views).toHaveLength(1);
+    navigate.mockClear(); expect(remote.openHandler({ url: 'https://evil.invalid/login' })).toEqual({ action: 'deny' }); expect(navigate).not.toHaveBeenCalled();
+    expect(remote.openHandler({ url: 'http://login.taobao.com/member/login.jhtml' })).toEqual({ action: 'deny' }); expect(navigate).not.toHaveBeenCalled();
+    await f.service.shutdown(); expect(remote.openHandler({ url: 'https://login.taobao.com/member/login.jhtml' })).toEqual({ action: 'deny' }); expect(navigate).not.toHaveBeenCalled();
   });
 });

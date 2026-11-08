@@ -45,11 +45,16 @@ export interface BeadMarketCart {
   stores: { key: string; platform: BeadMarketPlatform; sellerName: string; materialCents: number; shippingCents?: number; offerIds: string[] }[];
 }
 export interface BeadMarketSnapshot { state: BeadMarketState; demand?: BeadMarketDemand; prices: BeadMarketOfferPrice[]; cart?: BeadMarketCart; suggestions?: { material: BeadMarketCart; fewStores: BeadMarketCart }; }
+export interface BeadMarketPlatformSession { platform: BeadMarketPlatform; status: 'not-opened' | 'opened' | 'confirmed' | 'needs-login'; openedAt?: string; userConfirmedAt?: string; }
 export interface BeadMarketImportPreview {
   token: string; source: 'table' | 'image' | 'links'; artifactId?: string; offers: BeadMarketOffer[];
   issues: string[]; warnings: string[]; rawText?: string;
 }
 export interface BeadMarketBridge {
+  sessions?: () => Promise<BeadMarketPlatformSession[]>;
+  login?: (input: { platform: BeadMarketPlatform }) => Promise<{ opened: boolean }>;
+  confirmLogin?: (input: { platform: BeadMarketPlatform }) => Promise<BeadMarketPlatformSession[]>;
+  onSessionChanged?: (listener: () => void) => () => void;
   read: (input: { projectId: string }) => Promise<BeadMarketSnapshot>;
   save: (input: { projectId: string; expectedRevision: number; state: BeadMarketState }) => Promise<BeadMarketSnapshot>;
   query: (input: { projectId: string; platforms?: BeadMarketPlatform[]; codes?: string[]; force?: boolean }) => Promise<{ jobId: string }>;
