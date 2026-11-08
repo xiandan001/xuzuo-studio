@@ -81,6 +81,7 @@ jobs:
         run: node scripts/verify-animation-studio.mjs
       - name: Run source tests with one worker
         id: source_tests
+        if: ${{ !cancelled() }}
         run: |
           New-Item -ItemType Directory -Force -Path work | Out-Null
           node node_modules/vitest/vitest.mjs run --config .github/vitest.config.mjs --maxWorkers=1 --reporter=json --outputFile="$env:RUNNER_TEMP/xuzuo-vitest.json"
