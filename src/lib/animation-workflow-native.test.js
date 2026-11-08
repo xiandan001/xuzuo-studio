@@ -23,8 +23,12 @@ describe('受限本地动画工作流：真实原生engine/FS/账本，模型和
     f.workflowControls.unavailable = false; request.workflow.steps[1].animation.command = 'run arbitrary code'; await expect(f.engine.start(request)).rejects.toThrow('仅支持'); expect(f.calls).toHaveLength(0); expect((await f.engine.snapshot()).ledger).toEqual([]);
   });
   it('选择已存在本项目PNG可只跑本地，无Key也不访问模型凭证列表', async () => {
-    const f = await setup(), request = await f.request(), reference = await f.artifactStore.write({ projectId: f.project.id, name: '已有图集.png', mimeType: 'image/png', buffer: png() }); request.workflow.steps = [{ ...request.workflow.steps[1], inputSource: 'project', imageSourceStepId: undefined, referenceArtifactIds: [reference.id] }, request.workflow.steps[2]]; request.models = []; request.connections = [];
+    const f = await setup(), request = await f.request(), reference = await f.artifactStore.write({ projectId: f.project.id, name: '已有图集.png', mimeType: 'image/png', buffer: png() }); request.workflow.steps = [{ ...request.workflow.steps[1], inputSource: 'project', imageSourceStepId: undefined, referenceArtifactIds: [reference.id] }, request.workflow.steps[2]]; request.models = []; request.connections = []; request.acknowledgePaidCalls = false; request.acknowledgeUnknownCost = false; f.engineOptions.credentials.list = async () => { throw Error('纯本地合成不应读取模型凭证'); };
     const run = await f.engine.start(request), result = await f.until(() => f.engine.runDetail(run.id), value => value.status === 'waiting-review'); expect(result.attempts[0].modelLabel).toBe('本地动画合成'); expect(f.calls).toHaveLength(0); expect((await f.engine.snapshot()).ledger).toEqual([]); expect(f.local[0].assets[0].id).toBe(reference.id);
+  });
+  it('包含远程PNG模型步骤时仍须确认调用，未确认不派发也不记费用', async () => {
+    const f = await setup(), request = await f.request(); request.acknowledgePaidCalls = false; request.acknowledgeUnknownCost = false;
+    await expect(f.engine.start(request)).rejects.toThrow('请确认真实调用'); expect(f.calls).toHaveLength(0); expect(f.local).toHaveLength(0); const snapshot = await f.engine.snapshot(); expect(snapshot.runs).toEqual([]); expect(snapshot.ledger).toEqual([]);
   });
   it('来源必须是准确前置PNG，错误/后置/其他项目引用在收费前拒绝', async () => {
     const f = await setup(); for (const change of [{ imageSourceStepId: 'missing' }, { imageSourceStepId: 'animation-review' }]) { const request = await f.request(); Object.assign(request.workflow.steps[1], change); await expect(f.engine.start(request)).rejects.toThrow('PNG图集'); }

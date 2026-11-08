@@ -365,7 +365,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         if (!check.ok) throw Object.assign(new Error(check.errors.join('\n')), { code: 'WORKFLOW_PREFLIGHT' });
         if (shuttingDown) throw new Error('应用正在退出，未开始新的模型请求。');
         await assertProjectAdmission(request.project.id);
-        if (!request.acknowledgePaidCalls || (check.unknownCost && !request.acknowledgeUnknownCost)) throw new Error('请确认真实调用及待核对费用后再开始。');
+        if (request.workflow.steps.some(step => step.enabled && modelStep(step)) && (!request.acknowledgePaidCalls || (check.unknownCost && !request.acknowledgeUnknownCost))) throw new Error('请确认真实调用及待核对费用后再开始。');
         const replacementId = request.replaceWaitingReviewRunId;
         const replacement = replacementId === undefined ? undefined : records.get(replacementId);
         const checkpoint = replacementReview(replacement?.run, request.refinementFork), pending = checkpoint?.attempt;
