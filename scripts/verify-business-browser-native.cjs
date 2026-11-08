@@ -75,6 +75,7 @@ async function layout(label) {
   const value = await evaluate(`(() => { const root=document.documentElement, body=document.body, panel=document.querySelector('.business-studio');return {label:${JSON.stringify(label)},width:innerWidth,height:innerHeight,theme:root.dataset.appTheme,documentWidth:root.scrollWidth,bodyWidth:body.scrollWidth,panelWidth:panel?.scrollWidth,panelClient:panel?.clientWidth,bg:getComputedStyle(body).backgroundColor,fg:getComputedStyle(body).color,overflow:[...document.querySelectorAll('.business-studio button,.business-studio input,.business-studio textarea,.bs-panel,.bs-orders')].filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,text:(e.getAttribute('aria-label')||e.textContent||'').trim().slice(0,70),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})).filter(b=>b.left < -1 || b.right > innerWidth+1).slice(0,12)};})()`);
   value.passed = value.documentWidth <= value.width + 1 && value.bodyWidth <= value.width + 1 && value.panelWidth <= value.panelClient + 1 && !value.overflow.length;
   report.layouts.push(value); if (!value.passed) report.errors.push(`Horizontal overflow at ${label}: ${JSON.stringify(value)}`);
+  const expected = /-(960|1440)-/.exec(label); if (expected && value.width !== Number(expected[1])) report.errors.push(`Viewport at ${label} is ${value.width}, expected ${expected[1]}`);
   if (value.bg === value.fg) report.errors.push(`Unreadable identical foreground/background at ${label}`);
 }
 async function capture(name, selector) {
@@ -144,6 +145,7 @@ async function run() {
   await contents.loadFile(path.join(owner.dist, 'business-browser-fixture.html'));
   report.rendererProcessIds.push(contents.getOSProcessId());
   await until('actual React fixture rendered', `window.businessBrowserFixture?.kind==='isolated-business-example'&&document.querySelector('.business-studio h1')?.textContent==='业务制作'`);
+  window.setContentSize(1440, 1000); await delay(160);
   assert.equal(BrowserWindow.getAllWindows().length, 1); await scenario();
   assert.equal(Object.keys(require.cache).some(file => same(file, path.join(root, 'electron/main.cjs'))), false);
   if (report.blockedRequests.length) report.errors.push('The renderer attempted requests outside its verified fixture bundle'); report.phase = 'complete'; finish();

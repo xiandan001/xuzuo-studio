@@ -21,15 +21,16 @@ describe('四入口导航和按需工具页', () => {
     expect(html).toContain('>6</b>'); expect(html).not.toContain('已完成');
     expect(renderToStaticMarkup(<NavigationTaskStatus summary={{ running: 0, paused: 0, review: 1 }} onOpen={() => {}} />)).not.toContain('class="spin"');
   });
-  it('工具页八个入口都有用途说明，空任务时不堆额外状态卡', () => {
+  it('工具页保留原八个入口并提供业务制作，空任务时不堆额外状态卡', () => {
     const html = renderToStaticMarkup(<ToolsHub navigate={() => { throw new Error('打开工具页不能自动派发'); }} />);
-    expect(html.match(/<button/g)).toHaveLength(8);
+    expect(html.match(/<button/g)).toHaveLength(9);
+    expect(html).toContain('业务制作');
     for (const label of ['自动化中心', '我的工作流', '任务中心', '提示词模板', '我的分类', '模型中心', '成本与报价', '偏好设置']) expect(html).toContain(`aria-label="${label}"`);
-    expect(html.match(/aria-describedby="tool-description-/g)).toHaveLength(8);
+    expect(html.match(/aria-describedby="tool-description-/g)).toHaveLength(9);
     expect(html.match(/<section/g)).toHaveLength(3);
     expect(html).not.toContain('查看当前任务'); expect(html).not.toContain('<select');
     const active = renderToStaticMarkup(<ToolsHub navigate={() => {}} taskSummary={{ running: 1, paused: 0, review: 2 }} />);
     expect(active).toContain('aria-label="3 项当前任务"'); expect(active).toContain('1 项进行中 · 2 项待检查');
-    expect(active.match(/<button/g)).toHaveLength(8); expect(active).not.toContain('查看当前任务'); expect(active).not.toContain('项任务需要留意');
+    expect(active.match(/<button/g)).toHaveLength(9); expect(active).not.toContain('查看当前任务'); expect(active).not.toContain('项任务需要留意');
   });
 });
