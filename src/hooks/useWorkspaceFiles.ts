@@ -45,7 +45,7 @@ export function useWorkspaceFiles(options: Options) {
     refresh, choose,
     async chooseProjectFolder(workspaceId: string) {
       const bridge = window.desktop?.workspaceFiles;
-      if (!bridge?.chooseProjectFolder || !bridge.createProject) throw new Error('本地项目创建需要新版桌面应用，请先更新并启动 Windows EXE。');
+      if (!bridge?.chooseProjectFolder || !bridge.createProject) throw new Error('本地项目创建需要新版桌面应用，请先更新并启动桌面应用。');
       const workspace = current.current.workspaces.find(item => item.id === workspaceId);
       if (!workspace) throw new Error('项目工作区不存在。');
       if (!await ensureBound(workspace)) return null;

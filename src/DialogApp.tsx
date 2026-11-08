@@ -16,7 +16,7 @@ export default function DialogApp() {
   const bridge = window.studioDialog;
   useEffect(() => {
     let active = true;
-    if (!bridge) { setError('本地文件窗口需要 Windows 桌面应用。当前浏览器没有读取或创建本地目录。'); return; }
+    if (!bridge) { setError('本地文件窗口需要桌面应用。当前浏览器没有读取或创建本地目录。'); return; }
     const remove = bridge.onAppearance?.(applyDialogAppearance);
     void bridge.request().then(value => { if (active) { applyDialogAppearance(value.appearance); setConfig(value); } }, cause => { if (active) setError(dialogError(cause)); });
     return () => { active = false; remove?.(); };

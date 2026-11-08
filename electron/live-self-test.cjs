@@ -1,4 +1,4 @@
-// Explicit local integration test: isolated Windows profile, dummy key, loopback HTTP only.
+// Explicit local integration test: isolated profile, dummy key, loopback HTTP only.
 const { app, net, safeStorage } = require('electron');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
@@ -82,9 +82,14 @@ app.whenReady().then(async () => {
   const bytes = (await artifacts.read(office.id)).buffer;
   const zip = await loadModule('jszip').loadAsync(bytes);
   check((await zip.file('word/document.xml').async('string')).includes('真实HTTP返回的业务正文'), 'DOCX did not contain current response');
-  check(Object.keys(zip.files).some(name => name.startsWith('word/media/')), 'DOCX image embedding missing');
   check((await extractReferenceText(await artifacts.read(office.id), loadModule)).includes('真实HTTP返回的业务正文'), 'Office reference text extraction failed');
   const generatedImages = completed.run.attempts.flatMap(attempt => attempt.artifacts || []).filter(artifact => artifact.kind === 'image');
+  // Unplaced references must not be silently appended. Verify actual embedding
+  // with an explicit image block, matching the editable document contract.
+  const illustrated = await artifacts.exportOffice({ kind: 'word', title: '显式配图验收', text: JSON.stringify({ blocks: [{ id: 'paragraph', type: 'paragraph', text: '这是真实HTTP返回的业务正文。', bold: false, italic: false }, { id: 'illustration', type: 'image', text: '生成插图', imageId: generatedImages[0].id, bold: false, italic: false }] }), assets: generatedImages, runId: start.id, projectId: project.id });
+  const illustratedWord = illustrated.find(artifact => artifact.name.endsWith('.docx'));
+  const illustratedZip = await loadModule('jszip').loadAsync((await artifacts.read(illustratedWord.id)).buffer);
+  check(Object.keys(illustratedZip.files).some(name => /^word\/media\/.+\.png$/.test(name)), 'Explicit DOCX image embedding missing');
   const otherFormats = {};
   for (const [kind, extension] of [['ppt', '.pptx'], ['excel', '.xlsx']]) {
     const content = kind === 'ppt' ? '# 网络返回的项目说明\n这是真实HTTP返回的业务正文。' : JSON.stringify({ sheets: [{ name: '验证数据', columns: ['说明', '数值'], rows: [['这是真实HTTP返回的业务正文', 2], ['第二行', 3], ['合计', { formula: 'SUM(B2:B3)' }]] }] });
@@ -97,7 +102,7 @@ app.whenReady().then(async () => {
   check(!(await fs.readFile(path.join(directory, 'credentials-v1.json'), 'utf8')).includes(testSecret), 'Plaintext in credential store');
   check(!JSON.stringify(completed.snapshot).includes(testSecret), 'Plaintext in runtime snapshot');
   await engine.shutdown(); await new Promise(resolve => server.close(resolve));
-  const report = { passed: true, packagedModules: Boolean(process.env.XUZUO_VERIFY_ASAR), externalProviderCalls: 0, actualLoopbackRequests: received.length, encryption: true, electronNetFetch: true, textToImageToEditToHumanToDocx: true, actualDocxBytes: bytes.length, otherOfficeFormats: otherFormats, knownCostCents: completed.snapshot.ledger.reduce((sum, entry) => sum + entry.costCents, 0), directory, artifact: office.path };
+  const report = { passed: true, packagedModules: Boolean(process.env.XUZUO_VERIFY_ASAR), externalProviderCalls: 0, actualLoopbackRequests: received.length, encryption: true, electronNetFetch: true, textToImageToEditToHumanToDocx: true, explicitWordImageEmbedding: true, actualDocxBytes: bytes.length, otherOfficeFormats: otherFormats, knownCostCents: completed.snapshot.ledger.reduce((sum, entry) => sum + entry.costCents, 0), directory, artifact: office.path };
   const reportPath = path.join(root, 'outputs', process.env.XUZUO_VERIFY_ASAR ? 'packaged-live-self-test.json' : 'live-workflow-self-test.json'); await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify(report)); app.exit(0);
 }).catch(error => { console.error(`Local integration failed: ${String(error.message).slice(0, 500)}`); app.exit(1); });

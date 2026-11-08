@@ -1,3 +1,4 @@
+import { shortcutLabel } from '../lib/platform';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { SpreadsheetCalculation, SpreadsheetSheet } from '../spreadsheet-types';
@@ -59,6 +60,12 @@ export function SpreadsheetGrid({ sheet, calculation, selectedAddress, range, on
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (disabled || event.target instanceof HTMLTextAreaElement || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') { event.preventDefault(); onFillDown?.(); return; }
+    if (event.metaKey && !event.altKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault();
+      select(event.key === 'ArrowUp' ? rowAt(0) : event.key === 'ArrowDown' ? rowAt(Math.max(0, rowCount - 1)) : selected.row,
+        event.key === 'ArrowLeft' ? 1 : event.key === 'ArrowRight' ? sheet.columnCount : selected.column, event.shiftKey);
+      return;
+    }
     const delta: Record<string, [number, number]> = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1], Tab: [0, event.shiftKey ? -1 : 1] };
     if (delta[event.key]) {
       event.preventDefault(); const offset = delta[event.key];
@@ -72,7 +79,7 @@ export function SpreadsheetGrid({ sheet, calculation, selectedAddress, range, on
   }
   const visibleRows = Array.from({ length: Math.max(0, Math.min(rowCount, rows.end) - rows.start) }, (_, index) => ({ row: rowAt(rows.start + index), index: rows.start + index }));
   const visibleColumns = geometry.widths.flatMap((width, index) => geometry.offsets[index] + width >= view.left - 200 && geometry.offsets[index] <= view.left + view.width + 200 ? [index + 1] : []);
-  const hint = feedback || '拖动或 Shift 选择区域 · Ctrl+C 复制 · Ctrl+D 填充 · 支持粘贴表格 · 双击编辑';
+  const hint = feedback || `拖动或 Shift 选择区域 · ${shortcutLabel('C')} 复制 · ${shortcutLabel('D')} 填充 · 支持粘贴表格 · 双击编辑`;
   return <div className="ss-grid-wrap"><div ref={viewport} className="ss-grid" role="grid" aria-label={`${sheet.name} 可编辑表格`} aria-rowcount={sheet.rowCount + 1} aria-colcount={sheet.columnCount + 1} aria-readonly={disabled} aria-activedescendant={rowCount ? cellId(selectedAddress) : undefined} tabIndex={disabled ? -1 : 0} onKeyDown={onKeyDown}
     onScroll={event => { const element = event.currentTarget; cancelAnimationFrame(scrollFrame.current); scrollFrame.current = requestAnimationFrame(() => setView({ top: element.scrollTop, left: element.scrollLeft, width: element.clientWidth, height: element.clientHeight })); }}
     onCopy={event => { if (event.target instanceof HTMLTextAreaElement) return; event.preventDefault(); try { if (viewActive && viewPending) throw new Error('查看排序和筛选尚未计算完成，请等待或清除查看设置后复制。'); event.clipboardData.setData('text/plain', spreadsheetRangeText(sheet, range || selectedAddress, rowOrder)); setFeedback('已复制选中区域，公式与原始行号保持。'); } catch (error) { setFeedback(error instanceof Error ? error.message : '复制未完成。'); } }}

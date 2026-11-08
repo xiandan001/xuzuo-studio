@@ -1,8 +1,9 @@
 const path = require('node:path');
+const { macSystemPath, resolveMacSystemPath } = require('./macos-system-paths.cjs');
 const { createHash, randomUUID } = require('node:crypto');
 
-const key = filename => process.platform === 'win32' ? path.resolve(filename).toLowerCase() : path.resolve(filename);
-const inside = (root, filename) => key(root) === key(filename) || key(filename).startsWith(`${key(root)}${path.sep}`);
+const key = filename => process.platform === 'win32' ? path.resolve(filename).toLowerCase() : macSystemPath(filename);
+const inside = (root, filename) => { const relative = path.relative(key(root), key(filename)); return !relative || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); };
 function safeFolder(name, projectId) {
   let stem = String(name || '未命名项目').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+|[.\s]+$/g, '').trim().slice(0, 48) || '项目';
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(stem)) stem = `项目-${stem}`;
@@ -10,7 +11,7 @@ function safeFolder(name, projectId) {
 }
 async function checkedDirectory(fs, directory, create = false) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw new Error('请选择有效的本地绝对目录。');
-  const absolute = path.resolve(directory), drive = path.parse(absolute).root;
+  const absolute = await resolveMacSystemPath(fs, directory), drive = path.parse(absolute).root;
   let current = drive;
   for (const part of absolute.slice(drive.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
@@ -24,7 +25,7 @@ async function checkedDirectory(fs, directory, create = false) {
     }
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('工作区路径包含符号链接、junction 或非目录，已拒绝操作。');
   }
-  return absolute;
+  return path.resolve(directory);
 }
 async function checkedFile(fs, filename) {
   await checkedDirectory(fs, path.dirname(filename));

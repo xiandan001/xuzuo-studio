@@ -27,7 +27,7 @@ export function useBeadDocument(projectId: string, bridge: BeadBridge | undefine
     if (alive.current) { setDocument(value); setDirty(false); setError(''); setHistoryTick(tick => tick + 1); }
   }, [checkNative]);
   const load = useCallback(async () => {
-    if (!bridge) { markError('请在最新版 Windows 应用中打开拼豆工作台。'); setLoading(false); return; }
+    if (!bridge) { markError('请在最新版桌面应用中打开拼豆工作台。'); setLoading(false); return; }
     optionsRef.current.beforeSave?.();
     if ((dirtyRef.current || optionsRef.current.pendingStroke?.()) && recoveredEpoch.current !== epoch.current) { markError('当前有未保存修改，请先保存，或导出当前恢复 JSON 后再读取。'); return; }
     const request = ++reading.current, startedEpoch = epoch.current; setLoading(true);

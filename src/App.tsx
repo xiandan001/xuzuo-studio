@@ -1,4 +1,5 @@
 import { moveProjectWithDraft } from './lib/project-move';
+import { isMacDesktop } from './lib/platform';
 import { withProjectQuoteMove } from './lib/project-quote-move';
 import { ModalPortal } from './components/ModalPortal';
 import { hasManagedDialog } from './lib/dialog-stack';
@@ -717,7 +718,7 @@ export default function App() {
     setExportId(id);
     if (draft) {
       const bridge = window.desktop?.runtime;
-      if (!bridge) { notify('请使用新版 EXE 导出真实 Office 文件。', 'info'); return; }
+      if (!bridge) { notify('请使用新版桌面应用导出真实 Office 文件。', 'info'); return; }
       setExportBusy(true);
       void bridge.exportDraft({ project, title: draft.title, text: draft.text }).then(artifacts => { setManualArtifacts(items => ({ ...items, [id]: artifacts })); notify('当前草稿已生成实际文件，可打开检查或另存。'); }).catch(error => notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '文件未能导出。', 'error')).finally(() => setExportBusy(false));
     }
@@ -765,8 +766,8 @@ export default function App() {
     return running.length ? '已请求停止当前执行任务，已经发生的费用记录仍会保留。' : '当前没有正在执行的任务。';
   }
   if (workspaceStorageIssue) return <StorageRecoveryPage title="工作室数据" issue={workspaceStorageIssue} exportLabel={workspaceStorageIssue.kind === 'write' ? '导出当前数据' : '导出原始数据'} onExport={exportWorkspaceData} onReload={reloadWorkspaceData} onReset={resetWorkspaceData} onStopTasks={window.desktop?.runtime ? stopRecoveryTasks : undefined} />;
-  return <div className={`desktop-shell studio-app-shell next-interface app-layout-${layout} ${preferences.reduceMotion ? 'reduce-motion' : ''}`}>
-    <div className="desktop-titlebar"><span className="titlebar-caption"><AppMark />序作工作台 <i /> {window.desktop?.runtime ? '桌面创作工作台' : '浏览器体验'}</span><div className="titlebar-right"><span>{window.desktop?.runtime ? '调用费用自动记录 · 密钥本机加密' : '浏览器预览 · 关闭请使用浏览器标签页'}</span>{window.desktop?.close && <div className="window-controls"><button title="最小化" aria-label="最小化" onClick={() => window.desktop?.minimize()}><Minus size={14} /></button><button title="最大化" aria-label="最大化" onClick={() => window.desktop?.maximize()}><Maximize2 size={12} /></button><button className="window-close" title="关闭窗口" aria-label="关闭窗口" onClick={() => window.desktop?.close()}><X size={15} /></button></div>}</div></div>
+  return <div className={`desktop-shell studio-app-shell next-interface app-layout-${layout} ${isMacDesktop() ? 'platform-macos' : ''} ${preferences.reduceMotion ? 'reduce-motion' : ''}`}>
+    <div className="desktop-titlebar"><span className="titlebar-caption"><AppMark />序作工作台 <i /> {window.desktop?.runtime ? '桌面创作工作台' : '浏览器体验'}</span><div className="titlebar-right"><span>{window.desktop?.runtime ? '调用费用自动记录 · 密钥本机加密' : '浏览器预览 · 关闭请使用浏览器标签页'}</span>{window.desktop?.close && !isMacDesktop() && <div className="window-controls"><button title="最小化" aria-label="最小化" onClick={() => window.desktop?.minimize()}><Minus size={14} /></button><button title="最大化" aria-label="最大化" onClick={() => window.desktop?.maximize()}><Maximize2 size={12} /></button><button className="window-close" title="关闭窗口" aria-label="关闭窗口" onClick={() => window.desktop?.close()}><X size={15} /></button></div>}</div></div>
     <div className="app-body"><aside className="sidebar"><Brand /><WorkspaceSwitcher workspaces={workspaces} activeWorkspaceId={workspaceId} projects={allProjects.filter(project => !project.trashedAt)} onSelect={onSelectWorkspace} onRemove={onRemoveWorkspace} onRestore={onRestoreWorkspace} onCreate={onCreateWorkspace} onBind={id => workspaceFiles.bind(id)} onOpen={id => { void workspaceFiles.open(id); }} />
       <AppNavigation view={view} onNavigate={navigate} />
       <div className="sidebar-bottom"><button className="sidebar-budget sidebar-budget-compact" aria-label="真实调用账本" title={`真实调用账本 · ${costSummaryPrimary(liveCost)}${costSummarySecondary(liveCost) ? ` · ${costSummarySecondary(liveCost)}` : ''} · 本区月度预算 ${budgetLabel(preferences.monthlyBudget == null ? undefined : Math.round(preferences.monthlyBudget * 100))}`} onClick={() => navigate('finance')}><Wallet size={15} /><span>费用与报价</span><strong><CostTotal summary={liveCost} /></strong>{liveCost.pendingCount > 0 && <em title="软件会自动复算，无需填写费用；点击查看具体缺项。">+{liveCost.pendingCount} 待补齐</em>}<ChevronRight size={13} /></button><button className="profile-button focused-settings-button" aria-label="模型与设置" onClick={() => navigate('models')}><SettingsIcon size={17} /><span>模型与设置</span></button></div>

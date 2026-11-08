@@ -3,6 +3,7 @@ from pathlib import Path
 from math import isfinite
 import re
 from PIL import Image
+from safe_paths import regular_path
 
 STYLES = {'pixel-light', 'pixel-actions', 'illustrated-actions', 'photo-people',
           'photo-pets', 'clay-mascot', 'lenticular', 'type-linked', 'comic-fusion'}
@@ -31,10 +32,7 @@ def identifier(value):
 def ordinary_file(value):
     if not isinstance(value, str) or not Path(value).is_absolute():
         raise ValueError('源素材须为已登记的本机绝对路径。')
-    source = Path(value)
-    if source.is_symlink() or any(parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)()
-                                  for parent in source.parents):
-        raise ValueError('源素材不能使用符号链接或重定向目录。')
+    source = regular_path(value)
     if not source.is_file() or not 0 < source.stat().st_size <= 64 * 1024 * 1024:
         raise ValueError('源素材不存在或超过64MB，请重新选择图片。')
     return source.resolve(strict=True)

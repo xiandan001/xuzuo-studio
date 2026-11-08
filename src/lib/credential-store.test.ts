@@ -16,7 +16,7 @@ interface EncryptionMock {
   encryptStringAsync: (value: string) => Promise<Buffer>;
   decryptStringAsync: (value: Buffer) => Promise<{ result: string; shouldReEncrypt: boolean }>;
 }
-interface CreateStoreOptions { directory: string; safeStorage: EncryptionMock; fileSystem: FileSystemMock; uuid?: () => string; now?: () => string; }
+interface CreateStoreOptions { directory: string; safeStorage: EncryptionMock; fileSystem: FileSystemMock; uuid?: () => string; now?: () => string; platform?: string; }
 interface Frame { url: string; }
 interface Contents { mainFrame: Frame; }
 interface SenderEvent { sender: Contents; senderFrame: Frame | null; }
@@ -39,13 +39,34 @@ function fixtures() {
   const safeStorage: EncryptionMock = { isAsyncEncryptionAvailable: async () => true, encryptStringAsync: async value => Buffer.from(`encrypted:${Buffer.from(value).toString('base64')}`), decryptStringAsync: async value => ({ result: Buffer.from(value.toString().replace(/^encrypted:/, ''), 'base64').toString(), shouldReEncrypt: false }) };
   const directory = path.resolve('test-only-vault');
   let sequence = 0;
-  const options: CreateStoreOptions = { directory, fileSystem, safeStorage, uuid: () => `id-${++sequence}`, now: () => '2026-10-29T12:00:00Z' };
+  const options: CreateStoreOptions = { directory, fileSystem, safeStorage, platform: 'win32', uuid: () => `id-${++sequence}`, now: () => '2026-10-29T12:00:00Z' };
   const filename = path.join(directory, 'credentials-v1.json');
   return { files, fileSystem, safeStorage, options, filename, store: createCredentialStore(options) };
 }
 const input = (name = '测试凭证'): CredentialInput => ({ name, connectionId: 'test-connection', secret: 'fake-credential-used-only-in-tests-7159' });
 
 describe('桌面凭证库', () => {
+  it('macOS启动和重复刷新状态不初始化钥匙串，保存密钥时才请求系统加密', async () => {
+    const { options, safeStorage } = fixtures(); let availabilityCalls = 0;
+    safeStorage.isAsyncEncryptionAvailable = async () => { availabilityCalls++; return true; };
+    const store = createCredentialStore({ ...options, platform: 'darwin' });
+    for (let index = 0; index < 5; index++) { expect(await store.status()).toMatchObject({ available: true, requiresAuthorization: true }); expect(await store.list()).toEqual([]); }
+    expect(availabilityCalls).toBe(0);
+    const entry = await store.save(input()); expect(availabilityCalls).toBe(1);
+    expect(await store.status()).toEqual({ available: true });
+    await store.save({ ...input(), id: entry.id, name: '只修改名称', secret: '' });
+    await store.setEnabled({ id: entry.id, enabled: false });
+    expect(availabilityCalls).toBe(1);
+  });
+
+  it('macOS拒绝授权后不会在状态轮询中再次申请，也不会保存明文', async () => {
+    const { options, safeStorage, files } = fixtures(); let availabilityCalls = 0;
+    safeStorage.isAsyncEncryptionAvailable = async () => { availabilityCalls++; return false; };
+    const store = createCredentialStore({ ...options, platform: 'darwin' });
+    await expect(store.save(input())).rejects.toThrow('系统加密暂不可用');
+    for (let index = 0; index < 5; index++) await store.status();
+    expect(availabilityCalls).toBe(1); expect(files.size).toBe(0);
+  });
   it('真实调用只可在主进程回调解密本连接的启用凭证', async () => {
     const { store } = fixtures(); const entry = await store.save(input());
     expect(await store.withSecret(entry.id, 'test-connection', async secret => ({ matched: secret === input().secret }))).toEqual({ matched: true });

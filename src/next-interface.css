@@ -14,6 +14,8 @@ body:has(.next-interface) { min-width: 0; }
 .next-interface .titlebar-caption .app-mark { width: 15px; height: 15px; }
 .next-interface .titlebar-right > span { font-size: 12px; }
 .next-interface .app-body { height: calc(100dvh - 32px); }
+.next-interface.platform-macos .desktop-titlebar { height: 44px; padding-left: 92px; padding-right: 16px; }
+.next-interface.platform-macos .app-body { height: calc(100dvh - 44px); }
 .next-interface .sidebar { width: var(--next-sidebar); background: color-mix(in srgb, var(--ui-surface) 55%, var(--ui-bg)); }
 .next-interface .brand { padding: 25px 22px 26px; gap: 10px; }
 .next-interface .brand-mark { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 8px; }

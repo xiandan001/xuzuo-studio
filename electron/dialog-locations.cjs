@@ -7,9 +7,28 @@ function defaultHelperPath() {
   const root = path.resolve(__dirname, '..');
   return path.join(/\.asar$/i.test(root) ? `${root}.unpacked` : root, 'assets/windows-drive-info.exe');
 }
-function readLocalDrives({ execute = execFile, platform = process.platform, signal, helperPath = defaultHelperPath() } = {}) {
-  if (platform !== 'win32') return Promise.resolve([{ name: '文件系统', path: '/', kind: 'drive' }]);
+async function readMacVolumes({ fileSystem, signal }) {
+  const fs = fileSystem || require('node:fs/promises');
+  const drives = [{ name: '启动磁盘', path: '/', kind: 'drive' }];
+  if (signal?.aborted) throw canceled();
+  const entries = await fs.readdir('/Volumes', { withFileTypes: true });
+  if (entries.length > 256) throw new Error('挂载宗卷数量过多，请直接输入目录路径。');
+  for (const entry of entries) {
+    if (signal?.aborted) throw canceled();
+    if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.')) continue;
+    const directory = path.posix.join('/Volumes', entry.name);
+    try {
+      const stat = await fs.lstat(directory);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) drives.push({ name: entry.name, path: directory, kind: 'drive' });
+    } catch (error) { if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error; }
+  }
+  if (signal?.aborted) throw canceled();
+  return drives;
+}
+function readLocalDrives({ execute = execFile, platform = process.platform, signal, helperPath = defaultHelperPath(), fileSystem } = {}) {
   if (signal?.aborted) return Promise.reject(canceled());
+  if (platform === 'darwin') return readMacVolumes({ fileSystem, signal });
+  if (platform !== 'win32') return Promise.resolve([{ name: '文件系统', path: '/', kind: 'drive' }]);
   return new Promise((resolve, reject) => {
     execute(helperPath, [], { windowsHide: true, timeout: 4000, maxBuffer: 16384, encoding: 'utf8', ...(signal ? { signal } : {}) }, (error, stdout) => {
       if (error) { reject(error); return; }
@@ -34,7 +53,7 @@ function createDialogLocations(app, { readDrives = readLocalDrives, platform = p
     let abort;
     const cancellation = new Promise((_resolve, reject) => { abort = () => reject(canceled()); controller.signal.addEventListener('abort', abort, { once: true }); });
     pending = task;
-    task.promise = Promise.race([Promise.resolve().then(() => readDrives({ signal: controller.signal })), cancellation]).then(drives => {
+    task.promise = Promise.race([Promise.resolve().then(() => readDrives({ signal: controller.signal, platform })), cancellation]).then(drives => {
       if (controller.signal.aborted) throw canceled();
       if (!Array.isArray(drives) || !drives.length) throw new Error('没有取得磁盘列表。');
       lastGood = drives; cached = { drives }; checkedAt = now(); return cached;
@@ -56,7 +75,7 @@ function createDialogLocations(app, { readDrives = readLocalDrives, platform = p
       if (platform === 'win32' ? /^[A-Z]:\\$/i.test(directory) : directory === '/') drives.push(platform === 'win32' ? driveLocation(directory.toUpperCase()) : { name: '文件系统', path: '/', kind: 'drive' });
     }
     locations.push(...drives);
-    return { locations: locations.filter((item, index) => locations.findIndex(other => other.path.toLowerCase() === item.path.toLowerCase()) === index), ...(result.warning ? { warning: result.warning } : {}) };
+    return { locations: locations.filter((item, index) => locations.findIndex(other => (platform === 'win32' ? other.path.toLowerCase() === item.path.toLowerCase() : other.path === item.path)) === index), ...(result.warning ? { warning: result.warning } : {}) };
   }
   const locationsFor = async (defaultPath, { force = false } = {}) => assemble(defaultPath, await currentDrives(force === true));
   locationsFor.peek = defaultPath => {

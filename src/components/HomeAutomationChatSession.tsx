@@ -190,7 +190,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
     if (!planning.bridge || !billingProjectId || !props.projects.some(project => project.id === billingProjectId) || !model.model || !model.credentialId) {
       if (!billingProjectId || !props.projects.some(project => project.id === billingProjectId)) { setSettings(true); requestAnimationFrame(() => settingsPanel.current?.scrollIntoView({ block: 'nearest' })); }
       else requestAnimationFrame(() => { const picker = textarea.current?.closest('form')?.querySelector<HTMLButtonElement>(`[role="combobox"][aria-label="${!model.model ? '对话模型' : '对话Key'}"]`); picker?.scrollIntoView({ block: 'nearest' }); picker?.focus(); });
-      setLocalError(!planning.bridge ? '请使用新版 Windows 桌面应用进行 AI 对话。' : !billingProjectId ? '先选择或新建保存项目，让方案和费用有明确归属。' : !props.projects.some(project => project.id === billingProjectId) ? '原记账项目暂不可用，可以新开对话；原方案和费用仍保留。' : '在输入区上方选择对话模型和对应 Key，再发送即可。'); return;
+      setLocalError(!planning.bridge ? '请使用新版桌面应用进行 AI 对话。' : !billingProjectId ? '先选择或新建保存项目，让方案和费用有明确归属。' : !props.projects.some(project => project.id === billingProjectId) ? '原记账项目暂不可用，可以新开对话；原方案和费用仍保留。' : '在输入区上方选择对话模型和对应 Key，再发送即可。'); return;
     }
     const priorPlanId = activeRequestId;
     if (productionBusy) { setLocalError(productionBusy.status === 'paused' ? '上一轮制作已暂停，请先在任务进度里继续或取消，再发送这条需求。输入已保留。' : '上一轮还在制作，请稍候再发送，或先查看任务进度。输入已保留。'); return; }

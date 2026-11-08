@@ -1,5 +1,6 @@
 const fsDefault = require('node:fs/promises');
 const path = require('node:path');
+const { backupRelative } = require('./backup-paths.cjs');
 const { randomUUID } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson, inside, key } = require('./workspace-paths.cjs');
 const { hash, MAX_TOTAL, MAX_FILES, safePath, inspectZip, withoutSecrets, validateManifest, createIdMap, remap, mappedName, validId } = require('./backup-format.cjs');
@@ -51,14 +52,14 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     for (const artifact of manifest.artifacts) {
       const project = manifest.locations.projects.find(item => item.projectId === artifact.projectId), workspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
       const name = artifact.trashedAt ? artifact.trashFileName : artifact.fileName; safePath(name);
-      if (artifact.storageDirectory && key(artifact.storageDirectory) !== key(project.directory)) throw new Error('备份产物目录与项目归属不匹配。');
-      const relative = artifact.storageDirectory ? `workspaces/${workspace.workspaceId}/${path.relative(workspace.directory, project.directory).split(path.sep).join('/')}/${artifact.trashedAt ? 'trash' : 'files'}/${name}` : `legacy-artifacts/${artifact.id}/${name}`;
+      if (artifact.storageDirectory && backupRelative(project.directory, artifact.storageDirectory) !== '') throw new Error('备份产物目录与项目归属不匹配。');
+      const relative = artifact.storageDirectory ? `workspaces/${workspace.workspaceId}/${backupRelative(workspace.directory, project.directory)}/${artifact.trashedAt ? 'trash' : 'files'}/${name}` : `legacy-artifacts/${artifact.id}/${name}`;
       const bytes = files.get(relative);
       if (!bytes || bytes.length !== artifact.bytes || artifact.sha256 && hash(bytes) !== artifact.sha256) throw new Error('备份产物登记与实际文件的大小或哈希不一致。');
       artifact.sha256 ||= hash(bytes);
     }
     const commerceLinks = [], commerceSnapshots = new Map();
-    const materialOwners = new Map(manifest.locations.projects.map(project => { const workspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId); return [`workspaces/${workspace.workspaceId}/${path.relative(workspace.directory, project.directory).split(path.sep).join('/')}/.xuzuo/`, project.projectId]; }));
+    const materialOwners = new Map(manifest.locations.projects.map(project => { const workspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId); return [`workspaces/${workspace.workspaceId}/${backupRelative(workspace.directory, project.directory)}/.xuzuo/`, project.projectId]; }));
     for (const [relative, bytes] of files) {
       if (!relative.endsWith('.json')) continue;
       const parts = relative.split('/'), basename = parts.at(-1);
@@ -75,7 +76,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (parts.includes('.xuzuo') && basename === 'project-v1.json') {
         const marker = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
         const project = manifest.locations.projects.find(item => item.projectId === marker.projectId), workspace = project && manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
-        const expected = workspace && `workspaces/${workspace.workspaceId}/${path.relative(workspace.directory, project.directory).split(path.sep).join('/')}/.xuzuo/project-v1.json`;
+        const expected = workspace && `workspaces/${workspace.workspaceId}/${backupRelative(workspace.directory, project.directory)}/.xuzuo/project-v1.json`;
         if (marker.version !== 1 || !project || relative !== expected) throw new Error('备份包含未登记或已永久移除的项目目录内容。');
       }
       if (parts.includes('.xuzuo-assets') && basename === 'categories-v1.json') validateAssetCategoryState(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
@@ -99,7 +100,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (artifact.projectId !== link.projectId || artifact.mimeType !== 'application/json' || artifact.bytes > 2 * 1024 * 1024) throw Error('回编辑快照不属于当前项目或不是有效内部JSON。');
       const project = manifest.locations.projects.find(row => row.projectId === artifact.projectId), workspace = manifest.locations.workspaces.find(row => row.workspaceId === project.workspaceId);
       const name = artifact.trashedAt ? artifact.trashFileName : artifact.fileName;
-      const relative = artifact.storageDirectory ? 'workspaces/' + workspace.workspaceId + '/' + path.relative(workspace.directory, project.directory).split(path.sep).join('/') + '/' + (artifact.trashedAt ? 'trash' : 'files') + '/' + name : 'legacy-artifacts/' + artifact.id + '/' + name;
+      const relative = artifact.storageDirectory ? 'workspaces/' + workspace.workspaceId + '/' + backupRelative(workspace.directory, project.directory) + '/' + (artifact.trashedAt ? 'trash' : 'files') + '/' + name : 'legacy-artifacts/' + artifact.id + '/' + name;
       const bytes = files.get(relative); if (!bytes) continue;
       let document; try { document = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { throw Error('可编辑图层快照不是有效JSON，未导入。'); }
       if (document?.type !== 'xuzuo-commerce-image' || document.projectId !== link.projectId || !validateCommerceImageBackup(document, relative)) throw Error('可编辑图层快照内容与来源不一致。');
@@ -241,8 +242,8 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     for (const workspace of manifest.locations.workspaces) pathMap[workspace.directory] = locations.workspaces.find(item => item.workspaceId === idMap[workspace.workspaceId]).directory;
     for (const project of manifest.locations.projects) {
       const oldWorkspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
-      if (!oldWorkspace || !inside(oldWorkspace.directory, project.directory) || key(oldWorkspace.directory) === key(project.directory)) throw new Error('备份项目路径不属于其工作区。');
-      const destination = path.join(pathMap[oldWorkspace.directory], path.relative(oldWorkspace.directory, project.directory));
+      if (!oldWorkspace || !backupRelative(oldWorkspace.directory, project.directory)) throw new Error('备份项目路径不属于其工作区。');
+      const destination = path.join(pathMap[oldWorkspace.directory], backupRelative(oldWorkspace.directory, project.directory));
       pathMap[project.directory] = destination; locations.projects.push({ ...remap(project, idMap), directory: destination });
     }
     const staged = [], changedSnapshotArtifacts = new Map();

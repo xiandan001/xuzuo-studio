@@ -25,7 +25,7 @@ async function preparedFolder(fs, directory, projectId) {
 async function inspectSelectedProjectFolder({ fs, workspace, projects, locations, directory: selected, projectId }) {
   const directory = await checkedDirectory(fs, selected);
   if (!inside(workspace.directory, directory) || same(workspace.directory, directory)) throw new Error('请选择当前工作区内独立的项目子文件夹，不能使用工作区根目录。');
-  const relative = path.relative(workspace.directory, directory);
+  const relative = path.relative(key(workspace.directory), key(directory));
   if (relative.split(path.sep).some(name => ['.xuzuo', '.xuzuo-assets'].includes(name.toLowerCase()) || name.toLowerCase().startsWith('.xuzuo-purge-'))) throw new Error('所选文件夹属于应用内部资料区域，请选择其他项目文件夹。');
   if ([...projects, ...locations].some(item => inside(item.directory, directory) || inside(directory, item.directory))) throw new Error('所选文件夹与已有项目目录重叠，请选择独立的空文件夹。');
   const names = await fs.readdir(directory);

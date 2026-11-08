@@ -24,6 +24,10 @@ def caption_font(value, text, width, height):
     choices = [value] if value else []
     windows = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'Fonts'
     choices += [windows / name for name in ['msyh.ttc', 'simhei.ttf', 'simsun.ttc', 'arial.ttf']]
+    choices += [Path('/System/Library/Fonts/PingFang.ttc'),
+                Path('/System/Library/Fonts/Supplemental/Arial Unicode.ttf'),
+                Path('/System/Library/Fonts/Supplemental/Arial.ttf'),
+                Path('/Library/Fonts/Arial Unicode.ttf')]
     choices += [Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'),
                 Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')]
     for filename in choices:

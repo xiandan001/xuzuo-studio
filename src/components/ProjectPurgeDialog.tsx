@@ -23,7 +23,7 @@ export function ProjectPurgeDialog({ workspaceId, projects, emptyTrash = false, 
   useEffect(() => {
     const generation = ++epoch.current, bridge = window.desktop?.projectPurge;
     setPreview([]); setResults([]); setError(''); setLoading(true); setConfirmation(''); setStarted(false); setSettled(false); flight.current = [];
-    if (!bridge) { setError('请在新版 Windows 桌面应用中永久删除项目。'); setLoading(false); return; }
+    if (!bridge) { setError('请在新版桌面应用中永久删除项目。'); setLoading(false); return; }
     void (async () => {
       const previews: ProjectPurgePreview[] = [];
       for (const chunk of projectPurgeChunks(ids.current)) {

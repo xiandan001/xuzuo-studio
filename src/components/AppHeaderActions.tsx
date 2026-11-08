@@ -1,3 +1,4 @@
+import { shortcutLabel } from '../lib/platform';
 import { Bell, FolderOpen, Plus, Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ViewId } from '../types';
@@ -23,7 +24,7 @@ export function AppHeaderActions({ summary, onNavigate, onSearch, onNotification
   return <div className="header-actions focused-header-actions">
     {children}
     <NavigationTaskStatus summary={summary} onOpen={() => onNavigate('activity')} />
-    <button className="global-search" aria-label="搜索作品与工具" title="搜索作品与工具 · Ctrl+K" onClick={onSearch}><Search size={16} /><span>搜索作品与工具</span><kbd>Ctrl K</kbd></button>
+    <button className="global-search" aria-label="搜索作品与工具" title={`搜索作品与工具 · ${shortcutLabel('K')}`} onClick={onSearch}><Search size={16} /><span>搜索作品与工具</span><kbd>{shortcutLabel('K')}</kbd></button>
     <AppearanceControl notify={notify} />
     <button type="button" className="btn-icon header-notifications" aria-label="通知与最近动态" onClick={onNotifications}><Bell size={18} /></button>
     {onOpenFolder && <button type="button" className="btn-icon header-folder" aria-label="打开当前文件夹" onClick={onOpenFolder}><FolderOpen size={18} /></button>}

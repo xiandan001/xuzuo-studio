@@ -32,7 +32,7 @@ function isTrustedCredentialSender(event, webContents, applicationUrl) {
   return Boolean(webContents && event.sender === webContents && event.senderFrame && event.senderFrame === webContents.mainFrame && event.senderFrame.url === applicationUrl);
 }
 
-function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid = randomUUID, now = () => new Date().toISOString() }) {
+function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid = randomUUID, now = () => new Date().toISOString(), platform = process.platform }) {
   const filename = path.join(path.resolve(directory), 'credentials-v1.json');
   let queue = Promise.resolve();
   const serial = action => {
@@ -41,11 +41,21 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
     return operation;
   };
 
-  async function status() {
+  let encryptionReady = false;
+  async function encryptionStatus() {
     try {
       const available = await safeStorage.isAsyncEncryptionAvailable();
+      encryptionReady = available;
       return available ? { available: true } : { available: false, reason: '系统加密暂不可用，无法保存真实 API Key。' };
     } catch { return { available: false, reason: '系统加密暂不可用，无法保存真实 API Key。' }; }
+  }
+  async function status() {
+    if (platform !== 'darwin') return encryptionStatus();
+    // This API initializes the macOS key provider and may prompt for Keychain
+    // access. Startup, refresh and metadata browsing must remain read-only.
+    const available = ['isAsyncEncryptionAvailable', 'encryptStringAsync', 'decryptStringAsync'].every(name => typeof safeStorage?.[name] === 'function');
+    if (!available) return { available: false, reason: '当前桌面运行时不支持系统密钥加密。' };
+    return encryptionReady ? { available: true } : { available: true, requiresAuthorization: true, reason: '保存或使用密钥时，macOS 将按需请求钥匙串授权。' };
   }
 
   async function readEntries() {
@@ -69,9 +79,9 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
   }
 
   async function encrypt(secret) {
-    if (!(await status()).available) throw new Error('系统加密暂不可用，未保存密钥。');
+    if (!(await encryptionStatus()).available) throw new Error('系统加密暂不可用，未保存密钥。');
     try { return (await safeStorage.encryptStringAsync(secret)).toString('base64'); }
-    catch { throw new Error('系统加密失败，未保存密钥。'); }
+    catch { encryptionReady = false; throw new Error('系统加密失败，未保存密钥。'); }
   }
 
   function save(input) {
@@ -83,7 +93,6 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
       const secret = input.secret.trim();
       if (/[\r\n]/.test(secret)) throw new Error('API Key 不能包含换行，请逐条录入。');
       if (!secret && !existing) throw new Error('新建密钥时需要填写 API Key。');
-      if (!(await status()).available) throw new Error('系统加密暂不可用，未保存密钥。');
       const ciphertext = secret ? await encrypt(secret) : existing.ciphertext;
       const entry = { id: existing?.id || uuid(), name: input.name.trim(), connectionId: input.connectionId.trim(), lastFour: secret ? secret.length > 4 ? secret.slice(-4) : '' : existing.lastFour, enabled: existing?.enabled ?? true, updatedAt: now(), ciphertext };
       await persist(existing ? entries.map(item => item.id === entry.id ? entry : item) : [...entries, entry]);
@@ -109,8 +118,8 @@ function createCredentialStore({ directory, safeStorage, fileSystem = fs, uuid =
     const entry = entries.find(item => item.id === id && item.connectionId === connectionId && item.enabled);
     if (!entry) throw new Error('凭证不存在、已停用或不属于当前连接。');
     let secret;
-    try { secret = (await safeStorage.decryptStringAsync(Buffer.from(entry.ciphertext, 'base64'))).result; }
-    catch { throw new Error('系统无法解密这条凭证，请在当前 Windows 账户重新录入。'); }
+    try { secret = (await safeStorage.decryptStringAsync(Buffer.from(entry.ciphertext, 'base64'))).result; encryptionReady = true; }
+    catch { encryptionReady = false; throw new Error('系统无法解密这条凭证，请确认当前系统账户的钥匙串授权，或重新录入。'); }
     if (typeof secret !== 'string' || !secret) throw new Error('凭证内容不可用，请重新录入。');
     try { return await action(secret); }
     finally { secret = undefined; }

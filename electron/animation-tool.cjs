@@ -2,11 +2,12 @@ const fsDefault = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { resolveMacSystemPath } = require('./macos-system-paths.cjs');
 
 const cancelled = () => Object.assign(Error('动画处理已取消，原稿和已发生的费用保留。'), { name: 'AbortError' });
 function cleanEnvironment(source = process.env) {
   const result = {};
-  for (const key of ['SystemRoot', 'SYSTEMROOT', 'WINDIR', 'SystemDrive', 'ComSpec', 'COMSPEC', 'PATH', 'Path', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'TZ']) if (source[key]) result[key] = source[key];
+  for (const key of ['SystemRoot', 'SYSTEMROOT', 'WINDIR', 'SystemDrive', 'ComSpec', 'COMSPEC', 'PATH', 'Path', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'TZ']) if (source[key]) result[key] = source[key];
   return { ...result, PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1', PYTHONUTF8: '1' };
 }
 function stopProcessTree(child) {
@@ -20,7 +21,7 @@ function stopProcessTree(child) {
   });
 }
 
-function createAnimationTool({ executablePath, directory, developmentPython = 'python', packaged = Boolean(process.resourcesPath && !process.defaultApp), timeoutMs = 120000, spawnProcess = spawn, terminateProcess = stopProcessTree, fileSystem = fsDefault } = {}) {
+function createAnimationTool({ executablePath, directory, developmentPython = process.platform === 'win32' ? 'python' : 'python3', packaged = Boolean(process.resourcesPath && !process.defaultApp), timeoutMs = 120000, spawnProcess = spawn, terminateProcess = stopProcessTree, fileSystem = fsDefault } = {}) {
   const fs = fileSystem, source = path.resolve(__dirname, '../tools/gif-factory/main.py');
   let tail = Promise.resolve(), active, closed = false, quiescing = false, cachedStatus, probing;
   const stops = new Set();
@@ -33,7 +34,7 @@ function createAnimationTool({ executablePath, directory, developmentPython = 'p
     }
   }
   async function ordinary(filename, kind = 'file') {
-    const resolved = path.resolve(filename); await inspectComponents(resolved, kind);
+    const resolved = await resolveMacSystemPath(fs, filename); await inspectComponents(resolved, kind);
     const canonical = await fs.realpath(resolved);
     if (canonical.toLowerCase() === resolved.toLowerCase()) return fs.stat(resolved);
     const originalRoot = path.parse(resolved).root, canonicalRoot = path.parse(canonical).root;
@@ -46,7 +47,7 @@ function createAnimationTool({ executablePath, directory, developmentPython = 'p
     return fs.stat(resolved);
   }
   async function command() {
-    const bundled = executablePath || path.join(process.resourcesPath || path.resolve(__dirname, '..'), 'animation-tool', 'xuzuo-animation.exe');
+    const bundled = executablePath || path.join(process.resourcesPath || path.resolve(__dirname, '..'), 'animation-tool', process.platform === 'win32' ? 'xuzuo-animation.exe' : 'xuzuo-animation');
     try { await ordinary(bundled); return { file: bundled, prefix: [] }; } catch (error) { if (executablePath || packaged) throw Error('动画后台工具尚未就绪，请使用包含动画运行时的完整桌面版本。'); }
     await ordinary(source);
     if (typeof developmentPython !== 'string' || !developmentPython || /[\r\n\0]/.test(developmentPython)) throw Error('开发环境Python路径无效。');

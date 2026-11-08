@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { resolveMacSystemPath } = require('./macos-system-paths.cjs');
 const { validateEditorDocument, editorImageIds } = require('./editor-document.cjs');
 const { createRevisionStore } = require('./revision-store.cjs');
 const { createSerialQueue } = require('./queue-lifecycle.cjs');
@@ -10,8 +11,8 @@ function createEditorStore({ workspaceStorage, artifactStore, fileSystem = fs })
     if (typeof projectId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(projectId)) throw new Error('项目编号无效。');
     const project = path.resolve(await workspaceStorage.projectDirectory(projectId));
     const directory = path.join(project, '.xuzuo');
-    const drive = path.parse(directory).root; let current = drive;
-    for (const part of directory.slice(drive.length).split(path.sep).filter(Boolean)) {
+    const canonical = await resolveMacSystemPath(fileSystem, directory), drive = path.parse(canonical).root; let current = drive;
+    for (const part of canonical.slice(drive.length).split(path.sep).filter(Boolean)) {
       current = path.join(current, part);
       const stat = await fileSystem.lstat(current);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('项目编辑目录包含链接或不是普通目录，已拒绝写入。');

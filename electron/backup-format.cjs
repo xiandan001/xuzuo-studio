@@ -1,4 +1,5 @@
 const { createHash, randomUUID } = require('node:crypto');
+const { windowsPath } = require('./backup-paths.cjs');
 const { validateQuoteBackups } = require('./quote-backup.cjs');
 const { validateAutomationBackup } = require('./automation-backup.cjs');
 const { validateModelReceiptBackup } = require('./model-receipt-backup.cjs');
@@ -89,7 +90,7 @@ function relocatedPath(value, paths, fileNames) {
   let mapped = paths[value];
   if (!mapped) {
     const prefix = Object.keys(paths).sort((a, b) => b.length - a.length).find(before => value.startsWith(`${before}/`) || value.startsWith(`${before}\\`));
-    mapped = prefix ? `${paths[prefix]}${value.slice(prefix.length)}` : value;
+    mapped = prefix ? `${paths[prefix]}${value.slice(prefix.length).replace(/[\\/]/g, windowsPath(paths[prefix]) ? '\\' : '/')}` : value;
   }
   const split = Math.max(mapped.lastIndexOf('/'), mapped.lastIndexOf('\\')), basename = mapped.slice(split + 1);
   return fileNames[basename] ? `${mapped.slice(0, split + 1)}${fileNames[basename]}` : mapped;

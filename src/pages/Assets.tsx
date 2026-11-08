@@ -226,7 +226,7 @@ export function Assets(props: PageProps) {
     } catch (cause) { if (currentWorkspace.current === identity) setError(workflowPublicError(cause, '批量处理后列表未能刷新，请重新读取；已完成的操作和原文件保留。')); }
     finally { if (currentWorkspace.current === identity) { pending.current = ''; setBusy(''); } }
   }
-  const categoryUnavailable = !bridge ? '内置集合可直接浏览；自定义分类请在 Windows 桌面版保存。' : !workspace.directory ? '绑定当前工作区文件夹后，即可建立并保存我的素材分类。' : !bridge.categories ? '请升级桌面应用后使用自定义素材分类。' : categoryError ? '分类读取未完成，请在右侧重新读取；素材文件未改动。' : '正在读取当前工作区的素材分类…';
+  const categoryUnavailable = !bridge ? '内置集合可直接浏览；自定义分类请在桌面版保存。' : !workspace.directory ? '绑定当前工作区文件夹后，即可建立并保存我的素材分类。' : !bridge.categories ? '请升级桌面应用后使用自定义素材分类。' : categoryError ? '分类读取未完成，请在右侧重新读取；素材文件未改动。' : '正在读取当前工作区的素材分类…';
   async function saveCategory(input: { id?: string; name: string }) {
     if (!bridge?.saveCategory || !canManageCategories || busy) return;
     const id = workspaceId; pending.current = 'category-save'; setBusy(pending.current);
@@ -264,7 +264,7 @@ export function Assets(props: PageProps) {
     <div className="asset-library-source-tabs" role="tablist" aria-label="素材来源"><button role="tab" aria-selected={tab === 'builtin'} className={tab === 'builtin' ? 'active' : ''} disabled={!!busy} onClick={() => setTab('builtin')}>内置素材<span>{BUILTIN_ASSETS.length}</span></button><button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} disabled={!!busy} onClick={() => setTab('mine')}>我的素材</button></div>
     {selectedCategoryName && <div className="asset-library-active-category"><span>我的分类：<strong>{selectedCategoryName}</strong></span><button onClick={() => setSelectedCategory('all')}>查看全部</button></div>}
     {tab === 'builtin' ? <BuiltinAssetBrowser onUse={asset => { if (!targetId || !bridge?.attachBuiltin || !workspace.directory) { setSelectedBuiltin(asset); setPreviewError(''); return; } void builtinAction('attach', asset); }} busy={!!busy} assets={builtinItems} collection={builtinCollection} onCollection={setBuiltinCollection} onShowAll={() => { setSelectedCategory('all'); setBuiltinCollection('all'); }} onPick={asset => { setPreviewError(''); setSelectedBuiltin(asset); }} /> : <>
-    {!bridge && <div className="inline-notice">请在桌面版使用“我的素材”。内置素材可直接浏览，复制与文件保存需要 Windows 桌面版。</div>}
+    {!bridge && <div className="inline-notice">请在桌面版使用“我的素材”。内置素材可直接浏览，复制与文件保存需要桌面版。</div>}
     {bridge && !workspace.directory && <div className="inline-notice">先为当前工作区选择本地文件夹。<button className="btn btn-secondary" onClick={() => { void props.onBindWorkspace?.(); }}>设置工作区文件夹</button></div>}
     {bridge && workspace.directory && <>
     <div className="op-project-toolbar"><div className="segmented">{[['all', '全部素材'], ['image', '图片'], ['favorite', '我的收藏'], ['trash', '素材回收站']].map(([value, label]) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}</div><label className="op-search"><Search size={16} /><input aria-label="搜索素材" placeholder="搜索文件名或类型" value={query} onChange={event => setQuery(event.target.value)} /></label></div>

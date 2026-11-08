@@ -1,26 +1,36 @@
 export interface DialogCrumb { name: string; path: string; }
+const windowsPath = (value: string) => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(value);
+export function dialogPathsEqual(left: string, right: string): boolean {
+  if (windowsPath(left) !== windowsPath(right)) return false;
+  const normalize = windowsPath(left)
+    ? (value: string) => value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()
+    : (value: string) => value.replace(/\/+$/, '') || '/';
+  return normalize(left) === normalize(right);
+}
+export function dialogBasename(value: string): string {
+  return value.split(windowsPath(value) ? /[\\/]/ : /\//).filter(Boolean).at(-1) || '';
+}
 export function dialogBreadcrumbs(value: string): DialogCrumb[] {
-  const separator = value.includes('\\') ? '\\' : '/';
+  const windows = windowsPath(value), separator = windows && value.includes('\\') ? '\\' : '/';
   const drive = value.match(/^[A-Za-z]:[\\/]/), share = value.match(/^\\\\[^\\]+\\[^\\]+/);
   const root = drive ? drive[0] : share ? `${share[0]}\\` : value.startsWith('/') ? '/' : '';
   if (!root) return value ? [{ name: value, path: value }] : [];
   let path = root; const result = [{ name: root, path: root }];
-  for (const name of value.slice(root.length).split(/[\\/]+/).filter(Boolean)) { path = path.replace(/[\\/]+$/, '') + separator + name; result.push({ name, path }); }
+  for (const name of value.slice(root.length).split(windows ? /[\\/]+/ : /\/+/).filter(Boolean)) { path = path.replace(windows ? /[\\/]+$/ : /\/+$/, '') + separator + name; result.push({ name, path }); }
   return result;
 }
 export function joinDialogPath(directory: string, name: string): string {
   if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(name)) return name;
-  return directory.replace(/[\\/]+$/, '') + (directory.includes('\\') ? '\\' : '/') + name;
+  const windows = windowsPath(directory);
+  return directory.replace(windows ? /[\\/]+$/ : /\/+$/, '') + (windows && directory.includes('\\') ? '\\' : '/') + name;
 }
 export function canCreateOriginalFolder(directory: string, original?: string): boolean {
   if (!original) return true;
-  const normalize = (value: string) => value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
   const crumbs = dialogBreadcrumbs(original), parent = crumbs.at(-2)?.path;
-  return !!parent && normalize(parent) === normalize(directory);
+  return !!parent && dialogPathsEqual(parent, directory);
 }
 export function isWorkspaceRootTarget(target: string, root?: string): boolean {
-  const normalize = (value: string) => value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
-  return !!root && normalize(target) === normalize(root);
+  return !!root && dialogPathsEqual(target, root);
 }
 export function dialogFileSize(bytes?: number): string {
   if (bytes === undefined) return '—';

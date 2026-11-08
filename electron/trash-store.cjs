@@ -1,5 +1,6 @@
 const defaultFileSystem = require('node:fs/promises');
 const path = require('node:path');
+const { resolveMacSystemPath } = require('./macos-system-paths.cjs');
 const { randomUUID } = require('node:crypto');
 
 const JOURNAL_NAME = 'artifact-move-v1.json';
@@ -22,7 +23,7 @@ function createTrashStore({ directory, fileSystem = defaultFileSystem, maxBytes 
   };
 
   async function ensureDirectory(directoryName, create) {
-    const absolute = path.resolve(directoryName);
+    const absolute = await resolveMacSystemPath(fs, directoryName);
     const drive = path.parse(absolute).root;
     let current = drive;
     for (const part of absolute.slice(drive.length).split(path.sep).filter(Boolean)) {

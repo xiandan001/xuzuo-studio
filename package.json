@@ -11,7 +11,13 @@
     "preview": "node scripts/run-ui.mjs preview",
     "desktop": "node scripts/run-ui.mjs desktop",
     "test": "node scripts/run-ui.mjs test",
-    "package": "node scripts/run-ui.mjs package"
+    "package": "node scripts/run-ui.mjs package",
+    "package:mac": "node scripts/run-ui.mjs package:mac",
+    "package:mac:dir": "node scripts/run-ui.mjs package:mac:dir",
+    "verify:mac": "node scripts/verify-macos-package.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -31,7 +37,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "electron": "^45.1.0",
+    "electron": "45.2.3",
     "electron-builder": "^26.0.0",
     "jsdom": "31.0.0",
     "typescript": "^5.9.0",
@@ -49,10 +55,6 @@
     ],
     "extraResources": [
       {
-        "from": "work/setup-runtime/xuzuo-maintenance.exe",
-        "to": "xuzuo-maintenance.exe"
-      },
-      {
         "from": "work/animation-runtime/xuzuo-animation",
         "to": "animation-tool"
       }
@@ -64,7 +66,9 @@
       "!assets/setup-window.xaml",
       "package.json",
       "!electron/credential-self-test.cjs",
-      "!electron/live-self-test.cjs"
+      "!electron/live-self-test.cjs",
+      "!**/.DS_Store",
+      "!assets/windows-drive-info.exe"
     ],
     "win": {
       "target": [
@@ -76,7 +80,50 @@
         }
       ],
       "icon": "assets/app-icon.ico",
-      "signExecutable": false
+      "signExecutable": false,
+      "extraResources": [
+        {
+          "from": "work/setup-runtime/xuzuo-maintenance.exe",
+          "to": "xuzuo-maintenance.exe"
+        }
+      ],
+      "files": [
+        "assets/windows-drive-info.exe"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "assets/app-icon.icns",
+      "minimumSystemVersion": "13.0",
+      "artifactName": "Xuzuo-Studio-${version}-mac-${arch}.${ext}",
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "序作工作台需要读取和保存您选择的工作区与文档。",
+        "NSDesktopFolderUsageDescription": "序作工作台需要读取和保存您选择的桌面文件。",
+        "NSDownloadsFolderUsageDescription": "序作工作台需要导入和保存您选择的下载文件。",
+        "NSRemovableVolumesUsageDescription": "序作工作台需要访问您选择的移动磁盘工作区。",
+        "NSNetworkVolumesUsageDescription": "序作工作台需要访问您选择的网络磁盘工作区。"
+      },
+      "identity": "-"
+    },
+    "dmg": {
+      "title": "序作工作台 ${version}",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   },
   "overrides": {

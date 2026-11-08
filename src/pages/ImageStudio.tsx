@@ -318,7 +318,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     let current = true;
     setReferencePreview(undefined); setReferenceError('');
     if (!draft.references.length || staleAnimationReference) { setCheckingReferences(false); return; }
-    if (!runtimeAvailable) { setCheckingReferences(false); setReferenceError('参考图保存在桌面应用中，请打开 EXE 核对，或重新导入、移除参考图。'); return; }
+    if (!runtimeAvailable) { setCheckingReferences(false); setReferenceError('参考图保存在桌面应用中，请打开桌面应用核对，或重新导入、移除参考图。'); return; }
     setCheckingReferences(true);
     void (async () => {
       try {
@@ -586,7 +586,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     else if (target === 'quantity') { layout.openPanel('format'); requestAnimationFrame(() => { const field = workbench.current?.querySelector<HTMLInputElement>('input[aria-label="图像生成数量"]'); field?.focus(); field?.select(); }); }
     else if (target === 'credential') { layout.openPanel('ai'); requestAnimationFrame(() => focusStudioField(workbench.current, '[aria-label="图片调用Key"]', true)); }
     else if (target === 'task') props.navigate('activity', project.id);
-    else if (target === 'references') { if (runtimeAvailable) void importReferences(); else setActionError('请在 Windows 桌面应用中导入参考图片。'); }
+    else if (target === 'references') { if (runtimeAvailable) void importReferences(); else setActionError('请在桌面应用中导入参考图片。'); }
     else { layout.openPanel('ai'); requestAnimationFrame(() => { const field = workbench.current?.querySelector<HTMLElement>(target === 'request' ? '.ig-prompt' : '[role="combobox"][aria-label="图片实际使用模型"]'); field?.focus(); if (target === 'model') field?.click(); }); }
   }
   const actionStatus = <StudioActionStatus id={actionStatusId} issue={generationIssue || (imageKeyIssue ? { message: imageKeyIssue, action: '选择调用账户', target: 'credential' } : undefined)} error={actionError} note={reviewing ? '继续制作会保留已有结果与费用。' : undefined} onFix={fixGeneration} />;

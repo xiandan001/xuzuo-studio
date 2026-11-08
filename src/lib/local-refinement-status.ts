@@ -1,6 +1,6 @@
 export interface LocalRefinementIssue { message: string; action?: 'models' | 'credential'; }
 export function localRefinementIssue({ available, disabled, running, instruction, model, credential, credentialCount, targetCount }: { available: boolean; disabled: boolean; running: boolean; instruction: string; model: boolean; credential: boolean; credentialCount: number; targetCount: number }): LocalRefinementIssue | undefined {
-  if (!available) return { message: '真实 AI 精修需要桌面执行引擎；请在新版 Windows 应用中打开此项目。' };
+  if (!available) return { message: '真实 AI 精修需要桌面执行引擎；请在新版桌面应用中打开此项目。' };
   if (running) return { message: '正在生成修改建议。完成后先预览差异，原稿不会自动替换。' };
   if (disabled) return { message: '当前项目正在读取、保存或执行任务，请等待完成后再精修。' };
   if (!model) return { message: '尚未选择可用的文本模型，已填写的修改要求会保留。', action: 'models' };

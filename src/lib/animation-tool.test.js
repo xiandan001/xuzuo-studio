@@ -53,7 +53,7 @@ async function fixture(options = {}) {
 afterEach(async () => { for (const f of owned.splice(0)) { f.hold = false; f.releases.splice(0).forEach(resolve => resolve()); await f.tool.shutdown(); const directory = await fs.realpath(f.directory); expect(path.dirname(directory)).toBe(await fs.realpath(os.tmpdir())); expect(path.basename(directory)).toMatch(/^xuzuo-animation-node-/); await fs.rm(directory, { recursive: true, force: true }); } vi.restoreAllMocks(); });
 
 describe('offline animation process adapter (synthetic helper protocol, no Python/GUI/model)', () => {
-  it('accepts a same-layer DOS short alias only after canonical component and file identity checks', async () => {
+  it.skipIf(process.platform !== 'win32')('accepts a same-layer DOS short alias only after canonical component and file identity checks', async () => {
     let shortSource;
     const f = await fixture(async value => {
       const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');

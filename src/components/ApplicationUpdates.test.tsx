@@ -27,17 +27,30 @@ function inputIn(node: ReactNode): ReactElement<InputHTMLAttributes<HTMLInputEle
   if (!isValidElement<{ children?: ReactNode }>(node)) return undefined;
   return node.type === 'input' ? node as ReactElement<InputHTMLAttributes<HTMLInputElement>> : inputIn(node.props.children);
 }
-function fixture(initial: Promise<AppUpdateStatus> = Promise.resolve(status())) {
+function buttonIn(node: ReactNode): ReactElement<{ onClick: () => void; children?: ReactNode }> | undefined {
+  if (Array.isArray(node)) return node.map(buttonIn).find(Boolean);
+  if (!isValidElement<{ onClick: () => void; children?: ReactNode }>(node)) return undefined;
+  return node.type === 'button' ? node : buttonIn(node.props.children);
+}
+function fixture(initial: Promise<AppUpdateStatus> = Promise.resolve(status()), platform = 'win32') {
   hooks.reset(); let listener: ((value: AppUpdateStatus) => void) | undefined, tree: ReactElement;
-  const unsubscribe = vi.fn(), bridge: AppUpdateBridge = { status: vi.fn(() => initial), setEnabled: vi.fn(async enabled => status({ enabled, phase: enabled ? 'idle' : 'disabled' })), onStatus: vi.fn(action => { listener = action; return unsubscribe; }) };
-  vi.stubGlobal('window', { desktop: { updates: bridge } });
+  const unsubscribe = vi.fn(), bridge: AppUpdateBridge = { openDownloads: vi.fn(async () => undefined), status: vi.fn(() => initial), setEnabled: vi.fn(async enabled => status({ enabled, phase: enabled ? 'idle' : 'disabled' })), onStatus: vi.fn(action => { listener = action; return unsubscribe; }) };
+  vi.stubGlobal('window', { desktop: { updates: bridge, platform } });
   const render = () => { hooks.render(); tree = ApplicationUpdates(); return renderToStaticMarkup(tree); };
   render(); hooks.mount();
-  return { bridge, unsubscribe, render, emit: (value: AppUpdateStatus) => listener!(value), change: (checked: boolean) => { render(); inputIn(tree)!.props.onChange!({ currentTarget: { checked } } as ChangeEvent<HTMLInputElement>); } };
+  return { bridge, unsubscribe, render, downloads: () => { render(); buttonIn(tree)!.props.onClick(); }, emit: (value: AppUpdateStatus) => listener!(value), change: (checked: boolean) => { render(); inputIn(tree)!.props.onChange!({ currentTarget: { checked } } as ChangeEvent<HTMLInputElement>); } };
 }
 afterEach(() => { hooks.unmount(); vi.unstubAllGlobals(); });
 
 describe('应用自动更新设置', () => {
+  it('macOS 使用 DMG 更新引导，不展示 Windows 自动更新承诺或开关', async () => {
+    const f = fixture(Promise.resolve(status({ available: false, enabled: false, phase: 'unavailable', message: '使用新版 DMG 替换应用。' })), 'darwin');
+    await flush(); const html = f.render();
+    expect(html).toContain('DMG'); expect(html).toContain('GitHub Releases'); expect(html).toContain('Finder');
+    expect(html).not.toContain('type="checkbox"'); expect(html).not.toContain('默认开启'); expect(html).not.toContain('每 2 小时');
+    expect(html).toContain('打开下载页面'); f.downloads(); await flush();
+    expect(f.bridge.openDownloads).toHaveBeenCalledOnce(); expect(f.bridge.setEnabled).not.toHaveBeenCalled();
+  });
   it('使用具名原生勾选框，说明全局即时保存和两小时检查', async () => {
     const f = fixture(); await flush(); const html = f.render();
     expect(html).toContain('type="checkbox"'); expect(html).toContain('自动更新'); expect(html).toContain('checked=""');

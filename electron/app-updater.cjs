@@ -153,7 +153,7 @@ function createAppUpdater({ app, maintenance, fetchImpl = globalThis.fetch, powe
     if (started) return started;
     started = Promise.resolve().then(async () => {
       try {
-        if (platform !== 'win32' || !app.isPackaged) { update({ message: '自动更新仅适用于 Windows 正式安装版。' }); return status(); }
+        if (platform !== 'win32' || !app.isPackaged) { update({ enabled: false, message: platform === 'darwin' ? 'macOS 请下载与本机架构一致的新版 DMG，退出应用后替换“应用程序”中的序作工作台。工作区和本地资料会保留。' : '自动更新仅适用于 Windows 正式安装版。' }); return status(); }
         const installation = await maintenance.status();
         if (!installation.available) { update({ message: installation.reason || '当前未检测到有效安装登记。' }); return status(); }
         await fs.mkdir(directory, { recursive: true }); const stat = await fs.lstat(directory);

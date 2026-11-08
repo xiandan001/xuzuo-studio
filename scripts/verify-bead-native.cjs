@@ -18,8 +18,11 @@ function pdfBodyText(items, view) {
   const minimum = view[1] + 10 * 72 / 25.4, maximum = view[3] - 30 * 72 / 25.4 + 0.5;
   return items.filter(item => typeof item.str === 'string' && Number.isFinite(item.transform?.[5]) && item.transform[5] >= minimum && item.transform[5] <= maximum).map(item => item.str).join(' ');
 }
+// macOS CJK fonts can encode a Han character as its Unicode-compatible radical in ToUnicode.
+// Compare canonical text while retaining every coordinate digit and ordered field.
+const pdfComparableText = value => value.normalize('NFKC').replace(/\s/g, '');
 function pdfTextChecks(bodyPages, expected) {
-  const compact = value => value.replace(/\s/g, ''), body = compact(bodyPages.join('\n'));
+  const compact = pdfComparableText, body = compact(bodyPages.join('\n'));
   return Object.fromEntries(Object.entries(expected).map(([field, value]) => [field, body.includes(compact(value))]));
 }
 function hotpinkPixelCount(pixels) {
@@ -293,11 +296,16 @@ async function inspectPdfs(directory, output, report, runtime) {
     try {
       assert.equal(pdf.numPages, entry.plannedPages); const pageTexts = [], bodyPages = [];
       for (let number = 1; number <= pdf.numPages; number++) { const page = await pdf.getPage(number), content = await page.getTextContent(); pageTexts.push(content.items.filter(item => typeof item.str === 'string').map(item => item.str).join(' ')); bodyPages.push(pdfBodyText(content.items, page.view)); page.cleanup(); }
-      const compact = text => text.replace(/\s/g, '');
+      const compact = pdfComparableText;
       entry.textChecks = pdfTextChecks(bodyPages, report.expectedText); entry.missingFields = Object.keys(entry.textChecks).filter(field => !entry.textChecks[field]);
       if (entry.missingFields.length) entry.bodyTextDiagnostics = bodyPages.map((text, index) => ({ page: index + 1, text }));
       assert.equal(entry.missingFields.length, 0, `${entry.name} PDF lost complete ordered body fields: ${entry.missingFields.join(', ')}`);
-      if (entry.chartPages === 9) assert.ok(compact(pageTexts[8]).includes('列61–61·行81–81'), 'The last chart tile lost global row/column coordinates');
+      if (entry.chartPages === 9) {
+        const expected = '列61–61·行81–81';
+        entry.lastTileCoordinates = { expected, extracted: pageTexts[8], normalized: compact(pageTexts[8]) };
+        assert.ok(entry.lastTileCoordinates.normalized.includes(compact(expected)), 'The last chart tile lost global row/column coordinates');
+        entry.lastTileCoordinates.verified = true;
+      }
       entry.textVerified = true; entry.pdfjsPages = pdf.numPages; entry.output = path.join(output, entry.file); entry.renderedPages = [];
       if (entry.chartPages === 9) for (const number of [1, 9, 10]) {
         const page = await pdf.getPage(number), viewport = page.getViewport({ scale: 1.4 }), surface = canvas.createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));

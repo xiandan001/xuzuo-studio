@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import time
+from safe_paths import regular_path
 
 
 def background_priority():
@@ -46,11 +47,7 @@ def peak_memory_bytes():
 
 
 def output_folder(value):
-    folder = Path(value)
-    if not folder.is_absolute() or folder.is_symlink():
-        raise ValueError('输出位置须为独立的本机绝对目录。')
-    if any(parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)() for parent in folder.parents):
-        raise ValueError('输出目录不能使用符号链接或重定向位置。')
+    folder = regular_path(value)
     if not folder.is_dir() or any(folder.iterdir()):
         raise ValueError('请使用专属空输出目录，工具不会覆盖已有产物。')
     return folder.resolve(strict=True)

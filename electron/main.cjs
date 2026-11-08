@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, safeStorage, shell, net, nativeImage, nativeTheme, screen, powerMonitor } = require('electron');
+const { app, BrowserWindow, WebContentsView, webContents, session, ipcMain, Menu, safeStorage, shell, net, nativeImage, nativeTheme, screen, powerMonitor } = require('electron');
 const path = require('node:path');
 const { createImageThumbnails } = require('./image-thumbnails.cjs');
 const { registerOfficePreviewHandlers } = require('./office-preview-handlers.cjs');
@@ -37,6 +37,7 @@ const { createBuiltinAssets } = require('./builtin-assets.cjs');
 const { createAssetCategories } = require('./asset-categories.cjs');
 const { createApplicationExit } = require('./application-exit.cjs');
 const { readValidationOwner, startValidationLifecycle } = require('./validation-lifecycle.cjs');
+const { mainWindowPlatformOptions, applicationMenu, animationToolOptions } = require('./desktop-platform.cjs');
 
 let mainWindow;
 let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs, appUpdater, automationCenter;
@@ -158,7 +159,7 @@ function registerRuntime(credentials) {
   const marketBrowser = require('./bead-market-browser.cjs').createBeadMarketBrowser({ app, BrowserWindow, WebContentsView, ipcMain, session, getWindow: () => mainWindow, onCapture: input => beadMarket.acceptCapture(input), onLoginConfirmed: input => marketSessions.confirmLogin(input), appearance: () => ({ dark: (studioDialogs.getAppearance?.()?.mode || (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')) === 'dark' }) });
   marketSessions = require('./bead-market-sessions.cjs').createBeadMarketSessions({ directory: app.getPath('userData'), browser: marketBrowser, onChanged: () => { try { mainWindow?.webContents.send('bead-market:sessions-changed'); } catch { /* Session metadata survives a closed renderer. */ } } });
   beadMarket.setBrowser(marketBrowser);
-  const animationTool = require('./animation-tool.cjs').createAnimationTool({ directory: app.getPath('userData'), ...(app.isPackaged ? { executablePath: path.join(process.resourcesPath, 'animation-tool', 'xuzuo-animation.exe') } : { developmentPython: process.env.XUZUO_ANIMATION_PYTHON || 'python' }) });
+  const animationTool = require('./animation-tool.cjs').createAnimationTool({ directory: app.getPath('userData'), ...animationToolOptions({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }) });
   animationService = require('./animation-service.cjs').createAnimationService({ ...businessOptions, directory: app.getPath('userData'), store: animationStore, tool: animationTool, onChanged: value => { try { mainWindow?.webContents.send('animation:changed', value); } catch { /* The renderer may already be closed. */ } }, onExport: async input => { const location = await editorProject(input.projectId); await liveEngine.recordLocalExport({ ...input, workspaceId: location.workspaceId, name: input.document.title, kind: 'image' }); try { mainWindow?.webContents.send('runtime:project-files-changed', { projectId: input.projectId }); } catch { /* Completed artifacts remain registered. */ } } });
   const exportWallpaper4K = require('./local-wallpaper-export.cjs').createLocalWallpaperExporter({ artifactStore, fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.artifact.name, kind: 'image', artifacts: [input.artifact], wallpaperExport: { sourceArtifactId: input.sourceArtifactId, sourceSha256: input.sourceSha256, target: input.target } }); } });
   automationCenter = createAutomationCenter({ directory: app.getPath('userData'), liveEngine, onChanged: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automation:changed'); }, assertAdmission: async project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }), control: async input => {
@@ -474,10 +475,10 @@ function createWindow() {
     minHeight: 760,
     show: false,
     skipTaskbar: Boolean(validationOwner && !visibleValidation),
-    frame: false,
+    ...mainWindowPlatformOptions(),
     backgroundColor: '#f5f6fa',
     title: '序作工作台',
-    icon: path.join(__dirname, '..', 'assets', 'app-icon.ico'),
+    icon: path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -493,7 +494,8 @@ function createWindow() {
   studioDialogs.installOwner(mainWindow);
   mainWindow.on('focus', () => { void automaticBilling?.trigger(); });
   mainWindow.on('restore', () => { void automaticBilling?.trigger(); });
-  Menu.setApplicationMenu(null);
+  const menu = applicationMenu({ app, getWindow: () => BrowserWindow.getFocusedWindow() || mainWindow, getMainWebContents: () => mainWindow?.webContents, getFocusedWebContents: () => webContents.getFocusedWebContents(), requestExit: () => applicationExit.request() });
+  Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== applicationUrl) event.preventDefault();
@@ -512,6 +514,7 @@ app.whenReady().then(() => {
   appUpdater = createAppUpdater({ app, maintenance, fetchImpl: (url, options) => net.fetch(url, options), powerMonitor, platform: validationRequested ? 'validation' : process.platform, onStatus: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:status', state); } });
   const updatesReady = appUpdater.start();
   ipcMain.handle('updates:status', async event => { if (!trustedSender(event)) throw new Error('此页面无权读取更新状态。'); await updatesReady; return appUpdater.status(); });
+  ipcMain.handle('updates:open-downloads', event => { if (!trustedSender(event) || runtimeClosing) throw new Error('当前页面无法打开下载页面。'); return shell.openExternal('https://github.com/xiandan001/xuzuo-studio/releases'); });
   ipcMain.handle('updates:set-enabled', async (event, enabled) => {
     if (!trustedSender(event) || runtimeClosing || typeof enabled !== 'boolean') throw new Error('应用正在退出或更新设置无效。');
     await updatesReady;
@@ -521,6 +524,7 @@ app.whenReady().then(() => {
   ipcMain.handle('maintenance:status', event => { if (!trustedSender(event)) throw new Error('此页面无权读取应用维护状态。'); return maintenance.status(); });
   ipcMain.handle('maintenance:uninstall', event => { if (!trustedSender(event) || runtimeClosing) throw new Error('应用正在退出或当前页面无权启动维护。'); return maintenance.openUninstall(); });
   ipcMain.on('window:minimize', event => { if (trustedSender(event)) mainWindow.minimize(); });
+  ipcMain.on('window:native-edit', (event, command) => { if (trustedSender(event) && ['undo', 'redo'].includes(command)) event.sender[command](); });
   ipcMain.on('window:maximize', event => { if (trustedSender(event)) mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); });
   ipcMain.on('window:close', event => { if (trustedSender(event)) mainWindow.close(); });
   createWindow();

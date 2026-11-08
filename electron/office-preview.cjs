@@ -1,4 +1,5 @@
 const fsDefault = require('node:fs/promises'), path = require('node:path');
+const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createHash, randomUUID } = require('node:crypto');
@@ -26,15 +27,22 @@ function runRenderer(filename, args, { cwd, signal, timeout = 90000 }) {
   });
 }
 
-function createOfficePreview({ directory, artifactStore, fileSystem = fsDefault, loadModule = require, rendererCandidates, execute = runRenderer }) {
+function createOfficePreview({ directory, artifactStore, fileSystem = fsDefault, loadModule = require, rendererCandidates, execute = runRenderer, probeRenderer = executeFile, platform = process.platform }) {
   const fs = fileSystem, root = path.resolve(directory), active = new Map(), rendered = new Map();
   const config = path.join(root, 'renderer-v1.json'); let queue = Promise.resolve(), configured;
   const remember = result => { const { pdfBase64: _pdfBase64, ...metadata } = result; rendered.set(result.previewId, metadata); };
-  const defaults = () => rendererCandidates || [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(Boolean).flatMap(parent => [path.join(parent, 'LibreOffice/program/soffice.com'), path.join(parent, 'LibreOffice/program/soffice.exe')]);
-  async function inspectRenderer(filename) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename) || !/^soffice\.(?:com|exe)$/i.test(path.basename(filename))) throw new Error('请选择 LibreOffice 的 program/soffice.com 或 soffice.exe。');
+  const defaults = () => rendererCandidates || (platform === 'darwin'
+    ? ['/Applications/LibreOffice.app/Contents/MacOS/soffice', path.join(os.homedir(), 'Applications/LibreOffice.app/Contents/MacOS/soffice')]
+    : platform === 'win32' ? [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(Boolean).flatMap(parent => [path.join(parent, 'LibreOffice/program/soffice.com'), path.join(parent, 'LibreOffice/program/soffice.exe')])
+    : ['/usr/lib/libreoffice/program/soffice', '/usr/lib64/libreoffice/program/soffice']);
+  async function inspectRenderer(selected) {
+    if (typeof selected !== 'string' || !path.isAbsolute(selected)) throw new Error('请选择已安装的 LibreOffice 渲染器。');
+    const filename = platform === 'darwin' && /\.app$/i.test(selected) ? path.join(selected, 'Contents/MacOS/soffice') : selected;
+    const validName = platform === 'win32' ? /^soffice\.(?:com|exe)$/i.test(path.basename(filename)) : path.basename(filename) === 'soffice';
+    if (!validName) throw new Error(platform === 'win32' ? '请选择 LibreOffice 的 program/soffice.com 或 soffice.exe。' : platform === 'darwin' ? '请选择 LibreOffice.app 或其中的 Contents/MacOS/soffice。' : '请选择 LibreOffice 的 soffice 启动程序。');
     const stat = await checkedFile(fs, filename); if (!stat.size || stat.size > 20 * 1024 * 1024) throw new Error('LibreOffice 启动文件大小无效。');
-    const result = await executeFile(filename, ['--headless', '--version'], { windowsHide: true, timeout: 10000, maxBuffer: 8192 });
+    if (platform !== 'win32' && !(stat.mode & 0o111)) throw new Error('LibreOffice 启动文件没有执行权限，请重新安装 LibreOffice。');
+    const result = await probeRenderer(filename, ['--headless', '--version'], { windowsHide: true, timeout: 10000, maxBuffer: 8192 });
     const version = (result.stdout || '').trim(); if (!/^LibreOffice\s+\d[\w. ]*/.test(version)) throw new Error('所选程序不是可识别的 LibreOffice。');
     return { name: 'LibreOffice', version: version.slice(0, 160), path: filename, sha256: digest(await fs.readFile(filename)) };
   }
@@ -45,7 +53,7 @@ function createOfficePreview({ directory, artifactStore, fileSystem = fsDefault,
     }
     return { available: false, reason: '未检测到本地 LibreOffice。选择已安装的渲染器后，可预览真实 Office 文件的分页与图片。', downloadUrl };
   }
-  async function configure(filename) { const renderer = await inspectRenderer(filename); await checkedDirectory(fs, root, true); await atomicJson(fs, config, { version: 1, path: filename, sha256: renderer.sha256 }); configured = { version: 1, path: filename, sha256: renderer.sha256 }; return { available: true, renderer, downloadUrl }; }
+  async function configure(filename) { const renderer = await inspectRenderer(filename); await checkedDirectory(fs, root, true); await atomicJson(fs, config, { version: 1, path: renderer.path, sha256: renderer.sha256 }); configured = { version: 1, path: renderer.path, sha256: renderer.sha256 }; return { available: true, renderer, downloadUrl }; }
   async function cacheLocation(key) { const directory = path.join(root, 'cache'); await checkedDirectory(fs, directory, true); return { pdf: path.join(directory, key + '.pdf'), metadata: path.join(directory, key + '.json') }; }
   async function readCache(location, key, expected) {
     try { await checkedFile(fs, location.metadata); const meta = JSON.parse(await fs.readFile(location.metadata, 'utf8')); const stat = await checkedFile(fs, location.pdf); if (meta.version !== 1 || meta.previewId !== key || stat.size > 20 * 1024 * 1024 || stat.size !== meta.pdfBytes) return;

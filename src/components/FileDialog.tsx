@@ -1,8 +1,10 @@
+import { shortcutLabel } from '../lib/platform';
+import { isTextEditingTarget } from '../lib/edit-history';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUp, ChevronRight, File, FileText, Folder, FolderPlus, HardDrive, Home, LoaderCircle, RefreshCw, Search, X, AlertTriangle } from 'lucide-react';
 import type { CustomDialogRequest, DialogEntry, FileDialogSeed, StudioDialogBridge } from '../dialog-types';
 import { useFileDialog } from '../hooks/useFileDialog';
-import { canCreateOriginalFolder, dialogBreadcrumbs, dialogFileSize, isWorkspaceRootTarget } from '../lib/dialog-paths';
+import { canCreateOriginalFolder, dialogBasename, dialogBreadcrumbs, dialogFileSize, dialogPathsEqual, isWorkspaceRootTarget } from '../lib/dialog-paths';
 import { Select, isSelectInteraction } from './Select';
 
 export function FileDialog({ config, bridge, onCancel }: { config: CustomDialogRequest & { seed: FileDialogSeed }; bridge: StudioDialogBridge; onCancel: () => void }) {
@@ -22,7 +24,7 @@ export function FileDialog({ config, bridge, onCancel }: { config: CustomDialogR
   useEffect(() => {
     cancel.current?.focus();
     const keydown = (event: KeyboardEvent) => {
-      if (isSelectInteraction(event)) return;
+      if (isSelectInteraction(event) || event.isComposing || event.keyCode === 229) return;
       const value = state.current;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l' && !value.explorer.overwrite && !value.explorer.busy) { event.preventDefault(); setEditingPath(true); return; }
       if (!value.explorer.overwrite && event.key === 'Tab') {
@@ -40,13 +42,18 @@ export function FileDialog({ config, bridge, onCancel }: { config: CustomDialogR
         else if (value.creating) setCreating(false);
         else value.onCancel();
       }
+      if (value.explorer.overwrite) return;
       if (event.altKey && event.key === 'ArrowLeft' && !value.explorer.busy) { event.preventDefault(); value.explorer.back(); }
       if (event.altKey && event.key === 'ArrowUp' && !value.explorer.busy) { event.preventDefault(); value.explorer.up(); }
+      if (event.metaKey && !event.altKey && !isTextEditingTarget(event.target) && !value.explorer.busy && !value.creating) {
+        if (event.key === 'ArrowUp') { event.preventDefault(); value.explorer.up(); }
+        if (event.key === '[') { event.preventDefault(); value.explorer.back(); }
+      }
     };
     window.addEventListener('keydown', keydown, true); return () => window.removeEventListener('keydown', keydown, true);
   }, [seed.path]);
   const allCrumbs = dialogBreadcrumbs(explorer.listing?.path || seed.path);
-  const scopeStart = seed.allowedRoot ? allCrumbs.findIndex(crumb => crumb.path.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase() === seed.allowedRoot!.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()) : 0;
+  const scopeStart = seed.allowedRoot ? allCrumbs.findIndex(crumb => dialogPathsEqual(crumb.path, seed.allowedRoot!)) : 0;
   const crumbs = scopeStart >= 0 ? allCrumbs.slice(scopeStart) : allCrumbs;
   const allowed = filter === 'all' ? undefined : seed.filters[Number(filter)]?.extensions.map(value => value.toLowerCase());
   const entries = explorer.listing?.entries.filter(entry => entry.kind !== 'file' || !allowed || allowed.includes('*') || allowed.includes(entry.name.split('.').at(-1)?.toLowerCase() || '')) || [];
@@ -59,7 +66,7 @@ export function FileDialog({ config, bridge, onCancel }: { config: CustomDialogR
   const projectEmptyHint = creating ? '输入项目文件夹名称，点击上方“创建并继续”。' : '点击下方“新建项目文件夹并继续”，为本次作品建立独立文件夹。';
   function beginNewFolder() {
     if (!canCreateHere || disabled) return;
-    setFolderName(seed.exactPath?.split(/[\\/]/).filter(Boolean).at(-1) || (projectPicker ? '新项目' : '新建文件夹')); setCreating(true); explorer.setError('');
+    setFolderName((seed.exactPath ? dialogBasename(seed.exactPath) : undefined) || (projectPicker ? '新项目' : '新建文件夹')); setCreating(true); explorer.setError('');
   }
   async function submitFolder() {
     if (!canCreateHere) return;
@@ -75,7 +82,7 @@ export function FileDialog({ config, bridge, onCancel }: { config: CustomDialogR
   return <div className="file-dialog-layout">
     <div className="fd-toolbar" aria-hidden={explorer.overwrite ? true : undefined} inert={!!explorer.overwrite}>
       <div className="fd-nav"><button className="sd-icon-button" aria-label="返回上个目录" disabled={disabled || explorer.history.index < 1} onClick={explorer.back}><ArrowLeft size={18} /></button><button className="sd-icon-button" aria-label="上一级文件夹" disabled={disabled || !explorer.listing?.canGoUp} onClick={explorer.up}><ArrowUp size={18} /></button><button className="sd-icon-button" aria-label="刷新目录" title="刷新当前目录与磁盘列表" disabled={disabled || explorer.locationsLoading} onClick={explorer.reload}><RefreshCw size={17} className={explorer.busy === 'browse' || explorer.locationsLoading ? 'spin' : ''} /></button></div>
-      {editingPath ? <form className="fd-path-form" onSubmit={event => { event.preventDefault(); if (disabled) return; setEditingPath(false); explorer.navigate(path); }}><input ref={pathInput} aria-label="输入目录路径" value={path} disabled={disabled} onChange={event => setPath(event.target.value)} spellCheck={false} /><button type="submit" disabled={disabled}>前往</button></form> : <div className="fd-breadcrumbs" aria-label="目录导航">{crumbs.map((crumb, index) => <span key={crumb.path}>{index > 0 && <ChevronRight size={13} />}<button disabled={disabled} onClick={() => explorer.navigate(crumb.path)} title={crumb.path}>{crumb.name}</button></span>)}<button className="fd-edit-path" aria-label="编辑目录路径" title="输入路径 Ctrl+L" onClick={() => setEditingPath(true)} disabled={disabled}>路径</button></div>}
+      {editingPath ? <form className="fd-path-form" onSubmit={event => { event.preventDefault(); if (disabled) return; setEditingPath(false); explorer.navigate(path); }}><input ref={pathInput} aria-label="输入目录路径" value={path} disabled={disabled} onChange={event => setPath(event.target.value)} spellCheck={false} /><button type="submit" disabled={disabled}>前往</button></form> : <div className="fd-breadcrumbs" aria-label="目录导航">{crumbs.map((crumb, index) => <span key={crumb.path}>{index > 0 && <ChevronRight size={13} />}<button disabled={disabled} onClick={() => explorer.navigate(crumb.path)} title={crumb.path}>{crumb.name}</button></span>)}<button className="fd-edit-path" aria-label="编辑目录路径" title={`输入路径 ${shortcutLabel('L')}`} onClick={() => setEditingPath(true)} disabled={disabled}>路径</button></div>}
       <label className="fd-search"><Search size={17} /><input aria-label="搜索当前文件夹" placeholder="搜索当前文件夹" value={explorer.search} onChange={event => explorer.searchDirectory(event.target.value)} disabled={!!explorer.overwrite || explorer.busy === 'create' || explorer.busy === 'accept'} /><button className="sd-icon-button" aria-label="清除目录搜索" disabled={!explorer.search || disabled} onClick={() => explorer.searchDirectory('')}><X size={13} /></button></label>
     </div>
     <div className="fd-content" aria-hidden={explorer.overwrite ? true : undefined} inert={!!explorer.overwrite}>

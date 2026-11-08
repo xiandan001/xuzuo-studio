@@ -1,4 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
+ipcRenderer.on('window:edit-command', (_event, command) => {
+  if (!['undo', 'redo'].includes(command)) return;
+  const event = new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', metaKey: process.platform === 'darwin', ctrlKey: process.platform !== 'darwin', shiftKey: command === 'redo', bubbles: true, cancelable: true });
+  if ((document.activeElement || document.body).dispatchEvent(event)) ipcRenderer.send('window:native-edit', command);
+});
 let closeStateReader, lastClosingStatus;
 const pendingCloseRequests = new Set(), closingListeners = new Set();
 function replyToClose(token) {
@@ -16,6 +21,7 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 });
 
 contextBridge.exposeInMainWorld('desktop', {
+  platform: process.platform,
   animation: {
     ...Object.fromEntries(['read', 'save', 'restore', 'generate', 'refine', 'control', 'compose', 'export', 'importProject'].map(method => [method, input => ipcRenderer.invoke(`runtime:animation-${method}`, input)])),
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('animation:changed', handler); return () => ipcRenderer.removeListener('animation:changed', handler); },
@@ -61,6 +67,7 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   maintenance: { status: () => ipcRenderer.invoke('maintenance:status'), openUninstall: () => ipcRenderer.invoke('maintenance:uninstall') },
   updates: {
+    openDownloads: () => ipcRenderer.invoke('updates:open-downloads'),
     status: () => ipcRenderer.invoke('updates:status'),
     setEnabled: enabled => ipcRenderer.invoke('updates:set-enabled', enabled),
     onStatus: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('updates:status', handler); return () => ipcRenderer.removeListener('updates:status', handler); },

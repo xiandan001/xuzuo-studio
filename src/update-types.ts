@@ -10,6 +10,7 @@ export interface AppUpdateStatus {
 }
 
 export interface AppUpdateBridge {
+  openDownloads?: () => Promise<void>;
   status: () => Promise<AppUpdateStatus>;
   setEnabled: (enabled: boolean) => Promise<AppUpdateStatus>;
   onStatus: (listener: (status: AppUpdateStatus) => void) => () => void;

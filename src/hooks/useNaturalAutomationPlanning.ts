@@ -69,7 +69,7 @@ export function useNaturalAutomationPlanning(props: PageProps, store: ReturnType
   }, [record?.id, record?.status]);
   async function start(options?: NaturalAutomationPlanningStartOptions) {
     if (sending.current) return;
-    if (!bridge) { onError('请在新版 Windows 桌面应用中生成方案；浏览器预览不能调用本机密钥。'); return; }
+    if (!bridge) { onError('请在新版桌面应用中生成方案；浏览器预览不能调用本机密钥。'); return; }
     const { props, store } = current.current, draft = store.current.current;
     const input = options?.input ?? draft.input, billingProjectId = options?.billingProjectId || draft.projectId;
     const selected = naturalModelSelection(props.configuration, 'text', draft.planner);

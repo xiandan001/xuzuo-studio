@@ -13,7 +13,7 @@ async function fixture() {
   const file = path.join(resources, 'xuzuo-maintenance.exe'), contents = Buffer.from('owned executable fixture'); await fs.writeFile(file, contents);
   const receipt = { format: 1, appId: 'local.xuzuo.studio', files: [{ path: 'resources/xuzuo-maintenance.exe', bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }] };
   await fs.writeFile(path.join(resources, 'xuzuo-install-manifest.json'), JSON.stringify(receipt));
-  return { root, file, options: { app: { isPackaged: true }, executablePath: path.join(root, '序作工作台.exe'), appId: receipt.appId } };
+  return { root, file, options: { app: { isPackaged: true }, executablePath: path.join(root, '序作工作台.exe'), appId: receipt.appId, platform: 'win32' } };
 }
 it('exposes no uninstall operation for development or missing installation receipt', async () => {
   const api = createAppMaintenance({ app: { isPackaged: false }, appId: 'local.xuzuo.studio' });

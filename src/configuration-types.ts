@@ -15,7 +15,7 @@ export interface ModelPricing { unit: 'million-tokens' | 'image' | 'second' | 'r
 export interface ModelConfiguration { id: string; name: string; modelId: string; connectionId: string; capabilities: ModelCapability[]; pricing: ModelPricing; enabled: boolean; demo?: boolean; }
 export interface CredentialMetadata { id: string; name: string; connectionId: string; lastFour: string; enabled: boolean; updatedAt: string; }
 export interface CredentialInput { id?: string; name: string; connectionId: string; secret: string; }
-export interface VaultStatus { available: boolean; reason?: string; }
+export interface VaultStatus { available: boolean; requiresAuthorization?: boolean; reason?: string; }
 export interface CredentialsBridge {
   status: () => Promise<VaultStatus>;
   list: () => Promise<CredentialMetadata[]>;

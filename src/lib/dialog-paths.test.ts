@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { canCreateOriginalFolder, dialogBreadcrumbs, dialogFileSize, isWorkspaceRootTarget, joinDialogPath } from './dialog-paths';
+import { canCreateOriginalFolder, dialogBasename, dialogBreadcrumbs, dialogFileSize, dialogPathsEqual, isWorkspaceRootTarget, joinDialogPath } from './dialog-paths';
 describe('custom dialog path presentation', () => {
+  it('preserves POSIX case and literal backslashes on case-sensitive macOS volumes', () => {
+    expect(dialogPathsEqual('/Volumes/Work/客户/', '/Volumes/Work/客户')).toBe(true);
+    expect(isWorkspaceRootTarget('/Volumes/Work/客户', '/Volumes/work/客户')).toBe(false);
+    expect(canCreateOriginalFolder('/Users/Alice', '/Users/alice/项目')).toBe(false);
+    expect(canCreateOriginalFolder('/Users/alice', '/Users/alice/项目')).toBe(true);
+    expect(canCreateOriginalFolder('/', '/项目')).toBe(true);
+    expect(dialogPathsEqual('/', '///')).toBe(true);
+    expect(dialogBreadcrumbs('/Users/alice/a\\b/作品')).toEqual([
+      { name: '/', path: '/' }, { name: 'Users', path: '/Users' }, { name: 'alice', path: '/Users/alice' },
+      { name: 'a\\b', path: '/Users/alice/a\\b' }, { name: '作品', path: '/Users/alice/a\\b/作品' },
+    ]);
+    expect(joinDialogPath('/Users/alice/a\\b', '作品.json')).toBe('/Users/alice/a\\b/作品.json');
+    expect(dialogBasename('/Users/alice/a\\b')).toBe('a\\b');
+    expect(dialogBasename('C:\\Users\\alice\\项目')).toBe('项目');
+  });
   it('distinguishes the workspace target from its selected project child', () => {
     expect(isWorkspaceRootTarget('D:\\project\\shanye-001', 'd:/project/shanye-001/')).toBe(true);
     expect(isWorkspaceRootTarget('D:\\project\\shanye-001\\项目', 'D:/project/shanye-001')).toBe(false);

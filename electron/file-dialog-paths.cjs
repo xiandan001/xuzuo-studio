@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { resolveMacSystemPath } = require('./macos-system-paths.cjs');
 
 const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 function sameIdentity(left, right) {
@@ -21,7 +22,7 @@ function createDialogPathResolver(fs) {
     }
   }
   return async function resolve(value, { allowMissing = false, requireDirectory = false, validateCanonical = () => undefined, assertActive = () => undefined } = {}) {
-    const target = path.resolve(value), suffix = [];
+    const target = await resolveMacSystemPath(fs, value), suffix = [];
     let existing = target, before;
     for (;;) {
       assertActive();

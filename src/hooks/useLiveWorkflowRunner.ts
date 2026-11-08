@@ -16,7 +16,7 @@ import { createLiveStartCoordinator } from '../lib/live-start';
 import { prepareLiveStartSource } from '../lib/live-start-source';
 
 type SimulationRunner = Pick<WorkflowRunner, 'runs' | 'start' | 'pause' | 'resume' | 'cancel' | 'retry' | 'manageRun' | 'simulationStorage'>;
-const unavailable = { available: false, reason: '真实执行仅在新版 Windows EXE 中可用；浏览器可编辑配置或主动选择模拟。' };
+const unavailable = { available: false, reason: '真实执行仅在新版桌面应用中可用；浏览器可编辑配置或主动选择模拟。' };
 export function overlayArtifactMetadata(runs: WorkflowRun[], trash: ArtifactMetadata[] | undefined, updated: Record<string, ArtifactMetadata>): WorkflowRun[] {
   const recycled = new Map(trash?.map(artifact => [artifact.id, artifact]));
   return runs.map(run => ({ ...run, attempts: run.attempts.map(attempt => ({ ...attempt, artifacts: attempt.artifacts?.map(artifact => {

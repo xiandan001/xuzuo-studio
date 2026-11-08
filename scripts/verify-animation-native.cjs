@@ -24,7 +24,7 @@ function argumentsFor(values) {
     else throw Error('Unknown animation acceptance argument');
   }
   assert(!(result['tool-exe'] && result.python), 'Choose the packaged helper or development Python, not both');
-  if (!result.python) result['tool-exe'] = path.resolve(root, result['tool-exe'] || 'work/animation-runtime/xuzuo-animation/xuzuo-animation.exe');
+  if (!result.python) result['tool-exe'] = path.resolve(root, result['tool-exe'] || 'work/animation-runtime/xuzuo-animation/' + (process.platform === 'win32' ? 'xuzuo-animation.exe' : 'xuzuo-animation'));
   return result;
 }
 function dependencies() {

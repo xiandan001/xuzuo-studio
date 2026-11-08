@@ -7,17 +7,22 @@ import { createRequire } from 'node:module';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-assert.equal(process.platform, 'win32'); assert.equal(process.arch, 'x64');
+assert(['win32', 'darwin'].includes(process.platform)); assert(['x64', 'arm64'].includes(process.arch));
+const electronBinary = process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron.exe';
+function verifyBinary(bytes) {
+  const magic = bytes.subarray(0, 4).toString('hex');
+  assert(process.platform === 'win32' ? magic.startsWith('4d5a') : ['cffaedfe', 'cefaedfe', 'cafebabe', 'bebafeca'].includes(magic));
+}
 assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
 const root = await fsp.realpath(process.cwd()); assert.equal(root.toLowerCase(), (await fsp.realpath(process.env.GITHUB_WORKSPACE)).toLowerCase());
 const directory = path.join(root, 'node_modules/electron'), require = createRequire(path.join(directory, 'package.json'));
 const version = require('./package.json').version, locked = JSON.parse(await fsp.readFile(path.join(root, 'package-lock.json'), 'utf8')).packages['node_modules/electron'].version;
 assert.equal(version, locked); assert.match(version, /^\d+\.\d+\.\d+$/);
-const dist = path.join(directory, 'dist'), name = `electron-v${version}-win32-x64.zip`, expected = require('./checksums.json')[name]; assert.match(expected, /^[a-f0-9]{64}$/);
+const dist = path.join(directory, 'dist'), name = `electron-v${version}-${process.platform}-${process.arch}.zip`, expected = require('./checksums.json')[name]; assert.match(expected, /^[a-f0-9]{64}$/);
 try {
   assert.equal((await fsp.readFile(path.join(dist, 'version'), 'utf8')).trim().replace(/^v/, ''), version);
-  assert.equal((await fsp.readFile(path.join(dist, 'electron.exe'))).subarray(0, 2).toString(), 'MZ');
-  assert.equal(await fsp.readFile(path.join(directory, 'path.txt'), 'utf8'), 'electron.exe');
+  verifyBinary(await fsp.readFile(path.join(dist, electronBinary)));
+  assert.equal(await fsp.readFile(path.join(directory, 'path.txt'), 'utf8'), electronBinary);
   console.log(JSON.stringify({ reused: true, version })); process.exit(0);
 } catch { /* A fresh npm package defers the Electron binary download. */ }
 await assert.rejects(fsp.lstat(dist), { code: 'ENOENT' });
@@ -66,10 +71,10 @@ try {
 const runtime = path.join(temporary, 'runtime'); await fsp.mkdir(runtime);
 await require('@electron-internal/extract-zip').extract(archive, { dir: runtime });
 assert.equal((await fsp.readFile(path.join(runtime, 'version'), 'utf8')).trim().replace(/^v/, ''), version);
-assert.equal((await fsp.readFile(path.join(runtime, 'electron.exe'))).subarray(0, 2).toString(), 'MZ');
+verifyBinary(await fsp.readFile(path.join(runtime, electronBinary)));
 const definitions = path.join(runtime, 'electron.d.ts');
 if (await fsp.lstat(definitions).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) await fsp.rename(definitions, path.join(directory, 'electron.d.ts'));
-await fsp.rename(runtime, dist); await fsp.writeFile(path.join(directory, 'path.txt'), 'electron.exe');
+await fsp.rename(runtime, dist); await fsp.writeFile(path.join(directory, 'path.txt'), electronBinary);
 const report = { passed: true, version, officialAssetId: asset?.id, bytes, sha256: expected, downloadOrigin, checksumSource: 'locked-electron-npm-package', applicationStarted: false };
 await fsp.writeFile(path.join(root, 'work/electron-runtime-preparation.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(report));

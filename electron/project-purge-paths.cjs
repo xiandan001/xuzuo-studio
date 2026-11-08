@@ -1,11 +1,12 @@
 const path = require('node:path');
+const { resolveMacSystemPath } = require('./macos-system-paths.cjs');
 const { createHash } = require('node:crypto');
 const { key, inside } = require('./workspace-paths.cjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const identity = stat => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 
 async function ancestors(fs, target) {
-  const absolute = path.resolve(target), root = path.parse(absolute).root; let current = root;
+  const absolute = await resolveMacSystemPath(fs, target), root = path.parse(absolute).root; let current = root;
   for (const part of absolute.slice(root.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part); const stat = await fs.lstat(current);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw Error('目录包含链接、junction或非目录，未删除文件。');
@@ -37,7 +38,7 @@ async function inspectTree(fs, directory, projectId, expected) {
 async function inspectPurgeDirectory({ fs, target, metadata, protectedRoots = [], expected, quarantine = false }) {
   const workspace = metadata.workspaces.find(item => item.workspaceId === target.workspaceId), directory = path.resolve(target.directory || '');
   if (!workspace || !target.directory || !path.isAbsolute(target.directory) || key(directory) === key(path.parse(directory).root) || !inside(workspace.directory, directory) || key(workspace.directory) === key(directory)) throw Error('删除位置不是当前工作区内独立项目目录。');
-  if (path.relative(workspace.directory, directory).split(path.sep).some(part => ['.xuzuo', '.xuzuo-assets'].includes(part.toLowerCase()))) throw Error('不能删除应用内部资料区域。');
+  if (path.relative(key(workspace.directory), key(directory)).split(path.sep).some(part => ['.xuzuo', '.xuzuo-assets'].includes(part.toLowerCase()))) throw Error('不能删除应用内部资料区域。');
   if ([...protectedRoots, ...metadata.workspaces.map(item => item.directory)].some(root => inside(directory, root) || protectedRoots.includes(root) && inside(root, directory))) throw Error('删除位置涉及工作区根或应用受保护目录。');
   if ([...metadata.projects, ...metadata.locations].some(item => item.projectId !== target.projectId && (inside(directory, item.directory) || inside(item.directory, directory)))) throw Error('删除位置与其它项目或历史目录重叠。');
   let stat;

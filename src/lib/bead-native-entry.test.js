@@ -73,3 +73,12 @@ describe('native bead CLI dispatch', () => {
     expect(calls.output[0]).toContain('node scripts/verify-bead-native.cjs');
   });
 });
+
+
+it('normalizes macOS PDF compatible Han radicals while keeping exact last-tile coordinates', () => {
+  const expected = { coordinates: '列61–61·行81–81' };
+  expect(pdfTextChecks(['列 61–61 · ⾏ 81–81'], expected).coordinates).toBe(true);
+  for (const text of ['列60–61·⾏81–81', '列61–62·⾏81–81', '列61–61·⾏80–81', '列61–61·⾏81–82', '列61–61·81–81']) {
+    expect(pdfTextChecks([text], expected).coordinates).toBe(false);
+  }
+});

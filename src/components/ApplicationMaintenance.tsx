@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { LoaderCircle, Trash2 } from 'lucide-react';
+import { isMacDesktop } from '../lib/platform';
 
 export function ApplicationMaintenance() {
+  const mac = isMacDesktop();
   const [status, setStatus] = useState<{ available: boolean; reason?: string }>(), [busy, setBusy] = useState(false), [feedback, setFeedback] = useState('');
   useEffect(() => {
     let active = true; const bridge = window.desktop?.maintenance;
@@ -16,5 +18,5 @@ export function ApplicationMaintenance() {
     catch (error) { setFeedback(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '卸载窗口未能打开，请稍后重试。'); }
     finally { setBusy(false); }
   }
-  return <section className="panel op-settings-panel"><header><h2>应用安装与卸载</h2><p>卸载通过自定义维护窗口完成，保留工作区、作品文件、历史费用和本地加密密钥。</p></header>{status?.reason && <p>{status.reason}</p>}<button type="button" className="btn btn-secondary" disabled={!status?.available || busy} onClick={() => { void open(); }}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}打开自定义卸载窗口</button>{feedback && <p role="status">{feedback}</p>}</section>;
+  return <section className="panel op-settings-panel"><header><h2>应用安装与卸载</h2><p>{mac ? '通过 Finder 管理应用。退出应用后，将“应用程序”中的序作工作台移到废纸篓；工作区、作品文件、历史费用和本地加密密钥会保留。' : '卸载通过自定义维护窗口完成，保留工作区、作品文件、历史费用和本地加密密钥。'}</p></header>{status?.reason && <p>{status.reason}</p>}{!mac && <button type="button" className="btn btn-secondary" disabled={!status?.available || busy} onClick={() => { void open(); }}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}打开自定义卸载窗口</button>}{feedback && <p role="status">{feedback}</p>}</section>;
 }

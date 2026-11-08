@@ -299,7 +299,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
           await atomicJson(fs, copyJournal, { version: 1, workspaceId, from: previous.directory, to: target, phase: 'verified' });
         }
         await checkedWorkspace(workspace);
-        const relocated = projects.map(item => ({ ...item, directory: path.join(target, path.relative(previous.directory, item.directory)) }));
+        const relocated = projects.map(item => ({ ...item, directory: path.join(target, path.relative(key(previous.directory), key(item.directory))) }));
         for (const project of relocated) { await checkedDirectory(fs, project.directory); await marker(project.projectId, project.directory); }
         const next = clone(state);
         next.workspaces = next.workspaces.map(item => item.workspaceId === workspaceId ? workspace : item);
