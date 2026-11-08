@@ -5,7 +5,7 @@ import { studioCredential } from '../lib/studio-run';
 import { Select } from './Select';
 
 export function StudioConnectionFields({ props, workflow, disabled, simulation, onChange }: { props: PageProps; workflow: WorkflowDefinition; disabled: boolean; simulation: boolean; onChange: (workflow: WorkflowDefinition) => void }) {
-  const steps = workflow.steps.filter(step => step.enabled && !['manual-review', 'export'].includes(step.kind));
+  const steps = workflow.steps.filter(step => step.enabled && !['manual-review', 'export', 'animation-compose'].includes(step.kind));
   if (!steps.length) return null;
   const configured = steps.every(step => {
     const model = props.configuration.models.find(item => item.id === step.modelConfigId && item.enabled && item.capabilities.includes(step.kind as typeof item.capabilities[number]) && (simulation || !item.demo));

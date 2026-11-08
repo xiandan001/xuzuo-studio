@@ -36,13 +36,14 @@ function completedOutputs(runs, projectId, kind) {
     const imageSources = Array.isArray(exporter?.contentSourceStepIds) ? exporter.contentSourceStepIds : exporter?.contentSourceStepId ? [exporter.contentSourceStepId] : undefined;
     const currentImageAttempt = !Array.isArray(exporter?.contentSourceStepIds) || attempt === run.attempts.findLast(item => item.stepId === attempt.stepId && item.status === 'complete');
     const adapted = exporter?.wallpaperTarget !== undefined || exporter?.engineeringReferenceId !== undefined;
-    const accepted = kind === 'image' ? adapted ? step === exporter && currentImageAttempt && currentAdaptedOutput(run, step, attempt) : ['image-generation', 'image-editing'].includes(step?.kind) && (!imageSources || imageSources.includes(step.id)) && currentImageAttempt : step?.kind === 'export';
+    const animations = !exporter ? run.snapshot.steps.filter(item => item.enabled && item.kind === 'animation-compose') : [];
+    const accepted = kind === 'image' ? animations.length ? animations.includes(step) && attempt === run.attempts.findLast(item => item.stepId === step?.id && item.status === 'complete') : adapted ? step === exporter && currentImageAttempt && currentAdaptedOutput(run, step, attempt) : ['image-generation', 'image-editing'].includes(step?.kind) && (!imageSources || imageSources.includes(step.id)) && currentImageAttempt : step?.kind === 'export';
     if (!accepted || attempt.status !== 'complete') return [];
-    const artifacts = (attempt.artifacts || []).filter(file => kind === 'image' ? file.kind === 'image' : file.mimeType === MIME[kind]);
+    const artifacts = (attempt.artifacts || []).filter(file => kind === 'image' ? file.kind === 'image' && (step.kind !== 'animation-compose' || file.mimeType === (step.animation?.mode === 'gif' ? 'image/gif' : 'image/png')) : file.mimeType === MIME[kind]);
     return artifacts.length ? [{ run, attempt, step, artifacts }] : [];
   }));
 }
-function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, inspectImage, readBeadDocument }) {
+function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, inspectImage, readBeadDocument, readAnimationDocument }) {
   const previewSource = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
   return async raw => {
     const input = checkedSelection(raw); await workspaceStorage.projectDirectory(input.projectId);
@@ -50,7 +51,7 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
     if (input.kind === 'image') {
       const localRuns = runs.filter(run => run.mode === 'live' && run.projectId === input.projectId && run.localImageProof && run.status === 'complete').sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0));
       const owner = input.artifactIds.length ? localRuns.find(run => input.artifactIds.every(id => run.localImageProof.files?.some(file => file.id === id))) : runs.filter(run => run.projectId === input.projectId && ['complete', 'waiting-review'].includes(run.status)).sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))[0];
-      if (owner?.localImageProof) return require('./local-image-proof.cjs').createLocalImageProof({ artifactStore, readBeadDocument }).inspect(owner, input.artifactIds);
+      if (owner?.localImageProof) return require('./local-image-proof.cjs').createLocalImageProof({ artifactStore, readBeadDocument, readAnimationDocument }).inspect(owner, input.artifactIds);
     }
     const candidates = completedOutputs(runs, input.projectId, input.kind);
     const record = input.kind === 'excel' ? await spreadsheetStore.load({ projectId: input.projectId }) : input.kind === 'image' ? null : await editorStore.load({ projectId: input.projectId, kind: input.kind });
@@ -68,7 +69,7 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
     }
     if (!selected.length) errors.push(record ? '当前编辑版本尚未生成实际交付文件，请保存并导出。' : '请先选择实际生成的成品，导入的原图或参考文件不能直接当作本次交付。');
     if (selected.some(id => !selectedOutputs.some(item => item.artifacts.some(file => file.id === id)))) errors.push('所选文件不是当前版本的成功交付产物；图片参考原图不能混入成品。');
-    const sameImageBatch = input.kind === 'image' && selectedOutputs.length > 0 && selectedOutputs.every(item => item.run.id === selectedOutputs[0].run.id && Array.isArray(item.run.snapshot.steps.findLast(step => step.enabled && step.kind === 'export')?.contentSourceStepIds));
+    const sameImageBatch = input.kind === 'image' && selectedOutputs.length > 0 && selectedOutputs.every(item => item.run.id === selectedOutputs[0].run.id && (item.step.kind === 'animation-compose' || Array.isArray(item.run.snapshot.steps.findLast(step => step.enabled && step.kind === 'export')?.contentSourceStepIds)));
     if (selectedOutputs.length > 1 && !sameImageBatch) errors.push('一次交付请选择同一保存版本或同一次生成的成品。');
     if (record && typeof input.sourceRevision === 'number' && input.sourceRevision !== record.revision) errors.push('编辑版本已经变化，请重新读取交付检查。');
     if (input.kind === 'excel' && record && !record.calculation?.allFormulasValid) errors.push('当前工作簿仍有未支持或错误公式，不能自动判定为已验收。');
@@ -86,7 +87,8 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
         const dimensions = inspectImage ? await inspectImage(bytes, file.mimeType) : {};
         const target = owner?.step.engineeringReferenceId !== undefined ? owner.attempt.engineeringSource : owner?.step.wallpaperTarget;
         if (target && (file.mimeType !== 'image/png' || file.runId !== owner.run.id)) throw Error('本地适配成品类型或来源发生变化，请重新读取本次导出。');
-        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency: !target && owner?.step.imageBackground === 'transparent' });
+        const animation = owner?.step.kind === 'animation-compose' ? owner.step.animation : undefined;
+        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: animation ? `${animation.width}x${animation.height}` : target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency: !target && (animation ? animation.background === 'transparent' : owner?.step.imageBackground === 'transparent') });
         imageChecks.push(...checks.filter(check => check.status !== 'manual').map(check => ({ ...check, id: `${check.id}-${id.slice(0, 8)}`, label: `${file.name.slice(0, 80)} · ${check.label}` })));
         for (const check of checks.filter(check => check.status === 'manual')) if (!imageChecks.some(item => item.id === check.id)) imageChecks.push(check);
       }

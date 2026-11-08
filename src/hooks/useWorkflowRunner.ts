@@ -74,7 +74,7 @@ function useSimulationWorkflowRunner(options: WorkflowRunnerOptions): Pick<Workf
       const model = currentOptions.configuration.models.find(item => item.id === step.modelConfigId);
       const modelLabel = model ? `${model.name} · ${model.modelId} · 模拟` : '人工步骤';
       const action = workflowStepAction(step, Boolean(run.retryStepOnly));
-      const attempt: WorkflowAttempt = { id: crypto.randomUUID(), stepId: step.id, stepName: step.name, modelLabel, status: isModelStep(step) ? 'running' : step.kind === 'manual-review' ? 'waiting-review' : 'complete', costCents, input, prompt: resolvePrompt(step.prompt, run.variables).content, action, summary: step.kind === 'manual-review' ? '等待你检查上一步模拟结果，确认后继续。' : step.kind === 'export' ? '交付检查示意完成，可在项目中导出交互草稿；尚未生成真实 Office 文件。' : '正在模拟处理，不调用 API。' };
+      const attempt: WorkflowAttempt = { id: crypto.randomUUID(), stepId: step.id, stepName: step.name, modelLabel, status: isModelStep(step) ? 'running' : step.kind === 'manual-review' ? 'waiting-review' : 'complete', costCents, input, prompt: resolvePrompt(step.prompt, run.variables).content, action, summary: step.kind === 'manual-review' ? '等待你检查上一步模拟结果，确认后继续。' : step.kind === 'export' ? '交付检查示意完成，可在项目中导出交互草稿；尚未生成真实 Office 文件。' : step.kind === 'animation-compose' ? '本地动画步骤模拟完成，尚未生成实际PNG/GIF；真实合成请使用桌面真实模式。' : '正在模拟处理，不调用 API。' };
       if (!isModelStep(step)) {
         if (!update(run.id, { attempts: [...run.attempts, attempt], status: step.kind === 'manual-review' ? 'waiting-review' : 'running', stepIndex: step.kind === 'manual-review' ? run.stepIndex : run.stepIndex + 1 })) return;
         if (step.kind === 'manual-review') projectStatus(project.id, 'review');

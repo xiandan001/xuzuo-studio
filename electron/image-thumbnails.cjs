@@ -136,7 +136,7 @@ function createImageThumbnails({ directory, nativeImage, fileSystem = fsDefault,
       if (!file?.buffer?.length || file.buffer.length > 20 * 1024 * 1024) throw new Error('图片为空或超过20MB，请打开项目查看原文件。');
       if (file.mimeType && file.mimeType !== mimeType) throw new Error('图片格式与登记不一致，请重新读取项目文件。');
       const formats = require('./image-output-formats.cjs');
-      if (mimeType === 'image/gif') formats.validateGif(file.buffer); else formats.validateSvg(file.buffer);
+      if (mimeType === 'image/gif') formats.validateLocalGif(file.buffer); else formats.validateSvg(file.buffer);
       // Keep animation/vector bytes; this preview is never an image API input.
       const result = { mimeType, dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`, thumbnail: false };
       return retain(key, result, result.dataUrl.length * 2 + 256);

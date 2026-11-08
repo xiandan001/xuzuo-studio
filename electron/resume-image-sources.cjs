@@ -15,9 +15,9 @@ function sourceUses(run, remaining) {
   const add = (id, purpose) => { if (!uses.has(id)) uses.set(id, new Set()); uses.get(id).add(purpose); };
   for (const step of remaining.filter(item => item.enabled)) {
     for (const id of Array.isArray(step.documentImageStepIds) ? step.documentImageStepIds : []) add(id, 'illustration');
-    if (step.imageSourceStepId) add(step.imageSourceStepId, 'editing');
+    if (step.imageSourceStepId) add(step.imageSourceStepId, step.kind === 'animation-compose' ? 'animation' : 'editing');
     const position = run.snapshot.steps.findIndex(item => item.id === step.id);
-    const before = run.snapshot.steps.slice(0, position).filter(item => item.enabled && !['manual-review', 'export'].includes(item.kind));
+    const before = run.snapshot.steps.slice(0, position).filter(item => item.enabled && !['manual-review', 'export', 'animation-compose'].includes(item.kind));
     const previous = before.at(-1);
     if (previous && ['image-generation', 'image-editing'].includes(previous.kind)) {
       if (step.kind === 'image-editing' && run.snapshot.steps[position]?.inputSource === 'previous') add(previous.id, 'editing');
@@ -54,7 +54,8 @@ async function validateResumeImageSources(run, remaining, artifactStore) {
       try { file = await artifactStore.read(picture.id); } catch (cause) { await unreadableReference(artifactStore, step, picture, cause); }
       if (file.projectId !== run.projectId) throw referenceError(step, picture, 'foreign-project', '不属于当前项目。请返回工作台重新选择本项目的文件；如需跨项目使用，请从素材库重新加入。');
       const raster = purposes.has('illustration') || purposes.has('editing');
-      const allowed = purposes.has('wallpaper') || purposes.has('engineering') ? new Set(['image/png']) : raster ? RASTER : DELIVERABLE;
+      const allowed = purposes.has('animation') || purposes.has('wallpaper') || purposes.has('engineering') ? new Set(['image/png']) : raster ? RASTER : DELIVERABLE;
+      if (purposes.has('animation') && file.mimeType !== 'image/png') throw referenceError(step, picture, 'unsupported-format', '不能作为本地动画的PNG图集，请恢复真实PNG源稿；未重新调用模型。');
       if (purposes.has('engineering') && file.mimeType !== 'image/png') throw referenceError(step, picture, 'unsupported-format', '不能作为工程适配的PNG编辑结果，原图与费用保留；未重新调用模型。');
       if (purposes.has('wallpaper') && file.mimeType !== 'image/png') throw referenceError(step, picture, 'unsupported-format', '不能作为壁纸PNG原图，请重新选择静态PNG制作步骤；未重新调用模型。');
       if (!allowed.has(file.mimeType)) throw referenceError(step, picture, 'unsupported-format', purposes.has('editing') ? '不能直接作为精修原图，接口只接受 PNG/JPEG/WebP。本应用生成的动图请使用“继续修改动画”重新准备；外部 GIF 请先转换为静态图片。' : raster ? '不能作为 Office 配图，请返回文档工作台重新选择 PNG/JPEG/WebP 插图。' : '不是可交付的 PNG/JPEG/WebP/SVG/GIF 图像，请重新选择输出步骤或重新制作。');

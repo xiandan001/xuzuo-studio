@@ -1,12 +1,13 @@
 import type { ModelCapability, StudioConfiguration, WorkflowDefinition, WorkflowRun, WorkflowStep } from '../configuration-types';
 import type { LedgerEntry, Project } from '../types';
 import { resolvePrompt } from './prompt-variables';
+import { checkedAnimationWorkflowSettings } from './animation-workflow';
 
-export const isModelStep = (step: WorkflowStep): step is WorkflowStep & { kind: ModelCapability } => step.kind !== 'manual-review' && step.kind !== 'export';
+export const isModelStep = (step: WorkflowStep): step is WorkflowStep & { kind: ModelCapability } => !['manual-review', 'export', 'animation-compose'].includes(step.kind);
 export const activeRun = (run: WorkflowRun) => ['running', 'paused', 'waiting-review'].includes(run.status);
 export function workflowStepCost(step: WorkflowStep): number {
   if (!isModelStep(step)) return 0;
-  const base = { text: 48, vision: 18, 'image-generation': 150, 'image-editing': 85, transcription: 30, speech: 50, 'video-understanding': 25, 'video-generation': 300 }[step.kind as Exclude<WorkflowStep['kind'], 'manual-review' | 'export'>];
+  const base = { text: 48, vision: 18, 'image-generation': 150, 'image-editing': 85, transcription: 30, speech: 50, 'video-understanding': 25, 'video-generation': 300 }[step.kind];
   return base * (['image-generation', 'image-editing'].includes(step.kind) ? Math.max(1, Math.min(4, step.count || 1)) : 1);
 }
 export function workflowStepAction(step: WorkflowStep, retry = false): LedgerEntry['action'] {
@@ -23,6 +24,7 @@ export function workflowValidation(workflow: WorkflowDefinition, project: Projec
   for (const step of steps) {
     if (!step.name.trim()) return '每个步骤都需要一个名称。';
     if (step.budgetCents != null && (!Number.isSafeInteger(step.budgetCents) || step.budgetCents < 0)) return `“${step.name}”的单步金额上限无效，请填写非负金额或留空。`;
+    if (step.kind === 'animation-compose') { if (project.kind !== 'image') return '本地动画合成仅用于图片项目。'; try { checkedAnimationWorkflowSettings(step.animation); } catch (error) { return error instanceof Error ? error.message : '本地动画参数无效。'; } if (step.imageSourceStepId !== undefined) { const source = steps.find(item => item.id === step.imageSourceStepId); if (!source || !['image-generation','image-editing'].includes(source.kind) || steps.indexOf(source) >= steps.indexOf(step) || (source.imageOutputFormat ?? 'png') !== 'png' || (source.count ?? 1) !== 1) return '本地动画来源必须是前面的一份PNG制作结果。'; } }
     if (!isModelStep(step)) continue;
     if (!step.prompt.trim()) return `“${step.name}”还没有填写提示词。`;
     const resolution = resolvePrompt(step.prompt, variables);

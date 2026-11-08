@@ -9,6 +9,8 @@ import { documentIllustrationSteps, DOCUMENT_IMAGE_LIMIT, DOCUMENT_REFERENCE_IMA
 import { extractVariables } from './prompt-variables';
 import { parseWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
+import { animationRequestMode, animationStyleForRequest, makeAnimationWorkflow } from './animation-workflow';
+import { animationGenerationPrompt, animationStyle, checkedAnimationDocument, newAnimationDocument } from './animation-document';
 export { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 
 type Capability = NaturalAutomationPlan['steps'][number]['kind'];
@@ -251,6 +253,23 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   const wallpaperTarget = wallpaperParsed?.status === 'resolved' ? wallpaperParsed.target : undefined;
   if (wallpaperRequested && !wallpaperTarget) missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
   const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
+  const animationMode = project.kind === 'image' ? animationRequestMode(plan.objective) : undefined;
+  if (animationMode) {
+    if (references.length > 12 || references.some(file => !['image/png','image/jpeg','image/webp'].includes(file.mimeType))) throw Error('角色动画参考图最多12张，且需要PNG、JPEG或WebP；SVG/GIF请先转换为静态参考图，未自动丢弃原文件。');
+    const style = animationStyle(animationStyleForRequest(plan.objective)), referenceIds = references.map(file => file.id), capability = referenceIds.length ? 'image-editing' : 'image-generation', binding = select(capability);
+    const size = /(\d{2,4})\s*[x×*＊]\s*(\d{2,4})/i.exec(plan.objective), duration = /(\d+(?:\.\d+)?)\s*秒/.exec(plan.objective);
+    const document = checkedAnimationDocument({ ...newAnimationDocument(project.id, animationMode), style: style.id, ...style.defaults, columns: style.grid[0], rows: style.grid[1], title: plan.name, prompt: [plan.objective, `验收：${plan.acceptance.join('；')}`, ...plan.constraints].join('\n'), referenceArtifactIds: referenceIds, modelConfigId: binding.modelConfigId || '', credentialId: binding.credentialId || '', ...(size ? { width: Number(size[1]), height: Number(size[2]) } : {}), ...(duration ? { loopMs: Math.round(Number(duration[1]) * 100) * 10 } : {}) });
+    const draft = makeAnimationWorkflow(document, configuration), source = draft.steps[0], compose = draft.steps[1], steps: WorkflowStep[] = [source]; let previous = source.id;
+    for (let round = 0; round < plan.maxRepairs; round++) {
+      steps.push({ id: `animation-check-${round + 1}`, name: `检查PNG图集 ${round + 1}/${plan.maxRepairs}`, kind: 'vision', role: 'reviewer', inputSource: 'previous', enabled: true, prompt: `依据实际静态PNG图集检查角色身份、姿态、手部、格数、透明边缘和裁切，提出明确修复意见；不要声称看过尚未合成的GIF播放。\n目标：${plan.objective}`, ...select('vision') });
+      const editId = `animation-refine-${round + 1}`;
+      steps.push({ ...source, id: editId, name: `精修PNG图集 ${round + 1}/${plan.maxRepairs}`, kind: 'image-editing', inputSource: 'previous', imageSourceStepId: previous, referenceArtifactIds: [], prompt: `${animationGenerationPrompt({ ...document, columns: compose.animation!.columns, rows: compose.animation!.rows }, [document.entries[0]])}\n\n保留实际原图与未要求变化的区域，按前一步检查意见精修，仍输出同一布局的静态PNG。`, ...select('image-editing') }); previous = editId;
+    }
+    steps.push({ ...compose, imageSourceStepId: previous }, draft.steps[2]);
+    const workflow: WorkflowDraft = { ...draft, name: `${plan.name} · 单个样片`, description: appendNaturalPreparationNotes(`${draft.description}\nGIF/图集由本地受限合成步骤产出，不依赖模型直接返回GIF；自动步骤不代表视觉或授权已验收。`, preparationNotes), steps };
+    const { type, ...triggerDetails } = plan.trigger;
+    return { workflow, missing: [...missing], preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, `验收要求：${plan.acceptance.join('；')}`, ...plan.constraints].join('\n'), variables: {} }, stepsSummary: steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'animation-compose' ? '（本地，不调用模型）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
+  }
   const base = automationRecipe(project.kind, plan.name, { objective: plan.objective, deliverables: [project.kind], acceptance: plan.acceptance, constraints: plan.constraints, knownInputs: (project.referenceFiles || []).filter(usableReference).map(file => file.name) }, configuration as StudioConfiguration, plan.maxRepairs);
   const planner = { ...base.steps[0], ...select('text') }, steps: WorkflowStep[] = [planner];
   const imageOutputs: string[] = []; let latestImage: string | undefined, lastText: WorkflowStep | undefined, edits = 0;

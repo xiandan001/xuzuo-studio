@@ -58,6 +58,7 @@ const StudioAssetPicker = lazy(() => import('../components/StudioAssetPicker').t
 const ImageGroupBatchPanel = lazy(() => import('../components/ImageGroupBatchPanel').then(module => ({ default: module.ImageGroupBatchPanel })));
 const ImageMarkupEditor = lazy(() => import('../components/ImageMarkupEditor').then(module => ({ default: module.ImageMarkupEditor })));
 const BeadStudio = lazy(() => import('./BeadStudio').then(module => ({ default: module.BeadStudio })));
+const AnimationStudio = lazy(() => import('./AnimationStudio').then(module => ({ default: module.AnimationStudio })));
 
 interface ImageEditSnapshot { draft: ImageDraft; selectedImageId: string; }
 
@@ -65,10 +66,22 @@ const isImageUrl = (value?: string) => Boolean(value && /^data:image\/(?:png|jpe
 
 export function ImageStudio(props: PageProps) {
   const project = props.activeProject.kind === 'image' ? props.activeProject : props.projects.find(item => item.kind === 'image') ?? props.activeProject;
-  return <ImageProject key={project.id} props={props} project={project} />;
+  return <ImageProjectRoutes key={project.id} props={props} project={project} />;
 }
 
-function ImageProject({ props, project }: { props: PageProps; project: Project }) {
+function ImageProjectRoutes({ props, project }: { props: PageProps; project: Project }) {
+  const key = `image-animation-route-v1:${project.id}`;
+  const [initialDraft] = useState(() => { try { return readImageDraft(localStorage.getItem(imageDraftKey(project.id)), project.description); } catch { return readImageDraft(null, project.description); } });
+  const [source, setSource] = useState(initialDraft);
+  const [route, setRoute] = useState<'atlas' | 'gif' | undefined>(() => { try { const mode = localStorage.getItem(key); if (mode === 'atlas' || mode === 'gif') return mode; if (mode === 'images') return undefined; } catch { /* The workbench is still usable. */ } const native = props.workflowRunner.runs.find(run => run.projectId === project.id && run.mode === 'live' && !run.trashedAt && run.snapshot.steps.some(step => step.kind === 'animation-compose'))?.snapshot.steps.find(step => step.kind === 'animation-compose'); return initialDraft.preset === '角色图集' ? 'atlas' : initialDraft.preset === 'GIF动画工坊' ? 'gif' : native?.animation?.mode; });
+  function open(mode: 'atlas' | 'gif', draft: ImageDraft) { setSource(draft); try { localStorage.setItem(imageDraftKey(project.id), JSON.stringify(draft)); localStorage.setItem(key, mode); } catch { /* Native animation saving remains available. */ } setRoute(mode); }
+  function close() { try { localStorage.setItem(key, 'images'); const draft = readImageDraft(localStorage.getItem(imageDraftKey(project.id)), project.description); if (['角色图集', 'GIF动画工坊'].includes(draft.preset)) localStorage.setItem(imageDraftKey(project.id), JSON.stringify({ ...draft, preset: '宣传图', presetSnapshot: undefined })); } catch { /* Returning does not discard the native animation project. */ } setRoute(undefined); }
+  const previousPurpose = availableImageUseTemplates(props.configuration.useTemplates, project.workspaceId).find(item => item.id === source.preset), description = imageCreationDescription(source.prompt);
+  if (route) return <Suspense fallback={<p className="bead-route-loading" role="status">正在打开角色动画工作台…</p>}><AnimationStudio props={props} project={project} initialMode={route} initialReferenceIds={source.references.map(file => file.id)} initialPrompt={description === previousPurpose?.prompt.trim() ? '' : description} onClose={close} /></Suspense>;
+  return <ImageProject props={props} project={project} onOpenAnimation={open} />;
+}
+
+function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; project: Project; onOpenAnimation: (mode: 'atlas' | 'gif', draft: ImageDraft) => void }) {
   const [commerceSource, setCommerceSource] = useState<string>();
   const [credentialIds, setCredentialIds] = useState(() => ({ 'image-generation': readStudioCredentialPreference(project.id, 'image-generation'), 'image-editing': readStudioCredentialPreference(project.id, 'image-editing') }));
   const workbench = useRef<HTMLDivElement>(null);
@@ -364,6 +377,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
     props.notify('素材已带入精修参考，可撤销；点击开始精修才会调用模型。');
   }
   function choosePreset(id: string) {
+    if (id === '角色图集' || id === 'GIF动画工坊') { if (!busy && !importing) { const current = editSnapshot.current.draft; const source = !current.references.length && selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? updateImageDraft(current, { references: [{ id: selectedImage.id, name: selectedImage.name }] }) : current; onOpenAnimation(id === '角色图集' ? 'atlas' : 'gif', source); } return; }
     if (id === '工程P图') { chooseEngineering(); return; }
     const template = useTemplates.find(item => item.id === id);
     if (!template) return;
@@ -589,7 +603,7 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       <p className="studio-ai-fee-note">{quantityValid && draft.quantity > 1 ? `${quantityUnit === '份' ? '逐份制作' : '逐张生成'} ${draft.quantity} ${quantityUnit} · ` : ''}调用费用自动记录</p>
     </div>
   }>
-    <div className="wallpaper-mode-switch" role="group" aria-label="图片制作用途"><button type="button" disabled={busy || importing} aria-pressed={!wallpaperEnabled && !engineeringEnabled} onClick={() => chooseWallpaper(false)}>图片</button><button type="button" disabled={busy || importing} aria-pressed={wallpaperEnabled} onClick={() => chooseWallpaper(true)}>壁纸</button><button type="button" disabled={busy || importing} aria-pressed={engineeringEnabled} onClick={chooseEngineering}>工程P图</button><button type="button" disabled={busy || importing} aria-pressed={draft.preset === '拼豆'} onClick={chooseBeads}>拼豆</button></div>
+    <div className="wallpaper-mode-switch" role="group" aria-label="图片制作用途"><button type="button" disabled={busy || importing} aria-pressed={!wallpaperEnabled && !engineeringEnabled} onClick={() => chooseWallpaper(false)}>图片</button><button type="button" disabled={busy || importing} aria-pressed={wallpaperEnabled} onClick={() => chooseWallpaper(true)}>壁纸</button><button type="button" disabled={busy || importing} aria-pressed={engineeringEnabled} onClick={chooseEngineering}>工程P图</button><button type="button" disabled={busy || importing} aria-pressed={draft.preset === '拼豆'} onClick={chooseBeads}>拼豆</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('角色图集')}>角色图集</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('GIF动画工坊')}>GIF动画</button></div>
     {engineeringEnabled && <div className="engineering-image-summary" aria-label="工程P图主原图"><strong>主原图：{engineeringOriginal?.name || '尚未选择'}</strong><p>工程照片、图纸、效果图 · 原图保留，按原尺寸保存。</p>{selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) && selectedImage.id !== engineeringOriginalId && <button type="button" className="ig-link" disabled={busy || importing} onClick={useCurrentEngineeringOriginal}>用当前图片作主原图</button>}<small>按主原图精修，不使用无原图分组生成。</small></div>}
     {wallpaperEnabled && <><WallpaperTargetPicker value={draft.wallpaperTarget} onChange={chooseWallpaperTarget} onIssueChange={setWallpaperInputIssue} invalid={wallpaperInputIssue} disabled={busy || importing} /><div className="wallpaper-4k-quick" aria-label="4K壁纸快捷尺寸"><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 2160, height: 3840, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 竖屏' })}><strong>4K 竖屏</strong><small>2160 × 3840</small></button><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 3840, height: 2160, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 横屏' })}><strong>4K 横屏</strong><small>3840 × 2160</small></button></div><p className="wallpaper-generation-note">4K 为本地尺寸适配，不提升模型原生细节 · 0 API</p></>}
     <div className="ig-label-row"><label htmlFor={`image-prompt-${project.id}`}>{engineeringEnabled || draft.mode === 'refine' ? '修改要求' : '画面描述'}</label><button className="ig-link" aria-label="提示词模板" onClick={() => setPromptPickerOpen(true)}><BookOpen size={14} />模板</button></div>

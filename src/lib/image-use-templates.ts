@@ -2,7 +2,7 @@ import type { ImageUseTemplate, ImageUseTemplateDraft } from '../configuration-t
 import { ENGINEERING_IMAGE_PROMPT } from './engineering-image';
 import { BEAD_PREPARATION_PROMPT } from './bead-image';
 
-export const IMAGE_PRESETS = ['宣传图', '人物图', '卡通图', '试衣图', '头像', '表情包', '透明 PNG', '壁纸', '工程P图', '拼豆'] as const;
+export const IMAGE_PRESETS = ['宣传图', '人物图', '卡通图', '试衣图', '头像', '表情包', '透明 PNG', '壁纸', '工程P图', '拼豆', '角色图集', 'GIF动画工坊'] as const;
 export type BuiltinImagePreset = typeof IMAGE_PRESETS[number];
 export const IMAGE_SIZES = [
   { value: 'auto', label: '自动 · 由模型选择', description: 'GIF 使用自动帧尺寸' },
@@ -21,6 +21,8 @@ export const PRESET_PROMPTS: Record<BuiltinImagePreset, string> = {
   壁纸: '制作适合作为设备壁纸的完整画面。主体完整，构图协调，为时钟区域适当留白；不要绘制手机边框、时间、应用图标或系统界面。主题、色彩与风格按我补充的内容制作。',
   工程P图: ENGINEERING_IMAGE_PROMPT,
   拼豆: BEAD_PREPARATION_PROMPT,
+  角色图集: '根据参考角色与本次用途，制作同一角色的多个不同表情或姿态，保持身份、服装、比例与配色一致。按明确网格和顺序排列，主体完整，格间留出安全空白，不绘制文字。',
+  GIF动画工坊: '根据参考角色、风格与动作需求，先制作一个真实可播放的GIF样片。后台生成图集或连续关键姿态并本地合成，检查身份、透明边缘、实际时长与循环后，再沿用认可样片批量扩展。',
 };
 // Existing names remain fixed built-in IDs so old project drafts and prompts still resolve.
 export const BUILTIN_IMAGE_USE_TEMPLATES: ImageUseTemplate[] = IMAGE_PRESETS.map(name => ({ id: name, workspaceId: '', name, prompt: PRESET_PROMPTS[name], size: name === '壁纸' ? '1024x1536' : name === '工程P图' || name === '拼豆' ? 'auto' : '1024x1024', background: name === '透明 PNG' ? 'transparent' : name === '壁纸' ? 'opaque' : 'auto', minReferences: name === '试衣图' ? 2 : name === '工程P图' || name === '拼豆' ? 1 : 0, enabled: true, builtin: true }));

@@ -5,6 +5,7 @@ const { validateMarkup } = require('./image-output-formats.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { readEngineeringSource } = require('./engineering-export.cjs');
 const { stepReferenceIssue, explicitStepReferences } = require('./workflow-references.cjs');
+const { checkedAnimationWorkflowSettings } = require('./animation-document.runtime.cjs');
 
 async function markupPreflightError(step, projectId, inputs, artifactStore, dynamicSource) {
   let markup;
@@ -16,7 +17,7 @@ async function markupPreflightError(step, projectId, inputs, artifactStore, dyna
   return undefined;
 }
 
-const modelStep = step => !['manual-review', 'export'].includes(step.kind);
+const modelStep = step => !['manual-review', 'export', 'animation-compose'].includes(step.kind);
 const text = (value, limit) => typeof value === 'string' && value.trim() && value.length <= limit;
 function replaceVariables(prompt, values) {
   const missing = new Set();
@@ -35,7 +36,7 @@ function validateUrl(value) {
     return '';
   } catch { return '连接地址无效。'; }
 }
-async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds = new Set(), completedStepIds = new Set() }) {
+async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, localAnimationStatus, completedImageStepIds = new Set(), completedStepIds = new Set() }) {
   const errors = [], issues = [], warnings = [], steps = [];
   const addError = (message, field, stepId) => { errors.push(message); issues.push({ message, ...(stepId ? { stepId } : {}), ...(field ? { field } : {}) }); };
   const failure = (message, field) => ({ ok: false, errors: [message], issues: [{ message, ...(field ? { field } : {}) }], warnings, steps, unknownCost: true });
@@ -47,6 +48,10 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
   if (!Array.isArray(workflow.steps) || !workflow.steps.length || workflow.steps.length > 40) return failure('工作流需要 1 到 40 个步骤。');
   if (!Array.isArray(request.models) || !Array.isArray(request.connections) || !Array.isArray(request.attachmentIds) || request.attachmentIds.length > 16) return failure('模型、连接或附件配置无效；附件最多16份。', !Array.isArray(request.models) ? 'modelConfigId' : !Array.isArray(request.connections) ? 'connection' : 'attachments');
   const enabled = workflow.steps.filter(step => step.enabled);
+  if (enabled.some(step => step.kind === 'animation-compose')) {
+    let helper; try { helper = typeof localAnimationStatus === 'function' ? await localAnimationStatus() : undefined; } catch { /* The specific helper is not usable; no provider request starts. */ }
+    if (!helper?.available) addError(helper?.reason || '本地动画工具尚不可用，未开始收费生成。', 'inputSource', enabled.find(step => step.kind === 'animation-compose').id);
+  }
   if (request.purpose !== undefined && !['automation-plan', 'business-assist'].includes(request.purpose)) addError('任务用途不受支持，未开始模型请求。');
   if (request.purpose === 'automation-plan' && (workflow.steps.length !== 1 || enabled.length !== 1 || enabled[0].kind !== 'text' || enabled[0].role !== 'planner' || request.attachmentIds.length)) addError('AI规划只能执行一个无附件的文字规划步骤，不能混入制作、导出或其他操作。');
   if (request.purpose === 'business-assist' && (workflow.steps.length !== 1 || enabled.length !== 1 || !['text', 'vision'].includes(enabled[0].kind) || enabled[0].role !== 'planner')) addError('业务辅助只执行一个资料文字或识读步骤，不执行制作、导出或任意工具。');
@@ -110,7 +115,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     }
     const imageSourceError = imageExportSourceError(step, workflow, project, completedStepIds);
     if (imageSourceError) addError(`“${step.name}”：${imageSourceError}`, 'inputSource', step.id);
-    if (step.imageSourceStepId !== undefined) {
+    if (step.imageSourceStepId !== undefined && step.kind !== 'animation-compose') {
       const source = workflow.steps.find(item => item.id === step.imageSourceStepId);
       if (step.kind !== 'image-editing' || !text(step.imageSourceStepId, 160) || !source || !source.enabled && !completedImageStepIds.has(source.id) || !['image-generation', 'image-editing'].includes(source.kind) || workflow.steps.indexOf(source) >= workflow.steps.indexOf(step)) addError(`“${step.name}”的精修原图必须是前面启用并实际生成图片的步骤。`, 'inputSource', step.id);
     }
@@ -135,7 +140,18 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
         else if (sources.reduce((total, source) => total + (source.count || 1), 0) > 20) addError(`“${step.name}”一次最多安排 20 张文档配图。`, 'count', step.id);
       }
     }
+    if (step.kind === 'animation-compose') {
+      detail.estimatedCents = 0;
+      if (project.kind !== 'image') addError(`“${step.name}”：本地动画合成仅用于图片项目。`, 'inputSource', step.id);
+      try { checkedAnimationWorkflowSettings(step.animation); } catch (error) { addError(`“${step.name}”：${error.message}`, 'inputSource', step.id); }
+      if (step.imageSourceStepId !== undefined) {
+        const source = workflow.steps.find(item => item.id === step.imageSourceStepId);
+        if (!text(step.imageSourceStepId, 160) || !source || !source.enabled && !completedImageStepIds.has(source.id) || !['image-generation','image-editing'].includes(source.kind) || ['planner','reviewer'].includes(source.role) || workflow.steps.indexOf(source) >= workflow.steps.indexOf(step) || (source.imageOutputFormat ?? 'png') !== 'png' || (source.count ?? 1) !== 1 || step.referenceArtifactIds?.length) addError(`“${step.name}”：请选择前面实际生成一份PNG图集的图片制作步骤。`, 'inputSource', step.id);
+      } else if (stepInputFiles.length !== 1 || stepInputFiles.some(file => file.projectId !== project.id || file.mimeType !== 'image/png' || file.trashedAt || file.unavailable)) addError(`“${step.name}”：需要明确选择本项目一张可读取的PNG图集，或选择前面的PNG制作步骤。`, 'attachments', step.id);
+      previousKind = 'image'; previousModelStep = step;
+    } else if (step.animation !== undefined) addError(`“${step.name}”：动画参数仅用于本地动画合成步骤。`, 'inputSource', step.id);
     if (!modelStep(step)) continue;
+    if (inheritsAttachments && ['vision','image-editing'].includes(step.kind) && previousModelStep?.kind === 'animation-compose' && previousModelStep.animation?.mode === 'gif') addError(`“${step.name}”：GIF动画不能直接作为当前图片模型的参考，请在PNG图集合成前检查/精修，或明确选择静态参考图。`, 'inputSource', step.id);
     const hasInput = kind => stepInputKinds.has(kind) || (inheritsAttachments && previousKind === kind) || kind === 'image' && step.kind === 'image-editing' && !!step.imageSourceStepId;
     if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image')) addError(`“${step.name}”需要参考图片，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'transcription' && !hasInput('audio') && !hasInput('video')) addError(`“${step.name}”需要添加音频参考文件。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
@@ -174,10 +190,11 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (estimate.costState === 'unknown' || estimate.calculation && estimate.calculation.cnyAmount === undefined) { unknownCost = true; if (step.budgetCents === 0) addError(`“${step.name}”设置了零元上限，但费用尚不确定，请补全价格或清除此上限。`, 'budgetCents', step.id); }
     else { detail.estimatedCents = estimate.costCents; estimatedCents += estimate.costCents; if (step.budgetCents != null && estimate.costCents > step.budgetCents) addError(`“${step.name}”的估算费用超过单步预算。`, 'budgetCents', step.id); }
   }
-  if (!enabled.some(step => step.kind === 'export')) warnings.push('流程未包含交付步骤；模型原始产物仍会保存，可单独打开和另存。');
+  if (!enabled.some(step => ['export','animation-compose'].includes(step.kind))) warnings.push('流程未包含交付步骤；模型原始产物仍会保存，可单独打开和另存。');
   if (project.budgetCents != null && project.costCents + estimatedCents > project.budgetCents) addError('已知费用估算超过项目剩余预算。', 'budgetCents');
   if (project.budgetCents === 0 && unknownCost) addError('项目设置了零元上限，但有费用无法确定的模型步骤，请补全价格或清除此上限。', 'budgetCents');
-  warnings.push('调用完成后按接口实际用量自动计算费用；开始前的用量估算不能保证远端扣费上限，取消请求仍可能产生费用。');
+  if (enabled.some(modelStep)) warnings.push('调用完成后按接口实际用量自动计算费用；开始前的用量估算不能保证远端扣费上限，取消请求仍可能产生费用。');
+  else if (enabled.some(step => step.kind === 'animation-compose')) warnings.push('本次只在本地处理PNG图集和动画，不调用模型、不增加API费用；实际成品仍需人工检查。');
   if (unknownCost) warnings.push('部分步骤的实际用量在返回后才能确定；已支持的官方型号会自动计费，接口缺少计费用量时将保留具体原因。');
   return { ok: errors.length === 0, errors, issues, warnings, steps, estimatedCents: unknownCost ? undefined : estimatedCents, unknownCost };
 }

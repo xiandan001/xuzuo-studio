@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { finished } from 'node:stream/promises';
+import { verifyAnimationRuntimeBinding } from './animation-runtime-binding.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dependencies = createRequire(path.join(root, 'work/ui-build/package.json'));
@@ -63,6 +64,7 @@ export async function managedManifest(directory, metadata) {
   }
   await visit(directory); files.sort((a, b) => a.path.localeCompare(b.path));
   for (const required of [metadata.executable, 'resources/app.asar', 'resources/xuzuo-maintenance.exe']) if (!files.some(item => item.path === required)) throw Error(`安装资源缺失：${required}`);
+  await verifyAnimationRuntimeBinding(root, new Map(files.map(file => [file.path, file])));
   return { format: 1, appId: metadata.appId, version: metadata.version, executable: metadata.executable, files };
 }
 export async function archivePayload(directory, files, target, overrides = {}) {

@@ -129,7 +129,8 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
   function completionInputs(run, target) {
     const steps = run.snapshot?.steps || [], attempts = run.attempts.filter(attempt => attempt.status === 'complete');
     const exported = [...steps].reverse().filter(step => step.enabled && step.kind === 'export').map(step => attempts.findLast(attempt => attempt.stepId === step.id)).find(Boolean);
-    const sourceFiles = exported ? exported.artifacts || [] : steps.filter(step => step.enabled && !['planner', 'reviewer'].includes(step.role) && !['manual-review', 'export'].includes(step.kind)).flatMap(step => attempts.findLast(attempt => attempt.stepId === step.id)?.artifacts || []);
+    const animations = steps.filter(step => step.enabled && step.kind === 'animation-compose');
+    const sourceFiles = exported ? exported.artifacts || [] : animations.length ? animations.flatMap(step => (attempts.findLast(attempt => attempt.stepId === step.id)?.artifacts || []).filter(file => file.mimeType === (step.animation?.mode === 'gif' ? 'image/gif' : 'image/png'))) : steps.filter(step => step.enabled && !['planner', 'reviewer'].includes(step.role) && !['manual-review', 'export'].includes(step.kind)).flatMap(step => attempts.findLast(attempt => attempt.stepId === step.id)?.artifacts || []);
     const customer = exported ? sourceFiles.filter(file => ['office','image','audio','video'].includes(file.kind) || file.mimeType === 'application/pdf') : sourceFiles.filter(file => !(file.kind === 'text' && /\.json$/i.test(file.name || '') && /检查|质检|核对|review|check/i.test(file.name || '')));
     const candidates = customer.length || !exported ? customer : sourceFiles.filter(file => !(file.mimeType === 'application/json' || /\.json$/i.test(file.name || '')));
     const unique = [...new Map(candidates.map(file => [file.id, file])).values()];

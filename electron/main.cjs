@@ -84,13 +84,14 @@ function registerRuntime(credentials) {
   const dialog = studioDialogs;
   const cpuTasks = createCpuTasks();
   const workspaceStorage = createWorkspaceStorage({ directory: app.getPath('userData') });
-  let projectPurge, beadMarket, marketSessions;
+  let projectPurge, beadMarket, marketSessions, animationService;
   const artifactStore = createArtifactStore({ directory: path.join(app.getPath('userData'), 'artifacts-v1'), workspaceStorage, renderOffice: input => cpuTasks.run('office', input), fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), fitEngineering: (input, options) => cpuTasks.run('engineering', input, options), convertImage: buffer => { const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('这张图像无法转换为 Office 所需的 PNG，请先检查原文件。'); return image.toPNG(); } });
   const thumbnails = createImageThumbnails({ directory: path.join(app.getPath('userData'), 'thumbnail-cache-v1'), nativeImage });
   workspaceStorage.setArtifactMigrator((projectId, destination, options) => artifactStore.migrateProject(projectId, destination, options));
   const editorStore = createEditorStore({ workspaceStorage, artifactStore });
   const spreadsheetStore = createSpreadsheetStore({ workspaceStorage, artifactStore });
   const beadStore = require('./bead-store.cjs').createBeadStore({ workspaceStorage });
+  const animationStore = require('./animation-store.cjs').createAnimationStore({ workspaceStorage, onChanged: value => { try { mainWindow?.webContents.send('animation:changed', value); } catch { /* Saved animation sources remain available. */ } } });
   const assets = createAssetLibrary({ workspaceStorage, artifactStore });
   const builtinAssets = createBuiltinAssets({ workspaceStorage, artifactStore, assetLibrary: assets });
   const assetCategories = createAssetCategories({ workspaceStorage, assetLibrary: assets, builtinAssets });
@@ -98,12 +99,12 @@ function registerRuntime(credentials) {
   const normalizeRasterReference = require('./image-reference-normalization.cjs').createImageReferenceNormalizer({ nativeImage });
   const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl, normalizeRasterReference, directory: app.getPath('userData'), getAvailableRuns: async projectIds => (await liveEngine.snapshot(undefined, { summaryOnly: true, projectIds })).runs });
   const fxRates = createFxRateService({ directory: app.getPath('userData'), fetchImpl });
-  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, readBeadDocument: projectId => beadStore.read({ projectId }), assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
+  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, readBeadDocument: projectId => beadStore.read({ projectId }), readAnimationDocument: projectId => animationStore.read({ projectId }), localAnimationStep: async input => animationService.executeWorkflowStep(input), localAnimationStatus: () => animationService.status(), assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
   const documentArtifactPreview = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
   automaticBilling = createAutomaticBilling({ needsRecalculation: async () => !runtimeClosing && pendingBilling((await liveEngine.snapshot(undefined, { summaryOnly: true })).ledger), recalculate: options => liveEngine.recalculateCosts(options) });
   automaticBilling.start();
   const backupManager = createProjectBackup({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, batchProduction: () => batches, automationProvider: () => automationCenter, receiptProvider: () => modelRuntime });
-  const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, readBeadDocument: projectId => beadStore.read({ projectId }), inspectImage: async buffer => {
+  const deliveries = createDeliveryStore({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, editorStore, spreadsheetStore, readBeadDocument: projectId => beadStore.read({ projectId }), readAnimationDocument: projectId => animationStore.read({ projectId }), inspectImage: async buffer => {
     const special = require('./image-output-formats.cjs').imageType(buffer); if (['svg', 'gif'].includes(special.extension)) return { ...require('./image-output-formats.cjs').rasterDimensions(buffer), transparency: 'unknown' };
     const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('实际图像无法解码，请检查源文件。');
     const { width, height } = image.getSize();
@@ -130,8 +131,8 @@ function registerRuntime(credentials) {
   const businessProduction = require('./business-production.cjs').createBusinessProduction(businessOptions);
   const businessAssist = require('./business-assist.cjs').createBusinessAssist(businessOptions);
   const businessListing = require('./business-listing.cjs').createBusinessListing({ ...businessOptions, cpuTasks });
-  const isBusinessWorkspaceBusy = workspaceId => businessWorkspaceWrites.has(workspaceId) || businessProduction.isWorkspaceBusy(workspaceId) || Boolean(beadMarket?.isWorkspaceBusy(workspaceId));
-  const isBusinessProjectBusy = id => businessProduction.isProjectBusy(id) || businessAssist.isProjectBusy(id) || Boolean(beadMarket?.isProjectBusy(id));
+  const isBusinessWorkspaceBusy = workspaceId => businessWorkspaceWrites.has(workspaceId) || businessProduction.isWorkspaceBusy(workspaceId) || Boolean(beadMarket?.isWorkspaceBusy(workspaceId)) || Boolean(animationService?.isWorkspaceBusy(workspaceId));
+  const isBusinessProjectBusy = id => businessProduction.isProjectBusy(id) || businessAssist.isProjectBusy(id) || Boolean(beadMarket?.isProjectBusy(id)) || Boolean(animationService?.isProjectBusy(id));
   const withBusinessWrite = async (workspaceId, action) => {
     if (typeof workspaceId !== 'string' || relocatingWorkspaces.has(workspaceId)) throw Error('工作区目录正在处理，请稍后再保存或制作。');
     businessWorkspaceWrites.set(workspaceId, (businessWorkspaceWrites.get(workspaceId) || 0) + 1);
@@ -157,6 +158,8 @@ function registerRuntime(credentials) {
   const marketBrowser = require('./bead-market-browser.cjs').createBeadMarketBrowser({ app, BrowserWindow, WebContentsView, ipcMain, session, getWindow: () => mainWindow, onCapture: input => beadMarket.acceptCapture(input), onLoginConfirmed: input => marketSessions.confirmLogin(input), appearance: () => ({ dark: (studioDialogs.getAppearance?.()?.mode || (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')) === 'dark' }) });
   marketSessions = require('./bead-market-sessions.cjs').createBeadMarketSessions({ directory: app.getPath('userData'), browser: marketBrowser, onChanged: () => { try { mainWindow?.webContents.send('bead-market:sessions-changed'); } catch { /* Session metadata survives a closed renderer. */ } } });
   beadMarket.setBrowser(marketBrowser);
+  const animationTool = require('./animation-tool.cjs').createAnimationTool({ directory: app.getPath('userData'), ...(app.isPackaged ? { executablePath: path.join(process.resourcesPath, 'animation-tool', 'xuzuo-animation.exe') } : { developmentPython: process.env.XUZUO_ANIMATION_PYTHON || 'python' }) });
+  animationService = require('./animation-service.cjs').createAnimationService({ ...businessOptions, directory: app.getPath('userData'), store: animationStore, tool: animationTool, onChanged: value => { try { mainWindow?.webContents.send('animation:changed', value); } catch { /* The renderer may already be closed. */ } }, onExport: async input => { const location = await editorProject(input.projectId); await liveEngine.recordLocalExport({ ...input, workspaceId: location.workspaceId, name: input.document.title, kind: 'image' }); try { mainWindow?.webContents.send('runtime:project-files-changed', { projectId: input.projectId }); } catch { /* Completed artifacts remain registered. */ } } });
   const exportWallpaper4K = require('./local-wallpaper-export.cjs').createLocalWallpaperExporter({ artifactStore, fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.artifact.name, kind: 'image', artifacts: [input.artifact], wallpaperExport: { sourceArtifactId: input.sourceArtifactId, sourceSha256: input.sourceSha256, target: input.target } }); } });
   automationCenter = createAutomationCenter({ directory: app.getPath('userData'), liveEngine, onChanged: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automation:changed'); }, assertAdmission: async project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }), control: async input => {
     if (!['resume', 'continue', 'retry'].includes(input.action)) return liveEngine.control(input);
@@ -181,10 +184,11 @@ function registerRuntime(credentials) {
   const handle = (name, action) => ipcMain.handle(`runtime:${name}`, (event, input) => {
     if (!trustedSender(event)) throw new Error('此页面无权执行本机模型任务。');
     const closingMarketRead = ['bead-market-read', 'bead-market-save', 'bead-market-cancel', 'bead-market-sessions'].includes(name);
+    const closingAnimationRead = ['animation-read', 'animation-save'].includes(name) || name === 'animation-control' && input?.action === 'cancel';
     const closingBusinessRead = ['business-snapshot', 'business-save', 'business-export-recovery', 'commerce-read', 'commerce-save', 'commerce-history', 'commerce-cancel', 'commerce-exportRecovery'].includes(name) || name === 'business-control' && ['pause', 'cancel'].includes(input?.action);
-    if (runtimeClosing && !closingMarketRead && !closingBusinessRead && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
+    if (runtimeClosing && !closingAnimationRead && !closingMarketRead && !closingBusinessRead && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
     const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs', 'bead-export-recovery', 'bead-cancel', 'bead-market-sessions', 'bead-market-login', 'bead-market-confirm-login'].includes(name)) await projectPurge.ready; return ['workspace-choose', 'workspace-repair', 'workspace-reconnect'].includes(name) ? withWorkspaceDirectory(input?.workspaceId, () => action(input)) : action(input); });
-    const marketWrite = name.startsWith('bead-market-') && !['bead-market-read', 'bead-market-cancel', 'bead-market-openSource', 'bead-market-sessions'].includes(name);
+    const marketWrite = name.startsWith('bead-market-') && !['bead-market-read', 'bead-market-cancel', 'bead-market-openSource', 'bead-market-sessions'].includes(name) || name.startsWith('animation-') && !['animation-read', 'animation-control'].includes(name);
     const businessWrite = /^(?:business-(?:save|import-commit|export-recovery|prepare|deliver|adopt|listing)|commerce-(?:save|render|applyAlpha|protect|mask|restore|exportRecovery))$/.test(name);
     if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, marketWrite || businessWrite || name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-') || name.startsWith('commerce-') || name === 'business-listing');
     return task;
@@ -193,6 +197,7 @@ function registerRuntime(credentials) {
   drainRuntime = async () => {
     runtimeClosing = true;
     studioDialogs.cancelPickers();
+    await animationService.prepareClose();
     await beadMarket.prepareClose();
     await businessProduction.prepareClose();
     await businessAssist.prepareClose();
@@ -213,6 +218,7 @@ function registerRuntime(credentials) {
     await liveEngine.flush();
     await businessData.drain();
     await beadMarket.drain();
+    await animationService.drain();
     await marketSessions.drain();
     if (closingWriteFailed) throw new Error('退出期间有本地文件或密钥未能保存。');
   };
@@ -236,6 +242,7 @@ function registerRuntime(credentials) {
   handle('bead-market-sessions', () => marketSessions.sessions());
   handle('bead-market-login', input => { if (runtimeClosing) throw Error('应用正在保存并退出，未打开平台。'); return marketSessions.login(input); });
   handle('bead-market-confirm-login', input => { if (runtimeClosing) throw Error('应用正在保存并退出，未新增登录确认。'); return marketSessions.confirmLogin(input); });
+  for (const method of ['read', 'save', 'restore', 'generate', 'refine', 'control', 'compose', 'export', 'importProject']) handle('animation-' + method, input => method === 'read' || method === 'control' && input?.action === 'cancel' ? animationService[method](input) : withProjectWrite(input?.projectId, () => animationService[method](input)));
   handle('asset-builtin-import', input => assets.flush().then(() => builtinAssets.import(input)));
   handle('asset-builtin-attach', input => withProjectWrite(input?.projectId, () => builtinAssets.attach(input)));
   handle('asset-builtin-save', async input => {
@@ -417,7 +424,7 @@ function registerRuntime(credentials) {
   handle('import-files', projectId => withProjectWrite(projectId, async () => {
     if (!projectId) throw new Error('请先选择导入资料所属的项目。');
     await editorProject(projectId);
-    const result = await dialog.showOpenDialog(mainWindow, { title: '选择工作流参考文件', properties: ['openFile', 'multiSelections'], filters: [{ name: '参考文字、Office、图片与音视频', extensions: ['txt', 'md', 'json', 'csv', 'docx', 'pptx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'm4a', 'mp4'] }] });
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择参考文件或可编辑工程', properties: ['openFile', 'multiSelections'], filters: [{ name: '参考资料、图片、音视频与工程ZIP', extensions: ['txt', 'md', 'json', 'csv', 'docx', 'pptx', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'm4a', 'mp4', 'zip'] }] });
     if (result.canceled) return [];
     const files = await artifactStore.importPaths(result.filePaths, { projectId });
     const location = (await workspaceStorage.list()).projects.find(project => project.projectId === projectId);

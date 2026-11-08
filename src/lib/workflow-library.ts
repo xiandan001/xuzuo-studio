@@ -7,7 +7,7 @@ export function workflowConfigurationSummary(workflow: WorkflowDefinition, confi
   const issues: { stepId: string; message: string }[] = [];
   if (!enabled.length) issues.push({ stepId: selected.steps[0]?.id || '', message: '需要至少一个启用步骤' });
   for (const step of enabled) {
-    if (step.kind === 'manual-review' || step.kind === 'export') continue;
+    if (['manual-review', 'export', 'animation-compose'].includes(step.kind)) continue;
     const model = configuration.models.find(item => item.id === step.modelConfigId);
     if (!step.prompt.trim()) issues.push({ stepId: step.id, message: `${step.name}：填写提示词` });
     if (!model) issues.push({ stepId: step.id, message: `${step.name}：选择模型` });

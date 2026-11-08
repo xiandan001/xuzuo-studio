@@ -1,0 +1,24 @@
+import type { WorkflowStep } from '../configuration-types';
+import type { AnimationWorkflowSettings as Settings } from '../lib/animation-workflow';
+import { checkedAnimationWorkflowSettings, defaultAnimationWorkflowSettings } from '../lib/animation-workflow';
+import { ANIMATION_STYLES } from '../lib/animation-document';
+import { Select } from './Select';
+import { RememberedDetails } from './RememberedDetails';
+import './AnimationWorkflowSettings.css';
+
+export function AnimationWorkflowSettings({ step, priorSteps, onChange }: { step: WorkflowStep; priorSteps: WorkflowStep[]; onChange: (changes: Partial<WorkflowStep>) => void }) {
+  const value: Settings = { ...defaultAnimationWorkflowSettings(), ...step.animation }; let issue = '';
+  try { checkedAnimationWorkflowSettings(value); } catch (error) { issue = error instanceof Error ? error.message : '本地动画配置需要调整。'; }
+  const update = (changes: Partial<Settings>) => onChange({ animation: { ...value, ...changes } });
+  const sources = priorSteps.filter(source => source.enabled && ['image-generation','image-editing'].includes(source.kind) && !['planner','reviewer'].includes(source.role || '') && (source.imageOutputFormat ?? 'png') === 'png' && (source.count ?? 1) === 1);
+  return <div className="wf-animation-settings"><p className="wf-human-note">本步骤只在后台分帧与合成，不选择模型和 Key，不新增 API 费用。更改画风或格数后，需要同步上游PNG图集的制作要求；本地合成不会补画缺少的动作。</p>
+    <label className="wf-field"><span>PNG图集来源</span><Select aria-label="动画PNG来源" value={step.imageSourceStepId || ''} onValueChange={id => onChange({ imageSourceStepId: id || undefined, referenceArtifactIds: id ? [] : undefined })} options={[{ value: '', label: '本次明确添加的1张PNG参考图' }, ...sources.map(source => ({ value: source.id, label: source.name }))]} />{step.imageSourceStepId && !sources.some(source => source.id === step.imageSourceStepId) && <small className="wf-warning">原PNG来源已移动、停用或格式不符，请重新选择。</small>}</label>
+    <div className="wf-two-fields"><label className="wf-field"><span>输出用途</span><Select aria-label="动画步骤用途" value={value.mode} onValueChange={mode => update({ mode: mode === 'atlas' ? 'atlas' : 'gif' })} options={[{ value: 'gif', label: 'GIF动画' }, { value: 'atlas', label: '拆分PNG角色素材' }]} /></label><label className="wf-field"><span>动画风格</span><Select aria-label="动画步骤风格" value={value.style} onValueChange={id => { const style = ANIMATION_STYLES.find(row => row.id === id); if (style) update({ style: style.id, ...style.defaults, columns: style.grid[0], rows: style.grid[1] }); }} options={ANIMATION_STYLES.map(style => ({ value: style.id, label: style.name }))} /></label></div>
+    <RememberedDetails rememberKey={`workflow-step:${step.id}:animation-advanced`} className="wf-animation-advanced"><summary>高级：图集格数、尺寸与播放速度</summary><div className="wf-two-fields">{(['columns','rows'] as const).map(key => <label className="wf-field" key={key}><span>{key === 'columns' ? '图集列数' : '图集行数'}</span><input className="field" aria-label={key === 'columns' ? '动画图集列数' : '动画图集行数'} type="number" min="1" max="16" step="1" value={value[key]} onChange={event => update({ [key]: Number(event.target.value) })} /></label>)}</div>
+    <div className="wf-two-fields">{(['width','height'] as const).map(key => <label className="wf-field" key={key}><span>{key === 'width' ? '输出宽度（像素）' : '输出高度（像素）'}</span><input className="field" aria-label={key === 'width' ? '动画输出宽度' : '动画输出高度'} type="number" min="16" max={value.mode === 'gif' ? 3840 : 4096} step="1" value={value[key]} onChange={event => update({ [key]: Number(event.target.value) })} /></label>)}</div>
+    {value.mode === 'gif' && <div className="wf-two-fields"><label className="wf-field"><span>目标帧率</span><input className="field" aria-label="动画步骤帧率" type="number" min="1" max="50" step="0.5" value={value.fps} onChange={event => update({ fps: Number(event.target.value) })} /></label><label className="wf-field"><span>循环时长（秒）</span><input className="field" aria-label="动画步骤时长" type="number" min="0.1" max="6" step="0.01" value={value.loopMs / 1000} onChange={event => update({ loopMs: Math.round(Number(event.target.value) * 100) * 10 })} /></label></div>}
+    <label className="wf-field"><span>成品背景</span><Select aria-label="动画步骤背景" value={value.background} onValueChange={background => update({ background: background === 'opaque' ? 'opaque' : 'transparent' })} options={[{ value: 'transparent', label: '透明背景' }, { value: 'opaque', label: '不透明背景' }]} /></label></RememberedDetails>
+    <label className="wf-field"><span>本地叠字</span><input className="field" aria-label="动画步骤文案" maxLength={120} value={value.entries?.[0]?.caption ?? '你好'} onChange={event => update({ entries: [{ ...(value.entries?.[0] || {}), caption: event.target.value }, ...(value.entries?.slice(1) || [])] })} /><small>文字、速度与背景由本地合成设置，实际帧数和时长以生成检查报告为准。</small></label>
+    {issue && <small className="wf-warning" role="alert">{issue}</small>}
+  </div>;
+}

@@ -17,7 +17,7 @@ export function StudioRunStatus({ props }: { props: PageProps }) {
   const [referenceRequest, setReferenceRequest] = useState<{ runId: string; sequence: number }>();
   const detailsId = useId();
   const runs = props.workflowRunner.runs.filter(run => isProductionRun(run) && run.projectId === props.activeProject.id && !run.hiddenAt && !run.trashedAt).sort((a, b) => (Date.parse(b.createdAt) || Date.parse(b.updatedAt) || 0) - (Date.parse(a.createdAt) || Date.parse(a.updatedAt) || 0));
-  const run = runs.find(activeRun) || runs.find(item => item.snapshot.steps.some(step => !['manual-review', 'export'].includes(step.kind)));
+  const run = runs.find(activeRun) || runs.find(item => item.snapshot.steps.some(step => !['manual-review', 'export', 'animation-compose'].includes(step.kind)));
   if (!run) return null;
   const cost = summarizeCosts(runCostRecords(run, props.ledger));
   const editableReview = run.mode === 'live' && ['word', 'ppt', 'excel'].includes(props.activeProject.kind);

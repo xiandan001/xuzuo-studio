@@ -174,7 +174,7 @@ function PreflightIssues({ result, onLocate, disabled }: Pick<PreflightViewProps
   return issues.length > 0 ? <ul className="wf-validation-issues">{issues.map((issue, index) => <li key={`${index}-${issue.message}`}><span>{issue.message}</span>{workflowIssueCanLocate(issue) && <button type="button" className="btn btn-secondary" disabled={disabled} onClick={() => onLocate(issue)}>定位修改<ArrowRight size={13} /></button>}</li>)}</ul> : null;
 }
 function CallConfirmation({ result, paidAcknowledged, onPaid, disabled }: Omit<PreflightViewProps, 'onLocate'>) {
-  if (!result.steps.some(step => !['manual-review', 'export'].includes(step.kind))) return <p>本次仅处理本地文件，不调用模型。</p>;
+  if (!result.steps.some(step => !['manual-review', 'export', 'animation-compose'].includes(step.kind))) return <p>本次仅处理本地文件，不调用模型。</p>;
   return result.ok ? <div className="wf-paid-confirmation"><label><input aria-label="确认本次模型调用" type="checkbox" disabled={disabled} checked={paidAcknowledged} onChange={event => onPaid(event.target.checked)} /><span>我确认向上述服务地址发送本次内容与参考文件，并接受本次模型调用费用。{result.unknownCost && '部分费用需要在返回实际用量后确定，也包含在本次确认内。'}</span></label></div> : null;
 }
 function StudioPreflightResult(props: PreflightViewProps) {

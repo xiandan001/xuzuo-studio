@@ -14,7 +14,7 @@ export function studioModel(models: ModelConfiguration[], preferredId?: string):
   return real.length === 1 ? real[0] : undefined;
 }
 export function workflowStepSelection(step: WorkflowStep, configuration: Pick<StudioConfiguration, 'models' | 'connections' | 'credentials'>): WorkflowStep {
-  if (['manual-review', 'export'].includes(step.kind)) return step;
+  if (['manual-review', 'export', 'animation-compose'].includes(step.kind)) return step;
   const available = configuration.models.filter(model => model.enabled && model.capabilities.includes(step.kind as typeof model.capabilities[number]) && configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled));
   const model = studioModel(available, step.modelConfigId);
   return { ...step, modelConfigId: model?.id, credentialId: model && !model.demo ? studioCredential(configuration.credentials, model.connectionId, step.credentialId) : undefined };

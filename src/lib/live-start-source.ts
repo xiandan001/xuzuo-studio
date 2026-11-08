@@ -14,7 +14,7 @@ export async function prepareLiveStartSource(input: LiveStartRequest, detail: (i
   if (step?.kind === 'manual-review' && pending) return { ...input, replaceWaitingReviewAttemptId: pending.id };
   const quality = [...(old.qualityReviews || [])].reverse().find(review => review.stepId === step?.id);
   if (input.project.kind !== 'image' || !step?.qualityGate || step.role !== 'reviewer' || quality?.passed !== false) return input;
-  const models = input.workflow.steps.filter(item => item.enabled && !['manual-review', 'export'].includes(item.kind));
+  const models = input.workflow.steps.filter(item => item.enabled && !['manual-review', 'export', 'animation-compose'].includes(item.kind));
   if (!models.length || models.some(item => item.kind !== 'image-editing')) throw new Error('当前复核未通过，请明确精修所选图片；原检查、原图与费用保留。');
   const files = await list(input.project.id);
   const source = input.attachmentIds.map(id => files.find(file => file.id === id && file.kind === 'image' && file.projectId === input.project.id && !file.trashedAt && !file.unavailable)).find(Boolean);

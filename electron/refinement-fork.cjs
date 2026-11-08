@@ -14,7 +14,7 @@ function replacementReview(run, fork) {
 async function assertRefinementSource(request, run, artifactStore) {
   const fork = request.refinementFork;
   if (!fork) return;
-  const models = request.workflow.steps.filter(step => step.enabled && !['manual-review', 'export'].includes(step.kind));
+  const models = request.workflow.steps.filter(step => step.enabled && !['manual-review', 'export', 'animation-compose'].includes(step.kind));
   if (!request.replaceWaitingReviewRunId || request.project.kind !== 'image' || run?.snapshot.outputKind !== 'image' || !models.length || models.some(step => step.kind !== 'image-editing') || !request.attachmentIds.includes(fork.sourceArtifactId)) throw Error('仅可明确精修本项目已选择的图片，不能用检查或重新生图替代未通过的复核。');
   const source = await artifactStore.read(fork.sourceArtifactId);
   if (source.projectId !== request.project.id || source.kind !== 'image' || source.trashedAt || source.unavailable) throw Error('所选精修原图不属于当前项目或已不可用，原检查与费用保留。');

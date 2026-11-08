@@ -166,6 +166,7 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  animation?: import('./animation-types').AnimationBridge;
   beadMarket?: import('./bead-market-types').BeadMarketBridge;
   business?: import('./business-types').BusinessBridge;
   commerceImages?: import('./commerce-image-types').CommerceImagesBridge;

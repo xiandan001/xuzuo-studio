@@ -7,6 +7,7 @@ import type { BusinessCategory, ModelCapability, WorkflowRun, WorkflowStep, Work
 import type { ArtifactMetadata, LivePreflightIssue } from '../live-types';
 import { isSelectInteraction } from './Select';
 import { CREATION_PROFILES } from '../lib/creation-profiles';
+import { defaultAnimationWorkflowSettings } from '../lib/animation-workflow';
 import '../pages/workflows.css';
 
 export const STEP_KINDS: { value: WorkflowStepKind; label: string; description: string }[] = [
@@ -14,6 +15,7 @@ export const STEP_KINDS: { value: WorkflowStepKind; label: string; description: 
   { value: 'vision', label: '图片理解', description: '检查参考图、内容或画面细节' },
   { value: 'image-generation', label: '图片生成', description: '根据文字需求制作图像' },
   { value: 'image-editing', label: '图片精修', description: '结合参考内容描述图片修改' },
+  { value: 'animation-compose', label: '本地动画合成', description: '从实际PNG图集生成角色素材或GIF，不调用模型' },
   { value: 'transcription', label: '语音转文字', description: '设计音频转录步骤' },
   { value: 'speech', label: '语音合成', description: '设计文字转语音步骤' },
   { value: 'video-understanding', label: '视频理解', description: '设计视频内容分析步骤' },
@@ -22,13 +24,13 @@ export const STEP_KINDS: { value: WorkflowStepKind; label: string; description: 
   { value: 'export', label: '整理交付', description: '整理当前结果并生成交付文件' },
 ];
 export const RUN_LABELS: Record<WorkflowRun['status'], string> = { running: '模拟执行中', paused: '已暂停', 'waiting-review': '等待人工检查', complete: '模拟已完成', cancelled: '已取消', interrupted: '已中断', failed: '执行失败' };
-export const isModelStep = (kind: WorkflowStepKind): kind is ModelCapability => kind !== 'manual-review' && kind !== 'export';
+export const isModelStep = (kind: WorkflowStepKind): kind is ModelCapability => !['manual-review', 'export', 'animation-compose'].includes(kind);
 export const kindLabel = (kind: WorkflowStepKind) => STEP_KINDS.find(item => item.value === kind)?.label || kind;
 export type RunContext = { projectId?: string; input?: string; attachmentIds?: string[]; attachments?: InputAttachment[]; variables?: Record<string, string>; mode?: 'live' | 'simulation'; focusStepId?: string; focusField?: LivePreflightIssue['field']; replaceWaitingReviewRunId?: string; };
 export type InputAttachment = Pick<ArtifactMetadata, 'id' | 'name'> & Partial<Pick<ArtifactMetadata, 'mimeType' | 'bytes'>>;
 
 export function StepIcon({ kind, size = 17 }: { kind: WorkflowStepKind; size?: number }) {
-  const Icon = kind === 'manual-review' ? ShieldCheck : kind === 'export' ? Download : kind.startsWith('image') || kind === 'vision' ? Image : kind.startsWith('video') ? Video : kind === 'speech' || kind === 'transcription' ? AudioLines : FileText;
+  const Icon = kind === 'manual-review' ? ShieldCheck : kind === 'export' ? Download : kind === 'animation-compose' || kind.startsWith('image') || kind === 'vision' ? Image : kind.startsWith('video') ? Video : kind === 'speech' || kind === 'transcription' ? AudioLines : FileText;
   return <Icon size={size} />;
 }
 
@@ -40,7 +42,7 @@ export function categoryOptions(categories: BusinessCategory[]) {
   ]);
 }
 export function makeStep(kind: WorkflowStepKind = 'text'): WorkflowStep {
-  return { id: crypto.randomUUID(), name: kindLabel(kind), kind, prompt: '', modelConfigId: undefined, inputSource: 'previous', budgetCents: undefined, enabled: true, maxOutputTokens: kind === 'text' ? CREATION_PROFILES.word.outputTokens : 2048, imageSize: kind === 'video-generation' ? '1280x720' : '1024x1024', imageBackground: 'auto', voice: 'alloy', count: 1 };
+  return { id: crypto.randomUUID(), name: kindLabel(kind), kind, prompt: '', modelConfigId: undefined, inputSource: 'previous', budgetCents: undefined, enabled: true, maxOutputTokens: kind === 'text' ? CREATION_PROFILES.word.outputTokens : 2048, imageSize: kind === 'video-generation' ? '1280x720' : '1024x1024', imageBackground: 'auto', voice: 'alloy', count: 1, ...(kind === 'animation-compose' ? { animation: defaultAnimationWorkflowSettings() } : {}) };
 }
 export function normalizeSteps(steps: WorkflowStep[]) {
   const first = steps.findIndex(step => step.enabled);

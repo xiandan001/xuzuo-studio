@@ -1,0 +1,10 @@
+import { createRequire } from 'node:module';
+import { describe, expect, it } from 'vitest';
+const require = createRequire(import.meta.url), { mergeGeneratedFrames } = require('../../electron/animation-frame-merge.cjs');
+const frame = (id, column) => ({ id, atlasArtifactId: 'old-atlas', cell: [column, 0], grid: [2, 1], durationMs: 200, crop: [column * 100, 0, (column + 1) * 100, 100] });
+describe('动画AI结果按源关键帧身份合并', () => {
+  it('只替换选中帧、清旧绝对crop，保留另一帧的后续修改和对象', () => { const previous = [frame('first', 0), frame('second', 1)], later = { ...previous[0], durationMs: 330 }, current = [later, { ...previous[1], durationMs: 270 }]; const result = mergeGeneratedFrames(current, previous, 'new-atlas', [1, 1], 'second'); expect(result[0]).toBe(later); expect(result[1]).toEqual({ id: 'second', atlasArtifactId: 'new-atlas', cell: [0, 0], grid: [1, 1], durationMs: 270 }); expect(previous[1].crop).toEqual([100, 0, 200, 100]); });
+  it('整条精修按旧身份映射新格子，保留后续重排、时长和新添加帧', () => { const previous = [frame('first', 0), frame('second', 1)], extra = { ...frame('extra', 0), atlasArtifactId: 'extra-atlas' }, current = [{ ...previous[1], durationMs: 410 }, previous[0], extra]; const result = mergeGeneratedFrames(current, previous, 'new-atlas', [2, 1]); expect(result.map(row => row.id)).toEqual(['second', 'first', 'extra']); expect(result[0].cell).toEqual([1, 0]); expect(result[0].durationMs).toBe(410); expect(result[1].cell).toEqual([0, 0]); expect(result[2]).toBe(extra); });
+  it('被选源图在另一处改变时拒绝覆盖，原数组保持完整', () => { const previous = [frame('first', 0)], current = [{ ...previous[0], atlasArtifactId: 'later-atlas' }], before = structuredClone(current); expect(() => mergeGeneratedFrames(current, previous, 'new-atlas', [1, 1], 'first')).toThrow('另一处'); expect(current).toEqual(before); });
+  it('选中帧已移除时不将结果误写到其它帧', () => { const previous = [frame('first', 0), frame('second', 1)], current = [previous[0]]; expect(() => mergeGeneratedFrames(current, previous, 'new-atlas', [1, 1], 'second')).toThrow('已移除'); expect(current).toEqual([previous[0]]); });
+});

@@ -100,6 +100,6 @@ export function attemptCostRecord(attempt: WorkflowAttempt, ledger: LedgerEntry[
 export function runCostRecords(run: WorkflowRun, ledger: LedgerEntry[]): CostRecord[] {
   if (run.mode !== 'live') return run.attempts.map(attempt => ({ ...attempt, billingMode: 'simulation' }));
   const entries = ledger.filter(entry => entry.workflowRunId === run.id);
-  const missing = run.attempts.filter(attempt => !entries.some(entry => entry.workflowAttemptId === attempt.id) && run.snapshot.steps.some(step => step.id === attempt.stepId && !['manual-review', 'export'].includes(step.kind)));
+  const missing = run.attempts.filter(attempt => !entries.some(entry => entry.workflowAttemptId === attempt.id) && run.snapshot.steps.some(step => step.id === attempt.stepId && !['manual-review', 'export', 'animation-compose'].includes(step.kind)));
   return [...entries, ...missing.map(attempt => ({ ...attempt, billingMode: 'live' as const }))];
 }

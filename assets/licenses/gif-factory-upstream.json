@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/WoYun520/gif-factory",
+  "revision": "17fcba20f19e8b3e64c448a574de384d767b23ab",
+  "license": "MIT",
+  "notice": "gif-factory.txt",
+  "adaptedMethods": [
+    "scripts/export_pack.py",
+    "scripts/export_keyframes.py",
+    "scripts/export_pixel_actions.py",
+    "scripts/export_lenticular.py",
+    "scripts/review_gif.py"
+  ],
+  "upstreamExampleArtIncluded": false,
+  "upstreamBrandFilmIncluded": false,
+  "providerClientIncluded": false
+}

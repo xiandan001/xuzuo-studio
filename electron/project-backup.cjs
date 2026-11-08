@@ -11,12 +11,15 @@ const { isBusinessPath, isBusinessStatePath, validateBusinessBackup, businessFor
 const { isCommerceImagePath, isCommerceOpaquePath, validateCommerceImageBackup, remapCommerceImage, renamedCommercePath } = require('./commerce-image-backup.cjs');
 const { isBeadMarketPath, validateBeadMarketBackup, remapBeadMarketBackup } = require('./bead-market-backup.cjs');
 const { isMarketAnalysisPath, checkedMarketAnalysis, remapMarketAnalysis } = require('./bead-market-ai-journal.cjs');
+const { isAnimationPath, isAnimationOpaquePath, validateAnimationBackup, remapAnimationBackup } = require('./animation-backup.cjs');
+const { isAnimationJournalPath, checkedAnimationJournal, remapAnimationJournal } = require('./animation-journal.cjs');
 const APP_VERSION = require('../package.json').version;
 const controlledPath = relative => {
   const parts = relative.split('/'), basename = parts.at(-1);
   const beadRecovery = /^bead-before-restore-[a-f0-9-]{36}\.json$/i.test(basename) || parts.at(-2) === 'bead-revisions-v1' && /^index-invalid-[a-f0-9-]{36}\.json$/i.test(basename);
   if (parts.includes('.xuzuo') && beadRecovery) return false;
   if (isCommerceOpaquePath(relative)) return false;
+  if (isAnimationOpaquePath(relative)) return false;
   return relative.endsWith('.json') && (parts.includes('.xuzuo') || isBusinessPath(relative) || basename === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(basename));
 };
 
@@ -60,10 +63,10 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (!relative.endsWith('.json')) continue;
       const parts = relative.split('/'), basename = parts.at(-1);
       if (isBusinessPath(relative)) validateBusinessBackup(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), relative);
-      if (isBeadMarketPath(relative) || isMarketAnalysisPath(relative)) {
+      if (isBeadMarketPath(relative) || isMarketAnalysisPath(relative) || isAnimationPath(relative) && !isAnimationOpaquePath(relative) || isAnimationJournalPath(relative)) {
         const prefix = relative.slice(0, relative.lastIndexOf('/.xuzuo/') + '/.xuzuo/'.length), owner = materialOwners.get(prefix); if (!owner) throw Error('材料报价备份的位置没有对应项目，未恢复。');
         const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-        if (isBeadMarketPath(relative)) validateBeadMarketBackup(value, relative, owner); else checkedMarketAnalysis(value, owner);
+        if (isAnimationJournalPath(relative)) checkedAnimationJournal(value, owner); else if (isAnimationPath(relative)) validateAnimationBackup(value, relative, owner); else if (isBeadMarketPath(relative)) validateBeadMarketBackup(value, relative, owner); else checkedMarketAnalysis(value, owner);
       }
       if (isCommerceImagePath(relative) && !isCommerceOpaquePath(relative)) {
         const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); validateCommerceImageBackup(value, relative);
@@ -263,7 +266,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
         let value;
         try {
           const raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(original));
-          value = isCommerceImagePath(relative) || frozenSnapshot ? remapCommerceImage(raw, idMap, relative) : isBeadMarketPath(relative) ? remapBeadMarketBackup(raw, idMap, relative) : isMarketAnalysisPath(relative) ? remapMarketAnalysis(raw, idMap) : relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames);
+          value = isCommerceImagePath(relative) || frozenSnapshot ? remapCommerceImage(raw, idMap, relative) : isAnimationJournalPath(relative) ? remapAnimationJournal(raw, idMap) : isAnimationPath(relative) ? remapAnimationBackup(raw, idMap, relative) : isBeadMarketPath(relative) ? remapBeadMarketBackup(raw, idMap, relative) : isMarketAnalysisPath(relative) ? remapMarketAnalysis(raw, idMap) : relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames);
           if (isBusinessStatePath(relative)) value = businessAfterRestore(value, remap(manifest.records, idMap, pathMap, renamedNames).map(record => record.run));
           if (isCommerceImagePath(relative)) {
             const renamed = renamedCommercePath(relative, idMap, value).split('/');
@@ -283,7 +286,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     for (const item of staged) {
       let buffer = item.buffer;
       if (item.controlled && path.basename(item.destination) === 'index-v1.json') {
-        const value = JSON.parse(buffer.toString('utf8')); for (const entry of value.entries || []) entry.fileName = fileNames[entry.fileName] || entry.fileName;
+        const value = JSON.parse(buffer.toString('utf8')); for (const entry of value.entries || []) { entry.fileName = fileNames[entry.fileName] || entry.fileName; if (path.basename(path.dirname(item.destination)) === 'animation-revisions-v1') { const match = /^revision-\d+-([a-f0-9]{64})\.json$/.exec(entry.fileName); if (!match) throw Error('恢复后的动画版本名称无效。'); entry.hash = match[1]; } }
         buffer = Buffer.from(`${JSON.stringify(value)}\n`);
       }
       // Revision index hashes must refer to the rewritten immutable revision file.

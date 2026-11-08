@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { verifyAnimationRuntimeBinding } from './animation-runtime-binding.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dependencies = createRequire(path.join(root, 'package.json'));
@@ -125,7 +126,8 @@ async function verifyArchive(archive, source, managedRoot, managedFiles) {
   const maintenance = 'resources/xuzuo-maintenance.exe', maintenanceHash = await fileHashes(path.join(managedRoot, native(maintenance)));
   assert.equal(maintenanceHash.sha256, (await fileHashes(path.join(root, 'work/setup-runtime/xuzuo-maintenance.exe'))).sha256, 'Maintenance extraResource mismatch');
   assert(managedFiles.has('resources/app.asar') && managedFiles.has(maintenance) && managedFiles.has('resources/app.asar.unpacked/' + drive));
-  return { counts, runtimeDependencies, devDomLibraryExcluded: true, driveHelperUnpacked: true, maintenanceMatchesBuild: true, rendererNetworkCspPresent: true };
+  const animationRuntime = await verifyAnimationRuntimeBinding(root, managedFiles);
+  return { counts, runtimeDependencies, devDomLibraryExcluded: true, driveHelperUnpacked: true, maintenanceMatchesBuild: true, rendererNetworkCspPresent: true, animationRuntime };
 }
 async function main() {
   assert.equal(process.platform, 'win32', 'Static setup resource inspection requires Windows');

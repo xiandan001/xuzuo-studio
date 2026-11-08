@@ -21,7 +21,7 @@ const allowedBeadMime = new Set(['image/png', 'application/pdf', 'text/csv', 'ap
 const check = (id, label, status, detail) => ({ id, label, status, detail });
 function failure(message) { return Error(`${message} 已有文件和费用保留，请重新检查当前版本。`); }
 
-function createLocalImageProof({ artifactStore, readBeadDocument }) {
+function createLocalImageProof({ artifactStore, readBeadDocument, readAnimationDocument }) {
   async function filesFor(input) {
     if (!validId(input.projectId) || !validId(input.runId) || !Array.isArray(input.artifacts) || !input.artifacts.length || input.artifacts.length > 20) throw failure('本地成品记录无效。');
     const seen = new Set(), files = [], originals = new Map(); let total = 0;
@@ -35,8 +35,9 @@ function createLocalImageProof({ artifactStore, readBeadDocument }) {
     return { files, originals };
   }
   async function validate(input) {
-    if (!input || ['beadExport', 'wallpaperExport', 'commerceExport'].filter(key => input[key] !== undefined).length !== 1) throw failure('需要明确且唯一的本地图像来源证明。');
+    if (!input || ['beadExport', 'wallpaperExport', 'commerceExport', 'animationExport'].filter(key => input[key] !== undefined).length !== 1) throw failure('需要明确且唯一的本地图像来源证明。');
     const { files, originals } = await filesFor(input);
+    if (input.animationExport !== undefined) { const result = await require('./animation-proof.cjs').validateAnimationProof(input, { artifactStore, readAnimationDocument }); return { ...result, proof: { ...result.proof, runId: input.runId, files } }; }
     if (input.commerceExport !== undefined) {
       const source = input.commerceExport;
       if (!source || !validId(source.documentId) || !validId(source.sourceArtifactId) || !validId(source.originalSourceArtifactId) || !fingerprint(source.documentSha256) || !fingerprint(source.originalSourceSha256) || !Number.isSafeInteger(source.revision) || source.revision < 1 || typeof source.protectedPixelsVerified !== 'boolean' || !Array.isArray(source.sizes) || !source.sizes.length || source.sizes.length > 10) throw failure('商品图层版本或来源无效。');
@@ -83,16 +84,19 @@ function createLocalImageProof({ artifactStore, readBeadDocument }) {
   }
   async function inspect(run, selectedIds = []) {
     const proof = run?.localImageProof, attempt = run?.attempts?.[0];
-    if (!proof || proof.version !== 1 || !['bead', 'wallpaper-4k', 'commerce'].includes(proof.kind) || proof.runId !== run.id || proof.projectId !== run.projectId || run.mode !== 'live' || run.status !== 'complete' || run.snapshot?.outputKind !== 'image' || !Array.isArray(run.snapshot.steps) || run.snapshot.steps.length !== 1 || run.snapshot.steps[0]?.kind !== 'export' || !Array.isArray(run.attempts) || run.attempts.length !== 1 || attempt.status !== 'complete' || attempt.costState !== 'not-incurred' || attempt.costCents !== 0 || attempt.usage || attempt.calculation || !Array.isArray(proof.files) || !proof.files.length) throw failure('本地交付记录不完整。');
+    if (!proof || proof.version !== 1 || !['bead', 'wallpaper-4k', 'commerce', 'animation'].includes(proof.kind) || proof.runId !== run.id || proof.projectId !== run.projectId || run.mode !== 'live' || run.status !== 'complete' || run.snapshot?.outputKind !== 'image' || !Array.isArray(run.snapshot.steps) || run.snapshot.steps.length !== 1 || run.snapshot.steps[0]?.kind !== 'export' || !Array.isArray(run.attempts) || run.attempts.length !== 1 || attempt.status !== 'complete' || attempt.costState !== 'not-incurred' || attempt.costCents !== 0 || attempt.usage || attempt.calculation || !Array.isArray(proof.files) || !proof.files.length) throw failure('本地交付记录不完整。');
     for (const file of proof.files) if (!file || !validId(file.id) || typeof file.name !== 'string' || typeof file.mimeType !== 'string' || !Number.isSafeInteger(file.bytes) || file.bytes <= 0 || !fingerprint(file.sha256)) throw failure('本地交付校验记录无效。');
-    const fresh = await validate({ projectId: run.projectId, runId: run.id, artifacts: attempt.artifacts, ...(proof.kind === 'bead' ? { beadExport: proof.beadExport } : proof.kind === 'commerce' ? { commerceExport: proof.commerceExport } : { wallpaperExport: proof.wallpaperExport }) });
+    const fresh = await validate({ projectId: run.projectId, runId: run.id, artifacts: attempt.artifacts, ...(proof.kind === 'animation' ? { animationExport: proof.animationExport } : proof.kind === 'bead' ? { beadExport: proof.beadExport } : proof.kind === 'commerce' ? { commerceExport: proof.commerceExport } : { wallpaperExport: proof.wallpaperExport }) });
     if (!Array.isArray(proof.files) || fresh.proof.files.length !== proof.files.length || fresh.proof.files.some(file => !proof.files.some(saved => saved.id === file.id && saved.name === file.name && saved.mimeType === file.mimeType && saved.bytes === file.bytes && saved.sha256 === file.sha256))) throw failure('交付文件与登记时的校验值不一致。');
     if (!Array.isArray(selectedIds) || selectedIds.length > 20) throw failure('请选择当前版本的成品。');
     const selected = selectedIds.length ? selectedIds : proof.files.map(file => file.id), unique = new Set();
     for (const id of selected) { if (!validId(id) || unique.has(id) || !proof.files.some(file => file.id === id)) throw failure('所选文件不属于本次本地成品。'); unique.add(id); }
     const files = proof.files.filter(file => unique.has(file.id));
     let checks, title, revision;
-    if (proof.kind === 'commerce') {
+    if (proof.kind === 'animation') {
+      title = run.workflowName || '角色动画'; revision = `animation:${proof.animationExport.renderHash}`;
+      checks = [check('animation-source', '图集与当前编辑版本可追溯', 'passed', '源稿哈希、选中条目和本地成品一致。'), check('animation-container', '实际文件格式与资源限制', 'passed', '文件通过实际GIF或PNG结构检查。'), check('animation-motion', '角色、动作和循环已观看', 'manual', '检查是否变脸、串帧、跳动、裁切和循环断点。'), check('rights', '角色、素材与字体使用范围', 'manual', '使用自有或已获授权素材，不把技术检查当成商用授权。')];
+    } else if (proof.kind === 'commerce') {
       const document = fresh.commerceDocument; title = document.title; revision = `commerce:${document.id}:${document.revision}:${proof.commerceExport.documentSha256}`;
       checks = [check('commerce-source', '商品原图与可编辑图层可追溯', 'passed', '原图SHA、保存修订、图层及实际成品一致。'), check('commerce-sizes', '实际输出像素符合所选尺寸', 'passed', proof.commerceExport.sizes.map(size => `${size.width}×${size.height}`).join('、')), check('commerce-protection', '非修改区域像素保护', document.protectedMaskArtifactId && proof.commerceExport.protectedPixelsVerified ? 'passed' : 'manual', document.protectedMaskArtifactId ? '原尺寸合成已按蒙版保留非修改区；其它尺寸为本地重采样。' : '未启用精确保护区，请对照原图检查主体细节。'), check('commerce-facts', '商品、价格与Logo已查看', 'manual', '检查商品外观、文字参数、价格、字体与Logo，不自动当作已获客户认可。'), check('rights', '素材与字体适合本次用途', 'manual', '确认商品图片、品牌标志和字体的使用范围。')];
     } else if (proof.kind === 'bead') {

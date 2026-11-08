@@ -220,7 +220,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       if (input.buffer !== undefined && !(input.buffer instanceof Uint8Array)) throw new Error('产物二进制格式无效。');
       const buffer = input.text !== undefined ? Buffer.from(input.text, 'utf8') : Buffer.from(input.buffer);
       if (input.mimeType === 'image/svg+xml') require('./image-output-formats.cjs').validateSvg(buffer);
-      if (input.mimeType === 'image/gif') require('./image-output-formats.cjs').validateGif(buffer);
+      if (input.mimeType === 'image/gif') require('./image-output-formats.cjs').validateLocalGif(buffer);
       if (buffer.length > MAX_FILE_BYTES) throw new Error('单个产物最大支持 100 MB，请缩小内容或拆分文件。');
       const provenance = assetProvenance(input.provenance);
       const entries = await loadManifest();
@@ -332,7 +332,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
     if (imageSupported && artifact.bytes > 20 * 1024 * 1024) return { artifact, supported: false, reason: '图像超过 20 MB，请保存后使用本机图像查看器检查。' };
     const result = await read(id);
     const { buffer } = result;
-    if (imageSupported) { if (result.mimeType === 'image/svg+xml') require('./image-output-formats.cjs').validateSvg(buffer); if (result.mimeType === 'image/gif') require('./image-output-formats.cjs').validateGif(buffer); return { artifact, supported: true, dataUrl: `data:${result.mimeType};base64,${buffer.toString('base64')}` }; }
+    if (imageSupported) { if (result.mimeType === 'image/svg+xml') require('./image-output-formats.cjs').validateSvg(buffer); if (result.mimeType === 'image/gif') require('./image-output-formats.cjs').validateLocalGif(buffer); return { artifact, supported: true, dataUrl: `data:${result.mimeType};base64,${buffer.toString('base64')}` }; }
     if (result.kind === 'text') {
       if (buffer.length > TEXT_PREVIEW_BYTES) return { artifact, supported: false, reason: '文字超过 1 MB，请保存后在本机编辑器查看。' };
       try { return { artifact, supported: true, text: new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^\uFEFF/, '') }; }

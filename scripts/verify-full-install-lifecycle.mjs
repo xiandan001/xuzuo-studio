@@ -75,7 +75,8 @@ async function downloadOld(destination) {
   assert.equal(bytes, oldBytes); assert.equal(hash.digest('hex'), oldSha);
 }
 async function verifyRuntime(runtime, manifest, extra = []) {
-  const actual = await walk(runtime); assert.equal(manifest.files.length, 74);
+  const actual = await walk(runtime); assert(Array.isArray(manifest.files) && manifest.files.length > 0); if (manifest.version === oldVersion) assert.equal(manifest.files.length, 74);
+  assert.equal(actual.size, manifest.files.length + extra.length);
   assert.deepEqual([...actual.keys()].sort(), [...manifest.files.map(file => file.path), ...extra].sort());
   for (const file of manifest.files) assert.deepEqual(await identity(inside(runtime, path.join(runtime, ...file.path.split('/')))), { bytes: file.bytes, sha256: file.sha256 }, file.path);
 }
@@ -84,7 +85,7 @@ async function main() {
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted', 'Only a disposable GitHub-hosted runner may install this fixture');
   assert.equal((await fsp.realpath(process.env.GITHUB_WORKSPACE)).toLowerCase(), (await fsp.realpath(root)).toLowerCase());
   assert(process.env.RUNNER_TEMP && path.isAbsolute(process.env.RUNNER_TEMP)); assert(process.argv.length <= 3);
-  const sourcePackage = await json(path.join(root, 'package.json')); assert.equal(sourcePackage.version, '2.4.0');
+  const sourcePackage = await json(path.join(root, 'package.json')); assert.equal(sourcePackage.version, '2.5.0');
   const release = path.resolve(process.argv[2] || path.join(root, sourcePackage.build.directories.output)); inside(path.join(root, 'outputs'), release); await ordinary(release, true);
   reportFile = path.join(release, 'full-install-lifecycle.json'); await assert.rejects(fsp.lstat(reportFile), { code: 'ENOENT' });
   current = await json(path.join(release, 'package-verification.json')); assert.equal(current.passed, true); assert.equal(current.commit, process.env.GITHUB_SHA); assert.equal(current.version, sourcePackage.version);
@@ -132,14 +133,14 @@ async function main() {
   for (const source of extracted) {
     const meta = { ...metadata, version: source.manifest.version }, maintenance = path.join(fixture, source.name, 'qa-maintenance.exe'); await compileSetup(maintenance, meta);
     const replacement = await identity(maintenance), manifest = { ...source.manifest, appId: meta.appId, files: source.manifest.files.map(file => file.path === 'resources/xuzuo-maintenance.exe' ? { path: file.path, ...replacement } : file) };
-    const unchanged = manifest.files.filter(file => source.manifest.files.some(old => old.path === file.path && old.bytes === file.bytes && old.sha256 === file.sha256)); assert.equal(unchanged.length, 73);
+    const unchanged = manifest.files.filter(file => source.manifest.files.some(old => old.path === file.path && old.bytes === file.bytes && old.sha256 === file.sha256)); assert.equal(manifest.files.length, source.manifest.files.length); assert.equal(unchanged.length, source.manifest.files.length - 1);
     const manifestFile = path.join(fixture, source.name, 'qa-manifest.json'), payload = path.join(fixture, source.name, 'qa-payload.zip'); await fsp.writeFile(manifestFile, JSON.stringify(manifest) + '\n', { flag: 'wx' });
     await archivePayload(source.runtime, manifest.files, payload, { 'resources/xuzuo-maintenance.exe': maintenance });
     const setup = path.join(fixture, source.name, 'qa-setup.exe'); await compileSetup(setup, meta, { 'Setup.Manifest.json': manifestFile, 'Setup.Payload.zip': payload });
     const driver = await controller(path.join(fixture, source.name, 'controller.exe'), meta, manifestFile, payload);
-    packages.push({ ...source, metadata: meta, manifest, manifestFile, payload, setup, driver });
+    packages.push({ ...source, metadata: meta, manifest, manifestFile, payload, setup, driver, unchangedFiles: unchanged.length });
   }
-  const [old, next] = packages; report.payloadBinding = packages.map(item => ({ version: item.metadata.version, sourceFiles: 74, unchangedFiles: 73, variation: { path: 'resources/xuzuo-maintenance.exe', source: item.manifest.version === oldVersion ? extracted[0].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') : extracted[1].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe'), qa: item.manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') } }));
+  const [old, next] = packages; report.payloadBinding = packages.map(item => ({ version: item.metadata.version, sourceFiles: item.manifest.files.length, unchangedFiles: item.unchangedFiles, variation: { path: 'resources/xuzuo-maintenance.exe', source: item.manifest.version === oldVersion ? extracted[0].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') : extracted[1].manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe'), qa: item.manifest.files.find(file => file.path === 'resources/xuzuo-maintenance.exe') } }));
   installed = path.join(fixture, 'installed', 'application'); inside(fixture, installed);
   const userDirectory = path.join(fixture, 'creative-data'); await fsp.mkdir(userDirectory); const userFile = path.join(userDirectory, 'user-sentinel.json'); await fsp.writeFile(userFile, '{"ownedFixture":true,"preserve":"project-draft-and-fee-sentinel"}\n', { flag: 'wx' }); const userHash = await identity(userFile);
   const syntheticFeeFile = path.join(userDirectory, 'synthetic-fee-sentinel.json');

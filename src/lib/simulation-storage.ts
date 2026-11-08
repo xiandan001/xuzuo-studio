@@ -7,7 +7,7 @@ type Source = Store | (() => Store);
 export interface SimulationRead { runs: WorkflowRun[]; raw?: string | null; issue?: StorageIssue; }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const strings = (value: unknown, fields: string[]) => object(value) && fields.every(field => typeof value[field] === 'string');
-const stepKinds = ['text', 'vision', 'image-generation', 'image-editing', 'transcription', 'speech', 'video-understanding', 'video-generation', 'manual-review', 'export'];
+const stepKinds = ['text', 'vision', 'image-generation', 'image-editing', 'transcription', 'speech', 'video-understanding', 'video-generation', 'manual-review', 'export', 'animation-compose'];
 function validRun(value: unknown): value is WorkflowRun {
   if (!object(value) || !strings(value, ['id', 'workspaceId', 'projectId', 'workflowId', 'workflowName', 'input', 'createdAt', 'updatedAt']) || !['running', 'paused', 'waiting-review', 'complete', 'cancelled', 'interrupted', 'failed'].includes(String(value.status)) || value.mode !== undefined && value.mode !== 'simulation' || !object(value.variables) || !Object.values(value.variables).every(item => typeof item === 'string')) return false;
   const flow = value.snapshot;

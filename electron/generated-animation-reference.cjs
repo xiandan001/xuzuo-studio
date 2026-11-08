@@ -1,5 +1,5 @@
 const { createHash } = require('node:crypto');
-const { imageType, validateGif, rasterDimensions } = require('./image-output-formats.cjs');
+const { imageType, validateLocalGif: validateGif, rasterDimensions } = require('./image-output-formats.cjs');
 
 const MAX_PNG_BYTES = 20 * 1024 * 1024;
 const MAX_GIF_BYTES = 32 * 1024 * 1024;

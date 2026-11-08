@@ -1,6 +1,6 @@
 const { ModelRuntimeError, endpoint, failure, checkedUrl, ensureActive, progress, request: httpRequest, jsonRequest, readLimited, normalizedUsage } = require('./provider-http.cjs');
 const { combinedText } = require('./provider-text.cjs');
-const { imageType } = require('./image-output-formats.cjs');
+const { imageType, validateGif } = require('./image-output-formats.cjs');
 const { imageOptionsError, imageOutputFields } = require('./image-output-options.cjs');
 
 const MAX_MEDIA_BYTES = 32 * 1024 * 1024;
@@ -83,7 +83,7 @@ async function executeImages(request, files, context, fetchImpl, saveArtifact, m
       ensureActive(context);
       const bytes = await imageBytes(data.data[index], context, fetchImpl);
       let type;
-      try { type = imageType(bytes); } catch (error) { throw failure('INVALID_IMAGE', error.message, context); }
+      try { type = imageType(bytes); if (type.mimeType === 'image/gif') validateGif(bytes); } catch (error) { throw failure('INVALID_IMAGE', error.message, context); }
       const expected = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', gif: 'image/gif' }[fields.output_format];
       if (type.mimeType !== expected) throw failure('IMAGE_FORMAT_MISMATCH', '供应商返回的实际图片格式与请求不一致，未伪装为所选格式保存；请核对本次用量。', context);
       if (fields.output_format === 'gif' && type.frames !== (fields.frame_count ?? 9)) animationNotes.push(`第${index + 1}份GIF请求${fields.frame_count ?? 9}帧，返回${type.frames}帧；已保留实际动画，未自动重发。`);

@@ -47,7 +47,7 @@ function validateSvg(bytes) {
   }
   return { mimeType: 'image/svg+xml', extension: 'svg' };
 }
-function validateGif(bytes) {
+function validateGif(bytes, { maxFrames = 16, maxPixels = 33554432 } = {}) {
   if (bytes.length < 20 || !['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) throw invalid('GIF 文件头无效。');
   const width = bytes.readUInt16LE(6), height = bytes.readUInt16LE(8);
   if (!width || !height || width > 3840 || height > 3840 || width * height > 8294400) throw invalid('GIF 帧尺寸无效或过大。');
@@ -55,22 +55,23 @@ function validateGif(bytes) {
   function blocks() { while (offset < bytes.length) { const length = bytes[offset++]; if (!length) return; offset += length; if (offset > bytes.length) break; } throw invalid('GIF 数据块不完整。'); }
   while (offset < bytes.length) {
     const type = bytes[offset++];
-    if (type === 0x3b) { if (offset !== bytes.length || frames < 2 || frames > 16 || width * height * frames > 33554432) throw invalid('GIF 动画帧数或总体尺寸超出当前支持范围。'); return { mimeType: 'image/gif', extension: 'gif', frames, width, height }; }
+    if (type === 0x3b) { if (offset !== bytes.length || frames < 2 || frames > maxFrames || width * height * frames > maxPixels) throw invalid('GIF 动画帧数或总体尺寸超出当前支持范围。'); return { mimeType: 'image/gif', extension: 'gif', frames, width, height }; }
     if (type === 0x21) { if (offset >= bytes.length) break; offset++; blocks(); continue; }
     if (type !== 0x2c || offset + 9 > bytes.length) throw invalid('GIF 图像帧无效。');
     const left = bytes.readUInt16LE(offset), top = bytes.readUInt16LE(offset + 2), w = bytes.readUInt16LE(offset + 4), h = bytes.readUInt16LE(offset + 6), packed = bytes[offset + 8]; offset += 9;
     if (!w || !h || left + w > width || top + h > height) throw invalid('GIF 图像帧超出画布。');
     if (packed & 128) offset += 3 * 2 ** ((packed & 7) + 1);
     if (offset >= bytes.length || bytes[offset] < 2 || bytes[offset] > 8) throw invalid('GIF 压缩数据无效。');
-    offset++; blocks(); frames++; if (frames > 16) throw invalid('当前最多支持16帧GIF。');
+    offset++; blocks(); frames++; if (frames > maxFrames) throw invalid(`当前路径最多支持${maxFrames}帧GIF。`);
   }
   throw invalid('GIF 缺少完整结束标记。');
 }
+function validateLocalGif(bytes) { return validateGif(bytes, { maxFrames: 120, maxPixels: 48000000 }); }
 function imageType(bytes) {
   if (bytes.length >= 45 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString('ascii', 12, 16) === 'IHDR' && bytes.readUInt32BE(16) > 0 && bytes.readUInt32BE(20) > 0 && bytes.toString('ascii', bytes.length - 8, bytes.length - 4) === 'IEND') return { mimeType: 'image/png', extension: 'png' };
   if (bytes.length >= 8 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 && bytes.at(-2) === 255 && bytes.at(-1) === 217) return { mimeType: 'image/jpeg', extension: 'jpg' };
   if (bytes.length >= 20 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' && bytes.readUInt32LE(4) + 8 === bytes.length) return { mimeType: 'image/webp', extension: 'webp' };
-  if (bytes.toString('ascii', 0, 3) === 'GIF') return validateGif(bytes);
+  if (bytes.toString('ascii', 0, 3) === 'GIF') return validateLocalGif(bytes);
   if (/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:[A-Za-z_][\w.-]*:)?svg[\s>]/.test(bytes.toString('utf8', 0, Math.min(bytes.length, 4096)).replace(/^\uFEFF/, ''))) return validateSvg(bytes);
   throw invalid('供应商没有返回可识别的PNG、JPEG、WebP、静态SVG或动画GIF。');
 }
@@ -84,4 +85,4 @@ function validateMarkup(markup, source) {
   if (!transparent) throw invalid('标注层需要实际透明像素，不能把标记直接压在原图上。');
   return overlay;
 }
-module.exports = { imageType, validateSvg, validateGif, rasterDimensions, validateMarkup };
+module.exports = { imageType, validateSvg, validateGif, validateLocalGif, rasterDimensions, validateMarkup };

@@ -13,6 +13,8 @@ import { KIND_LABEL, parseOptionalBudget } from '../data';
 import { studioCredential, workflowStepSelection, workflowSelections, WORKFLOW_OUTPUT_MIN, WORKFLOW_OUTPUT_MAX } from '../lib/studio-run';
 import '../pages/workflows.css';
 import { STEP_KINDS, isModelStep, kindLabel, StepIcon, categoryOptions, makeStep, normalizeSteps, WorkflowDialog } from './workflow-shared';
+import { AnimationWorkflowSettings } from './AnimationWorkflowSettings';
+import { checkedAnimationWorkflowSettings, defaultAnimationWorkflowSettings } from '../lib/animation-workflow';
 
 function availableModels(props: PageProps, kind: WorkflowStepKind): ModelConfiguration[] {
   if (!isModelStep(kind)) return [];
@@ -69,7 +71,7 @@ function StepSettings({ props, step, index, firstEnabledIndex, priorContentSteps
   const templates = props.prompts.filter(template => template.category === 'general' || (step.kind.startsWith('image') ? template.category === 'image' : step.kind === 'text' ? template.category !== 'image' : true));
   const authorModels = [...new Map(props.configuration.models.filter(item => item.enabled && !item.demo && item.capabilities.includes('text') && props.configuration.connections.some(connection => connection.id === item.connectionId && connection.enabled && connection.providerId === 'openai')).map(item => [item.modelId, { modelId: item.modelId, name: item.name }])).values()];
   function changeKind(kind: WorkflowStepKind) {
-    onChange(workflowStepSelection({ ...step, kind, name: step.name === kindLabel(step.kind) ? kindLabel(kind) : step.name, prompt: isModelStep(kind) ? step.prompt : '', promptTemplateId: undefined, budgetCents: step.budgetCents, contentSourceStepId: undefined, imageSize: kind === 'video-generation' ? '1280x720' : step.imageSize }, props.configuration));
+    onChange(workflowStepSelection({ ...step, kind, name: step.name === kindLabel(step.kind) ? kindLabel(kind) : step.name, prompt: isModelStep(kind) ? step.prompt : '', promptTemplateId: undefined, budgetCents: step.budgetCents, contentSourceStepId: undefined, animation: kind === 'animation-compose' ? step.animation || defaultAnimationWorkflowSettings() : undefined, ...(kind === 'animation-compose' ? { modelConfigId: undefined, credentialId: undefined } : {}), imageSourceStepId: kind === 'animation-compose' || kind === 'image-editing' ? step.imageSourceStepId : undefined, imageSize: kind === 'video-generation' ? '1280x720' : step.imageSize }, props.configuration));
   }
   return <section ref={settings} className="wf-step-settings"><div className="wf-settings-title"><StepIcon kind={step.kind} /><div><h3>第 {index + 1} 步 · {kindLabel(step.kind)}</h3><p>{STEP_KINDS.find(item => item.value === step.kind)?.description}</p></div></div>
     <label className="wf-field"><span>步骤名称</span><input className="field" aria-label="步骤名称" value={step.name} maxLength={60} onChange={event => onChange({ name: event.target.value })} /></label>
@@ -98,7 +100,7 @@ function StepSettings({ props, step, index, firstEnabledIndex, priorContentSteps
       {step.kind === 'speech' && <label className="wf-field"><span>语音名称</span><input className="field" aria-label="工作流语音名称" maxLength={80} value={step.voice || 'alloy'} onChange={event => onChange({ voice: event.target.value })} placeholder="复制服务商支持的 voice 名称" /><small>填写所选语音模型支持的声音标识。</small></label>}
       <label className="wf-field"><span>本步骤金额上限（元，选填）</span><input className="field" aria-label="步骤金额上限" type="number" min="0" step="0.01" placeholder="选填，留空不设上限" value={step.budgetCents == null ? '' : step.budgetCents / 100} onChange={event => { try { const budgetCents = parseOptionalBudget(event.target.value); event.currentTarget.setCustomValidity(''); onChange({ budgetCents }); } catch (error) { event.currentTarget.setCustomValidity(error instanceof Error ? error.message : '请填写有效金额或留空。'); } }} /><small>留空不限制本步骤，填写 0 表示零上限；实际费用仍按每次调用累计。</small></label>
       </RememberedDetails>
-    </> : <div className="wf-human-note"><ShieldCheck size={22} /><h4>{step.kind === 'manual-review' ? '把最后的判断留给自己' : '先核对，再整理交付'}</h4><p>{step.kind === 'manual-review' ? '运行到这里会暂停，等你检查并确认后继续。此步骤不调用模型、不新增模型费用。' : '真实模式会整理当前结果并生成交付文件，是否成功以实际产物为准。此步骤不调用模型。打开成品后仍需核对版式、公式与内容。'}</p></div>}
+    </> : step.kind === 'animation-compose' ? <AnimationWorkflowSettings step={step} priorSteps={priorSteps} onChange={onChange} /> : <div className="wf-human-note"><ShieldCheck size={22} /><h4>{step.kind === 'manual-review' ? '把最后的判断留给自己' : '先核对，再整理交付'}</h4><p>{step.kind === 'manual-review' ? '运行到这里会暂停，等你检查并确认后继续。此步骤不调用模型、不新增模型费用。' : '真实模式会整理当前结果并生成交付文件，是否成功以实际产物为准。此步骤不调用模型。打开成品后仍需核对版式、公式与内容。'}</p></div>}
     {step.kind === 'export' && <label className="wf-field wf-export-source"><span>交付文件的正文来源</span><Select className="field" aria-label="交付正文来源" value={step.contentSourceStepId || ''} onValueChange={value => onChange({ contentSourceStepId: value || undefined })} options={[{ value: '', label: '自动使用最近的正文步骤' }, ...priorContentSteps.map(item => ({ value: item.id, label: item.name }))]} /><small>仅列出前面启用的文本创作或语音转写步骤。自动模式会跳过图片复核等短评。</small>{step.contentSourceStepId && !priorContentSteps.some(source => source.id === step.contentSourceStepId) && <small className="wf-warning">原正文步骤已移动或停用，请重新选择。</small>}</label>}
   </section>;
 }
@@ -144,6 +146,7 @@ export function WorkflowEditor({ props, initial, workflowId, onClose, onSaved, l
     const invalid = enabled.find(step => !step.name.trim() || (isModelStep(step.kind) && (!step.prompt.trim() || !availableModels(props, step.kind).some(model => model.id === step.modelConfigId) || !Number.isInteger(step.maxOutputTokens ?? 2048) || (step.maxOutputTokens ?? 2048) < WORKFLOW_OUTPUT_MIN || (step.maxOutputTokens ?? 2048) > WORKFLOW_OUTPUT_MAX)));
     if (invalid) { const field = !invalid.prompt.trim() ? 'prompt' : !availableModels(props, invalid.kind).some(model => model.id === invalid.modelConfigId) ? 'modelConfigId' : 'maxOutputTokens'; setSelectedId(invalid.id); setFocus({ stepId: invalid.id, field }); setError(`请检查“${invalid.name || '未命名步骤'}”的名称、提示词、模型和输出范围（16–16384）。`); return; }
     for (const step of enabled) {
+      if (step.kind === 'animation-compose') { try { checkedAnimationWorkflowSettings(step.animation); if (draft.outputKind !== 'image') throw Error('本地动画合成仅用于图片项目。'); } catch (error) { setSelectedId(step.id); setError(error instanceof Error ? error.message : '请检查动画合成参数。'); return; } }
       const imageIssue = workflowImageIssue(step, props.configuration.models.find(model => model.id === step.modelConfigId)?.modelId || '');
       if (imageIssue) { setSelectedId(step.id); setFocus({ stepId: step.id, field: step.imageOutputFormat === 'svg' ? 'count' : 'imageSize' }); setError(`“${step.name}”：${imageIssue}`); return; }
     }
