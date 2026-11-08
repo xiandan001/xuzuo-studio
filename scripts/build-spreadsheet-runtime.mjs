@@ -30,3 +30,5 @@ const factories = naturalModules.map(name => {
 const naturalRuntime = `// Generated from src/lib/natural-automation-plan.ts and its shared helpers; run scripts/build-spreadsheet-runtime.mjs.\n'use strict';\nconst factories = {\n${factories.join(',\n')}\n};\nconst cache = Object.create(null);\nfunction load(id) {\n  if (!Object.hasOwn(factories, id)) throw new Error('Unknown natural automation dependency');\n  if (cache[id]) return cache[id].exports;\n  const module = cache[id] = { exports: {} };\n  factories[id](module, module.exports, load);\n  return module.exports;\n}\nmodule.exports = load('./natural-automation-plan');\n`;
 fs.writeFileSync(path.join(root, 'electron/natural-automation-plan.runtime.cjs'), naturalRuntime.replace(/\r\n?/g, '\n'), 'utf8');
 await import('./build-bead-runtime.mjs');
+await import('./build-business-runtime.mjs');
+await import('./build-business-production-runtime.mjs');

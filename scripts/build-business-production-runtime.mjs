@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
+const mirror = path.join(root, 'work/ui-build/node_modules/typescript'), ts = require(fs.existsSync(mirror) ? mirror : 'typescript');
+const source = path.join(root, 'src/lib/business-production.ts'), output = ts.transpileModule(fs.readFileSync(source, 'utf8'), { fileName: source, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, strict: true }, reportDiagnostics: true });
+if (output.diagnostics?.length) throw Error(ts.formatDiagnosticsWithColorAndContext(output.diagnostics, { getCanonicalFileName: value => value, getCurrentDirectory: () => root, getNewLine: () => '\n' }));
+if (/require\(/.test(output.outputText)) throw Error('Business production planner must remain dependency-free at runtime');
+fs.writeFileSync(path.join(root, 'electron/business-production.runtime.cjs'), '// Generated from src/lib/business-production.ts; run scripts/build-business-production-runtime.mjs.\n' + output.outputText.replace(/\r\n?/g, '\n'), 'utf8');

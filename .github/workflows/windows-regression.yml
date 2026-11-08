@@ -41,10 +41,14 @@ jobs:
           git diff --exit-code -- electron
       - name: Verify native bead files and printed PDF
         run: node scripts/verify-bead-native.cjs
+      - name: Verify native commerce typography and image capture
+        run: node_modules/electron/dist/electron.exe scripts/verify-commerce-native.cjs --output=work/commerce-native-output
       - name: Type check
         run: node node_modules/typescript/bin/tsc -b --pretty false
       - name: Build renderer
         run: node node_modules/vite/bin/vite.js build
+      - name: Verify actual business renderer interactions
+        run: node scripts/verify-business-browser.mjs
       - name: Run source tests with one worker
         id: source_tests
         run: |
@@ -90,6 +94,10 @@ jobs:
             work/bead-native-acceptance.json
             work/bead-native-output/*.pdf
             work/bead-native-output/*.png
+            work/commerce-native-output/report.json
+            work/commerce-native-output/*.png
+            work/business-browser-output/report.json
+            work/business-browser-output/*.png
       - name: Build Windows drive helper
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
@@ -122,7 +130,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.2.0/full-install-lifecycle.json
+            outputs/release-v2.3.0/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -132,8 +140,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.exe
-            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.exe.blockmap
-            outputs/release-v2.2.0/Xuzuo-Studio-Setup-2.2.0.manifest.json
-            outputs/release-v2.2.0/latest.yml
-            outputs/release-v2.2.0/package-verification.json
+            outputs/release-v2.3.0/Xuzuo-Studio-Setup-2.3.0.exe
+            outputs/release-v2.3.0/Xuzuo-Studio-Setup-2.3.0.exe.blockmap
+            outputs/release-v2.3.0/Xuzuo-Studio-Setup-2.3.0.manifest.json
+            outputs/release-v2.3.0/latest.yml
+            outputs/release-v2.3.0/package-verification.json

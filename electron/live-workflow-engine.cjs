@@ -13,6 +13,7 @@ const { imageExportAssets } = require('./image-export-sources.cjs');
 const { startFingerprint } = require('./live-start.cjs');
 const { replacementReview, assertRefinementSource } = require('./refinement-fork.cjs');
 const { validateResumeImageSources } = require('./resume-image-sources.cjs');
+const { explicitStepReferences } = require('./workflow-references.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const now = () => new Date().toISOString();
@@ -140,8 +141,9 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
   async function inputFor(record, step, index) {
     const previous = step.inputSource === 'previous' ? latestBefore(record.run, index) : undefined;
     let input = previous?.summary || record.run.input;
+    const explicit = await explicitStepReferences(step, record.run.projectId, artifactStore);
     const attachmentIds = [...new Set([...record.request.attachmentIds, ...(step.inputSource === 'previous' && previous ? (previous.artifacts || []).map(item => item.id) : [])])];
-    let attachments = await artifactStore.list(attachmentIds);
+    let attachments = explicit === undefined ? await artifactStore.list(attachmentIds) : explicit;
     if (step.imageSourceStepId) {
       const source = record.run.snapshot.steps.find(item => item.id === step.imageSourceStepId);
       const sourceIndex = record.run.snapshot.steps.indexOf(source);
@@ -319,7 +321,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
   }
   function planningReview(request, record) {
     const run = record.run;
-    return request.purpose === 'automation-plan' && run.purpose !== 'automation-plan' && run.workspaceId === request.project.workspaceId && run.snapshot.outputKind === request.project.kind && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && !controllers.has(run.id) && !run.attempts.some(attempt => attempt.status === 'running');
+    return ['automation-plan', 'business-assist'].includes(request.purpose) && !['automation-plan', 'business-assist'].includes(run.purpose) && run.workspaceId === request.project.workspaceId && run.snapshot.outputKind === request.project.kind && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && !controllers.has(run.id) && !run.attempts.some(attempt => attempt.status === 'running');
   }
   return {
     drain, flush: drain,
@@ -354,7 +356,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         await assertRefinementSource(request, replacement?.run, artifactStore);
         if ([...records.values()].some(item => item !== replacement && item.run.projectId === request.project.id && (ACTIVE.has(item.run.status) || controllers.has(item.run.id)) && !planningReview(request, item))) throw Object.assign(new Error('这个项目已有真实运行任务，请先完成或取消。'), { code: 'PROJECT_BUSY' });
         const time = now();
-        const run = { id: randomUUID(), ...(request.purpose === 'automation-plan' ? { purpose: request.purpose } : {}), ...(request.dispatchKey ? { dispatchKey: request.dispatchKey } : {}), mode: 'live', workspaceId: request.workflow.workspaceId, projectId: request.project.id, workflowId: request.workflow.id, workflowName: request.workflow.name, snapshot: request.workflow, status: 'running', stepIndex: 0, attempts: [], variables: request.variables, input: request.input, attachmentIds: request.attachmentIds, createdAt: time, updatedAt: time };
+        const run = { id: randomUUID(), ...(request.purpose ? { purpose: request.purpose } : {}), ...(request.dispatchKey ? { dispatchKey: request.dispatchKey } : {}), mode: 'live', workspaceId: request.workflow.workspaceId, projectId: request.project.id, workflowId: request.workflow.id, workflowName: request.workflow.name, snapshot: request.workflow, status: 'running', stepIndex: 0, attempts: [], variables: request.variables, input: request.input, attachmentIds: request.attachmentIds, createdAt: time, updatedAt: time };
         const nextRecord = { run, request, ledger: [], legacyBaseCostCents: Math.max(0, request.project.costCents - projectLedgerCost(run.projectId)) };
         const replacementChanges = { status: 'cancelled', pauseRequested: false, error: checkpoint?.quality ? replacement.run.error : undefined, updatedAt: time, supersededByRunId: run.id };
         const reviewChanges = { status: 'cancelled', summary: '已由新一轮创作替代，原始结果、产物与费用保留；后续步骤未执行。' };
@@ -454,15 +456,15 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       mark(record);
       try { await persist(); } catch (error) { record.run = previous; mark(record); throw error; }
     },
-    async recordLocalExport({ projectId, workspaceId, name, kind, sourceRevision, artifacts, sourceArtifactIds = [], beadExport, wallpaperExport }) {
+    async recordLocalExport({ projectId, workspaceId, name, kind, sourceRevision, artifacts, sourceArtifactIds = [], beadExport, wallpaperExport, commerceExport }) {
       return mutateProject(projectId, async () => {
         await ready;
         if (kind === 'image') {
           if (!projectId || !workspaceId || typeof name !== 'string' || !name.trim() || name.length > 160 || !Array.isArray(artifacts) || !artifacts.length) throw Error('本地图像导出记录无效，已生成文件保留。');
           const id = artifacts[0]?.runId;
-          const validated = await require('./local-image-proof.cjs').createLocalImageProof({ artifactStore, readBeadDocument }).validate({ projectId, runId: id, artifacts, beadExport, wallpaperExport });
+          const validated = await require('./local-image-proof.cjs').createLocalImageProof({ artifactStore, readBeadDocument }).validate({ projectId, runId: id, artifacts, beadExport, wallpaperExport, commerceExport });
           if (records.has(id)) { if (JSON.stringify(records.get(id).run.localImageProof) !== JSON.stringify(validated.proof)) throw Error('本地导出编号已对应另一份内容，未覆盖已有任务。'); return structuredClone(records.get(id).run); }
-          const timestamp = now(), label = validated.proof.kind === 'bead' ? '本地拼豆' : '本地4K适配';
+          const timestamp = now(), label = validated.proof.kind === 'bead' ? '本地拼豆' : validated.proof.kind === 'commerce' ? '本地图片排版' : '本地4K适配';
           const step = { id: `${id}-export`, name: `保存${label}成品`, kind: 'export', prompt: '', inputSource: 'project', enabled: true, ...(validated.proof.kind === 'wallpaper-4k' ? { wallpaperTarget: validated.proof.wallpaperExport.target } : {}) };
           const project = { id: projectId, workspaceId, name, kind: 'image', costCents: 0 }, workflow = { id, workspaceId, name: `${name} · ${label}`, outputKind: 'image', steps: [step], updatedAt: timestamp };
           const run = { id, mode: 'live', workspaceId, projectId, workflowId: id, workflowName: workflow.name, snapshot: workflow, status: 'complete', stepIndex: 1, variables: {}, input: '', createdAt: timestamp, updatedAt: timestamp, sourceRevision: validated.sourceRevision, localImageProof: validated.proof, attempts: [{ id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: label, status: 'complete', costCents: 0, costState: 'not-incurred', summary: validated.summary, input: '', prompt: '', action: '本地导出', artifacts, sourceRevision: validated.sourceRevision }] };

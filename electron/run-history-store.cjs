@@ -1,12 +1,14 @@
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson } = require('./workspace-paths.cjs');
+const { stepReferenceIssue } = require('./workflow-references.cjs');
 const digest = text => createHash('sha256').update(text).digest('hex');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 const runFile = /^[A-Za-z0-9-]{1,160}-[a-f0-9]{64}\.json$/;
 function validateRecords(records) {
   if (!Array.isArray(records) || records.some(item => !item || !validId(item.run?.id) || !validId(item.run.projectId) || !validId(item.run.workspaceId) || !Array.isArray(item.run.snapshot?.steps) || !Array.isArray(item.run.attempts) || !Array.isArray(item.ledger) || !item.request?.project || !item.request?.workflow || !Array.isArray(item.request.connections) || !Array.isArray(item.request.models)) || new Set(records.map(item => item.run.id)).size !== records.length) throw new Error('真实运行记录格式无效或编号重复，原文件已保留。');
   const ledgerIds = records.flatMap(item => item.ledger.map(entry => entry.id));
+  if (records.some(item => [...item.run.snapshot.steps, ...(item.request.workflow.steps || [])].some(step => stepReferenceIssue(step)))) throw new Error('运行历史中的步骤参考文件无效，原记录已保留。');
   if (ledgerIds.some(id => !validId(id)) || new Set(ledgerIds).size !== ledgerIds.length) throw new Error('真实运行账本包含重复编号，原文件已保留。');
   return records;
 }

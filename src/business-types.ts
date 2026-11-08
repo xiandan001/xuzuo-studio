@@ -1,0 +1,95 @@
+import type { Project, ProjectKind } from './types';
+import type { ArtifactMetadata } from './live-types';
+import type { NaturalAutomationBindings } from './lib/natural-automation-plan';
+
+export type BusinessRecipe = 'merchant' | 'digital' | 'documents';
+export type BusinessOrderStatus = 'draft' | 'ready' | 'running' | 'sample-review' | 'review' | 'complete' | 'paused' | 'failed' | 'archived';
+export interface BusinessBrand {
+  id: string; name: string; contact: string; projectId?: string; logoArtifactId?: string;
+  colors: string[]; font: string; voice: string; forbiddenClaims: string[]; approvedSampleIds: string[]; updatedAt: string;
+}
+export interface BusinessProduct {
+  id: string; sku: string; name: string; projectId: string; referenceArtifactIds: string[];
+  facts: Record<string, string>; factsConfirmedAt?: string; updatedAt: string;
+}
+export interface BusinessTask {
+  inputHash?: string;
+  operation?: 'cutout' | 'background' | 'compose' | 'document'; referenceArtifactIds?: string[]; dispatchKey?: string; submittedAt?: string;
+  id: string; label: string; kind: ProjectKind; productId?: string; projectId?: string; runId?: string;
+  status: 'pending' | 'running' | 'review' | 'complete' | 'failed' | 'cancelled' | 'stale';
+  artifactIds: string[]; factsRevision: number; error?: string;
+}
+export interface BusinessOrder {
+  referenceArtifactIds?: string[];
+  deliveries?: BusinessDeliveryReceipt[];
+  preparedHash?: string;
+  id: string; name: string; recipe: BusinessRecipe; sourceProjectId: string; brandId?: string;
+  brief: string; productIds: string[]; projectIds: string[]; runIds: string[]; outputIds: string[];
+  includedRevisions: number; deadline?: string; status: BusinessOrderStatus; factsRevision: number;
+  facts: Record<string, string>; factsConfirmedAt?: string; outputKinds: ProjectKind[];
+  imageCount: number; sizes: { width: number; height: number; label: string }[];
+  tasks: BusinessTask[]; bindings: NaturalAutomationBindings;
+  createdAt: string; updatedAt: string; error?: string;
+}
+export interface BusinessDeliveryReceipt {
+  id: string; confirmedAt: string; factsRevision: number;
+  files: { artifactId: string; projectId: string; name: string; sha256: string; bytes: number }[];
+  checks: { content: boolean; rights: boolean; format: boolean };
+}
+export interface BusinessFeedback {
+  id: string; orderId: string; round: number;
+  target: { projectId: string; artifactId?: string; pageId?: string; blockId?: string; selectedText?: string };
+  text: string; tasks: string[]; status: 'open' | 'approved' | 'applied' | 'confirmed';
+  runIds: string[]; additionalQuoteCents?: number; createdAt: string; updatedAt: string;
+}
+export interface BusinessTransaction {
+  id: string; orderId: string; productId?: string; kind: 'receipt' | 'refund' | 'fee' | 'expense' | 'labor';
+  amountCents: number; quantity?: number; minutes?: number; hourlyRateCents?: number; occurredAt: string;
+  note: string; source?: string; externalId?: string; voidedAt?: string;
+}
+export interface BusinessMetric {
+  evidenceArtifactId?: string;
+  id: string; orderId: string; artifactId?: string; platform: string; variant: string; publishedAt?: string;
+  period: string; impressions?: number; clicks?: number; inquiries?: number; orders?: number;
+  revenueCents?: number; source: string; externalId?: string; createdAt: string;
+}
+export interface BusinessState {
+  version: 1; workspaceId: string; revision: number; brands: BusinessBrand[]; products: BusinessProduct[];
+  orders: BusinessOrder[]; feedback: BusinessFeedback[]; transactions: BusinessTransaction[]; metrics: BusinessMetric[];
+}
+export interface BusinessEconomics {
+  approximate?: boolean;
+  receiptsCents: number; refundsCents: number; feesCents: number; expensesCents: number; laborCents: number;
+  receivedQuantity?: number; refundedQuantity?: number;
+  apiCents: number; knownBalanceCents: number; complete: boolean; missing: string[];
+}
+export interface BusinessMetricSummary {
+  platform: string; period: string; variant: string; impressions?: number; clicks?: number; inquiries?: number;
+  orders?: number; revenueCents?: number; clickRate?: number; inquiryRate?: number; conversionRate?: number;
+}
+export interface BusinessImportPreview {
+  warnings?: string[];
+  token: string; kind: 'products' | 'transactions' | 'metrics'; columns: string[]; rows: Record<string, string>[];
+  issues: string[]; duplicates: number; conflicts: string[];
+}
+export interface BusinessProductionResult { state: BusinessState; projects: Project[]; }
+export interface BusinessListingInput {
+  workspaceId: string; orderId: string; projectId: string; artifactIds: string[];
+  title: string; description: string; licence: string; instructions: string; watermark: string;
+}
+export interface BusinessListingResult { artifacts: ArtifactMetadata[]; formalArtifactIds: string[]; previewArtifactIds: string[]; }
+export interface BusinessBridge {
+  onChanged?: (listener: (event: { workspaceId: string; revision: number }) => void) => () => void;
+  snapshot: (workspaceId: string) => Promise<BusinessState>;
+  save: (input: { workspaceId: string; expectedRevision: number; state: BusinessState }) => Promise<BusinessState>;
+  importPreview: (input: { workspaceId: string; kind: BusinessImportPreview['kind']; orderId?: string; projectId?: string }) => Promise<BusinessImportPreview | undefined>;
+  importCommit: (input: { workspaceId: string; expectedRevision: number; token: string; orderId?: string; projectId?: string }) => Promise<BusinessState>;
+  exportRecovery: (input: { workspaceId: string; state?: BusinessState }) => Promise<{ saved: boolean }>;
+  prepare: (input: { workspaceId: string; orderId: string }) => Promise<BusinessProductionResult>;
+  start: (input: { workspaceId: string; orderId: string; sampleOnly?: boolean; taskIds?: string[] }) => Promise<BusinessProductionResult>;
+  control: (input: { workspaceId: string; orderId: string; action: 'pause' | 'cancel' | 'continue' | 'retry'; taskId?: string }) => Promise<BusinessProductionResult>;
+  listing: (input: BusinessListingInput) => Promise<BusinessListingResult>;
+  deliver: (input: { workspaceId: string; orderId: string; checks: { content: boolean; rights: boolean; format: boolean } }) => Promise<BusinessProductionResult>;
+  adopt?: (input: { workspaceId: string; orderId: string; taskId?: string; artifactIds: string[] }) => Promise<BusinessProductionResult>;
+  assist?: (input: { workspaceId: string; orderId: string; purpose: 'listing' | 'feedback' | 'performance'; text?: string; attachmentIds?: string[] }) => Promise<{ text: string; runId: string }>;
+}

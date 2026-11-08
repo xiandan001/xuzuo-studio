@@ -241,7 +241,7 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         else if (['waiting-review', 'failed', 'interrupted', 'paused'].includes(run.status)) { changed = addDecision(next, job, run.status === 'waiting-review' ? 'review' : 'failure', run.status === 'waiting-review' ? '检查这次实际结果' : '这项任务需要处理', run.error || (run.status === 'paused' ? '任务已暂停，请检查预算或当前步骤后继续。' : '请检查已保存结果、费用和错误，再决定继续或拒绝。')) || changed; }
         else if (job.status !== 'running') { job.status = 'running'; resolveCards(next, job.id, 'refresh'); changed = true; }
       }
-      for (const run of (incoming?.runs || []).filter(run => run.status === 'complete' && !run.trashedAt && run.purpose !== 'automation-plan')) {
+      for (const run of (incoming?.runs || []).filter(run => run.status === 'complete' && !run.trashedAt && !['automation-plan', 'business-assist'].includes(run.purpose || ''))) {
         const completedAt = run.completedAt || [...run.attempts].reverse().find(attempt => attempt.completedAt)?.completedAt || run.createdAt;
         for (const rule of next.rules.filter(rule => rule.enabled && rule.trigger === 'run-completed' && rule.workspaceId === run.workspaceId && rule.projectId === run.projectId && rule.sourceWorkflowId === run.workflowId && Date.parse(completedAt) >= Date.parse(rule.updatedAt))) {
           const parent = next.jobs.find(job => job.runId === run.id), event = { id: hash(`completion:${run.id}:${run.attempts.at(-1)?.id || run.updatedAt}`), trigger: 'run-completed', sourceId: run.id, workspaceId: rule.workspaceId, projectId: rule.projectId, createdAt: now(), ...completionInputs(run, contextFor(next, rule).workflow) };

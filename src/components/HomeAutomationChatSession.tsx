@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, ChevronDown, Download, FileSpreadsheet, FileText, FolderOpen, History, Image, Info, LoaderCircle, Plus, Presentation, ShieldCheck, Sparkles, Square, UserRound } from 'lucide-react';
+import { ChevronDown, Download, FolderOpen, History, Info, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, UserRound } from 'lucide-react';
 import type { LedgerEntry, PageProps, ProjectKind } from '../types';
 import type { HomeAutomationMessage } from '../lib/home-automation-chat';
 import { homeChatCommand, homeChatSendIssue, homeFollowupInput, homeRefinementCommand } from '../lib/home-automation-chat';
@@ -24,9 +24,9 @@ import { useRememberedString } from '../hooks/useRememberedString';
 import { HOME_CREATION_KINDS, homeCreationPlanningInput } from '../lib/home-creation';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from '../lib/bead-intent';
 import { HomeBeadEntry } from './HomeBeadEntry';
+import { BusinessLaunchCards } from './BusinessLaunchCards';
 import './creation-journey.css';
 
-const kindIcons = { image: Image, word: FileText, ppt: Presentation, excel: FileSpreadsheet };
 function HomeChatTurnCost({ ledger, runId }: { ledger: LedgerEntry[]; runId: string }) {
   const entries = ledger.filter(entry => entry.workflowRunId === runId);
   return <div className="home-chat-turn-cost">本轮对话已花费 {entries.length ? <CostTotal summary={summarizeCosts(entries)} /> : <span>正在同步实际费用记录</span>}</div>;
@@ -57,7 +57,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
   const activeRequestId = draft.acceptedRequestId || (draft.plan ? draft.requestId : undefined);
   const continuation = useMemo(() => homeConversationContinuation(props.workspaceId, draft.projectId, draft.ruleId, chat.conversation.messages, props.workflowRunner.runs), [props.workspaceId, draft.projectId, draft.ruleId, chat.conversation.messages, props.workflowRunner.runs]);
   const billingProjectId = chat.conversation.billingProjectId || session.project?.id;
-  const productionBusy = useMemo(() => props.workflowRunner.runs.find(run => run.mode === 'live' && run.purpose !== 'automation-plan' && run.projectId === billingProjectId && ['running', 'paused'].includes(run.status)), [props.workflowRunner.runs, billingProjectId]);
+  const productionBusy = useMemo(() => props.workflowRunner.runs.find(run => run.mode === 'live' && !['automation-plan', 'business-assist'].includes(run.purpose || '') && run.projectId === billingProjectId && ['running', 'paused'].includes(run.status)), [props.workflowRunner.runs, billingProjectId]);
   const answers = draft.ruleId ? session.readiness.answers : draft.preparationAnswers || {};
   const latest = useRef({ props, chat, session }); latest.current = { props, chat, session };
   const blocked = session.locked || planning.active || folderPending || referenceBusy;
@@ -77,7 +77,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
   useEffect(() => {
     const current = chat.current.current.conversation;
     const runIds = new Map(planning.history.filter(record => record.runId).map(record => [record.id, record.runId]));
-    for (const run of props.workflowRunner.runs) if (run.purpose === 'automation-plan' && run.workflowId.startsWith('plan-')) runIds.set(run.workflowId.slice(5), run.id);
+    for (const run of props.workflowRunner.runs) if (['automation-plan', 'business-assist'].includes(run.purpose || '') && run.workflowId.startsWith('plan-')) runIds.set(run.workflowId.slice(5), run.id);
     let changed = false;
     const plannerMessages = current.messages.map(message => { const runId = message.requestId && runIds.get(message.requestId); if (!message.runId && runId) { changed = true; return { ...message, runId }; } return message; });
     const messages = linkHomeConversationWorkflows(props.workspaceId, plannerMessages, [], [], props.workflowRunner.runs);
@@ -277,6 +277,6 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
     <HomeAutomationComposer props={props} session={session} blocked={blocked || !!targetPurged} input={input} onText={setText} textareaRef={textarea} onSend={send} kind={kind} onKind={value => { inputVersion.current++; setFormat(value); }} onReferences={() => { void addReferences(); }} referenceCount={session.project?.referenceFiles?.length} productionOpen={productionOpen} onProductionOpen={setProductionOpen} destination={destination} needsFolder={!session.project} cost={costs.entries.length ? summarizeCosts(costs.entries) : undefined} costPending={!!costs.pendingRuleIds.length || !!session.readiness.dispatchUnknown || costSyncIssue} onSyncCosts={() => { setCostSyncVersion(value => value + 1); void session.readiness.readDispatch(); }}>
       {settings && !targetPurged && <div ref={settingsPanel} className="home-chat-settings"><AutomationProjectField props={props} label="作品保存项目" ariaLabel="首页对话项目" value={draft.projectId} disabled={blocked || session.frozen} newProjectKind={draft.plan?.outputKind || kind} projectKind={draft.plan?.outputKind} quickCreate initialDescription={input || draft.input} onSelect={project => { session.changeProject(project.id); if (!draft.plan) setFormat(project.kind); }} /><small title={session.project?.directory}>{session.project?.directory || '先选择或新建当前工作区里的项目文件夹。'}{chat.conversation.billingProjectId && chat.conversation.billingProjectId !== draft.projectId && ` 本对话规划费用仍记入：${props.projects.find(project => project.id === chat.conversation.billingProjectId)?.name || '原记账项目'}。`}</small></div>}
     </HomeAutomationComposer>
-    {idle && <><div className="creation-examples-label">也可以从这里开始</div><div className="creation-examples">{HOME_CREATION_KINDS.filter(item => item.kind !== 'word').map(item => { const Icon = kindIcons[item.kind]; return <button type="button" key={item.kind} onClick={() => { setFormat(item.kind); setText(item.example); requestAnimationFrame(() => textarea.current?.focus()); }}><Icon size={18} /><strong>{item.title}</strong><ArrowUpRight size={14} /></button>; })}</div><p className="creation-local-note"><ShieldCheck size={14} />文件保存本地 · 费用自动记录 · 每一步由你决定</p></>}
+    {idle && <><BusinessLaunchCards props={props} /><p className="creation-local-note"><ShieldCheck size={14} />文件保存本地 · 费用自动记录 · 每一步由你决定</p></>}
   </section>;
 }

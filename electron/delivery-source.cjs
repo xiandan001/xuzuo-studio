@@ -30,7 +30,7 @@ function currentAdaptedOutput(run, step, attempt) {
   return originals.size === sourceIds.length && sourceIds.length <= 20 && Array.isArray(bound) && bound.length === sourceIds.length && new Set(bound).size === bound.length && bound.every(id => originals.has(id)) && outputs.length === sourceIds.length && new Set(outputs.map(file => file.id)).size === outputs.length && outputs.every(file => !originals.has(file.id) && file.projectId === run.projectId && file.runId === run.id && file.mimeType === 'image/png');
 }
 function completedOutputs(runs, projectId, kind) {
-  return runs.filter(run => run.mode === 'live' && run.projectId === projectId && run.purpose !== 'automation-plan').flatMap(run => run.attempts.flatMap(attempt => {
+  return runs.filter(run => run.mode === 'live' && run.projectId === projectId && !['automation-plan', 'business-assist'].includes(run.purpose || '')).flatMap(run => run.attempts.flatMap(attempt => {
     const step = run.snapshot.steps.find(item => item.id === attempt.stepId);
     const exporter = run.snapshot.steps.findLast(item => item.enabled && item.kind === 'export');
     const imageSources = Array.isArray(exporter?.contentSourceStepIds) ? exporter.contentSourceStepIds : exporter?.contentSourceStepId ? [exporter.contentSourceStepId] : undefined;

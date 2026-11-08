@@ -113,12 +113,33 @@ function registerRuntime(credentials) {
   const batches = createBatchProduction({ directory: app.getPath('userData'), workspaceStorage, artifactStore, liveEngine, withProjectWrite: (id, action) => withProjectWrite(id, action), assertAdmission: async project => { await workspaceStorage.assertNotPurged(project.id); if (runtimeClosing || relocatingProjects.has(project.id)) throw new Error('目录或应用正在退出处理，请稍后显式继续队列。'); } });
   const movingArtifacts = new Map();
   const relocatingProjects = new Set();
+  const relocatingWorkspaces = new Set(), businessWorkspaceWrites = new Map();
   const writingProjects = new Map();
   const withProjectWrite = async (id, action) => {
     await workspaceStorage.assertNotPurged(id);
-    if (!id || relocatingProjects.has(id)) throw new Error('项目目录正在处理，请稍后再试。');
+    const location = (await workspaceStorage.list()).projects.find(project => project.projectId === id);
+    if (!id || relocatingProjects.has(id) || location && relocatingWorkspaces.has(location.workspaceId)) throw new Error('项目目录正在处理，请稍后再试。');
     writingProjects.set(id, (writingProjects.get(id) || 0) + 1);
     try { const result = await action(); try { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('runtime:project-files-changed', { projectId: id }); } catch { /* A window closing after a successful write must not turn it into a failed write. */ } return result; } finally { const count = writingProjects.get(id) - 1; if (count) writingProjects.set(id, count); else writingProjects.delete(id); }
+  };
+  const notifyBusiness = value => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('business:changed', value); } catch { /* Saved data is independent of the renderer. */ } };
+  const businessData = require('./business-data.cjs').createBusinessData({ workspaceStorage, artifactStore, dialog, getWindow: () => mainWindow, getLedger: async () => (await liveEngine.snapshot(undefined, { summaryOnly: true })).ledger, onChanged: notifyBusiness });
+  const commerceImages = require('./commerce-images.cjs').createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cpuTasks, BrowserWindow, dialog, getWindow: () => mainWindow, onChanged: projectId => { try { mainWindow?.webContents.send('runtime:project-files-changed', { projectId }); } catch { /* The saved file remains available. */ } }, onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.document.title, kind: 'image', artifacts: input.artifacts, commerceExport: input.commerceExport }); } });
+  const getBusinessContext = async input => { if (relocatingWorkspaces.has(input?.workspaceId) || relocatingProjects.has(input?.projectId)) throw Error('工作区目录正在处理，请稍后继续。'); return { ...await automationCenter.getPlanningContext(input), credentials: await credentials.list() }; };
+  const businessOptions = { businessStore: businessData.store, workspaceStorage, artifactStore, liveEngine, commerceImages, editorStore, spreadsheetStore, getContext: getBusinessContext, assertAdmission: async project => { const id = typeof project === 'string' ? project : project?.id; if (runtimeClosing || relocatingProjects.has(id)) throw Error('项目目录正在处理，请稍后继续。'); await workspaceStorage.assertNotPurged(id); }, start: input => withProjectWrite(input.project.id, () => liveEngine.start(input)) };
+  const businessProduction = require('./business-production.cjs').createBusinessProduction(businessOptions);
+  const businessAssist = require('./business-assist.cjs').createBusinessAssist(businessOptions);
+  const businessListing = require('./business-listing.cjs').createBusinessListing({ ...businessOptions, cpuTasks });
+  const isBusinessWorkspaceBusy = workspaceId => businessWorkspaceWrites.has(workspaceId) || businessProduction.isWorkspaceBusy(workspaceId);
+  const isBusinessProjectBusy = id => businessProduction.isProjectBusy(id) || businessAssist.isProjectBusy(id);
+  const withBusinessWrite = async (workspaceId, action) => {
+    if (typeof workspaceId !== 'string' || relocatingWorkspaces.has(workspaceId)) throw Error('工作区目录正在处理，请稍后再保存或制作。');
+    businessWorkspaceWrites.set(workspaceId, (businessWorkspaceWrites.get(workspaceId) || 0) + 1);
+    try { return await action(); } finally { const count = businessWorkspaceWrites.get(workspaceId) - 1; if (count) businessWorkspaceWrites.set(workspaceId, count); else businessWorkspaceWrites.delete(workspaceId); }
+  };
+  const withWorkspaceDirectory = async (workspaceId, action) => {
+    if (typeof workspaceId !== 'string' || relocatingWorkspaces.has(workspaceId) || isBusinessWorkspaceBusy(workspaceId)) throw Error('工作区仍有制作或文件操作，请结束后再处理目录。');
+    relocatingWorkspaces.add(workspaceId); try { return await action(); } finally { relocatingWorkspaces.delete(workspaceId); }
   };
   const assertFilesReady = input => { const error = artifactRequestError(input, [...movingArtifacts.values()]); if (error) throw new Error(error); };
   const assertProjectReady = async input => {
@@ -136,7 +157,8 @@ function registerRuntime(credentials) {
     return withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.control(input); });
   } });
   projectPurge = createProjectPurge({ directory: app.getPath('userData'), workspaceStorage, automationCenter, liveEngine, protectedRoots: [app.getPath('userData'), path.dirname(app.getPath('exe'))], withExclusive: async (id, action) => {
-    if (runtimeClosing || relocatingProjects.has(id) || writingProjects.has(id)) throw Error('项目仍有文件写入或目录操作，请结束后再永久移除。');
+    const location = (await workspaceStorage.list()).projects.find(project => project.projectId === id);
+    if (runtimeClosing || relocatingProjects.has(id) || writingProjects.has(id) || isBusinessProjectBusy(id) || location && (relocatingWorkspaces.has(location.workspaceId) || isBusinessWorkspaceBusy(location.workspaceId))) throw Error('项目仍有制作或文件操作，请结束后再永久移除。');
     relocatingProjects.add(id);
     try {
       if (writingProjects.has(id)) throw Error('项目有文件写入尚未结束。');
@@ -151,19 +173,26 @@ function registerRuntime(credentials) {
   const automationPlanning = createAutomationPlanning({ directory: app.getPath('userData'), liveEngine, automationCenter, credentials, assertAdmission: project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: input => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input); }) });
   const handle = (name, action) => ipcMain.handle(`runtime:${name}`, (event, input) => {
     if (!trustedSender(event)) throw new Error('此页面无权执行本机模型任务。');
-    if (runtimeClosing && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
-    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs', 'bead-export-recovery', 'bead-cancel'].includes(name)) await projectPurge.ready; return action(input); });
-    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-'));
+    const closingBusinessRead = ['business-snapshot', 'business-save', 'business-export-recovery', 'commerce-read', 'commerce-save', 'commerce-history', 'commerce-cancel', 'commerce-exportRecovery'].includes(name) || name === 'business-control' && ['pause', 'cancel'].includes(input?.action);
+    if (runtimeClosing && !closingBusinessRead && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
+    const task = Promise.resolve().then(async () => { if (!['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs', 'bead-export-recovery', 'bead-cancel'].includes(name)) await projectPurge.ready; return ['workspace-choose', 'workspace-repair', 'workspace-reconnect'].includes(name) ? withWorkspaceDirectory(input?.workspaceId, () => action(input)) : action(input); });
+    const businessWrite = /^(?:business-(?:save|import-commit|export-recovery|prepare|deliver|adopt|listing)|commerce-(?:save|render|applyAlpha|protect|mask|restore|exportRecovery))$/.test(name);
+    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, businessWrite || name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-') || name.startsWith('commerce-') || name === 'business-listing');
     return task;
   });
   const officePreview = registerOfficePreviewHandlers({ handle, dialog, getWindow: () => mainWindow, artifactStore, directory: path.join(app.getPath('userData'), 'office-preview-v1'), withProjectWrite, shell, trackWrite: task => trackRuntimeTask(task, true) });
   drainRuntime = async () => {
     runtimeClosing = true;
     studioDialogs.cancelPickers();
+    await businessProduction.prepareClose();
+    await businessAssist.prepareClose();
+    await businessListing.prepareClose();
+    await commerceImages.prepareClose();
     await beads.prepareClose();
     await beadPrinter.drain();
     await officePreview.shutdown();
     await automaticBilling.stop();
+    await commerceImages.shutdown();
     await projectPurge.drain();
     await automationCenter.shutdown();
     await batches.shutdown();
@@ -172,9 +201,10 @@ function registerRuntime(credentials) {
     await Promise.allSettled([...runtimeRequests]);
     await Promise.all([editorStore.drain(), spreadsheetStore.drain(), artifactStore.drain(), assets.flush(), assetCategories.flush(), backupManager.flush(), deliveries.drain(), cpuTasks.drain(), thumbnails.drain(), quoteExporter.drain()]);
     await liveEngine.flush();
+    await businessData.drain();
     if (closingWriteFailed) throw new Error('退出期间有本地文件或密钥未能保存。');
   };
-  registerProductionHandlers({ handle, dialog, getWindow: () => mainWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, writingProjects, withProjectWrite, automationCenter });
+  registerProductionHandlers({ handle, dialog, getWindow: () => mainWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, relocatingWorkspaces, writingProjects, withProjectWrite, automationCenter, isWorkspaceBusy: isBusinessWorkspaceBusy, isProjectBusy: isBusinessProjectBusy });
   handle('project-purge-preview', input => projectPurge.preview(input));
   handle('project-purge-execute', input => projectPurge.execute(input));
   handle('project-purge-status', input => projectPurge.status(input));
@@ -182,8 +212,14 @@ function registerRuntime(credentials) {
   registerProjectCreation({ handle, dialog, getWindow: () => mainWindow, workspaceStorage, withProjectWrite, beforeReconnect: async workspaceId => {
     const ids = (await workspaceStorage.list()).projects.filter(item => item.workspaceId === workspaceId).map(item => item.projectId);
     const snapshot = await liveEngine.snapshot(undefined, { summaryOnly: true });
-    if (ids.some(id => writingProjects.has(id) || relocatingProjects.has(id)) || snapshot.runs.some(run => run.workspaceId === workspaceId && run.status === 'running')) throw new Error('请等待本工作区当前请求或文件操作结束，再重新连接目录。');
+    if (isBusinessWorkspaceBusy(workspaceId) || ids.some(id => writingProjects.has(id) || relocatingProjects.has(id) || isBusinessProjectBusy(id)) || snapshot.runs.some(run => run.workspaceId === workspaceId && run.status === 'running')) throw new Error('请等待本工作区当前请求或文件操作结束，再重新连接目录。');
   } });
+  handle('business-snapshot', workspaceId => withBusinessWrite(workspaceId, async () => { await businessAssist.recover(workspaceId); return businessData.snapshot(workspaceId); }));
+  for (const [method, name] of Object.entries({ save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery' })) handle(`business-${name}`, input => withBusinessWrite(input?.workspaceId, () => businessData[method](input)));
+  for (const method of ['prepare', 'start', 'control', 'deliver', 'adopt']) handle(`business-${method}`, input => withBusinessWrite(input?.workspaceId, () => businessProduction[method](input)));
+  handle('business-assist', input => withBusinessWrite(input?.workspaceId, () => businessAssist.assist(input)));
+  handle('business-listing', input => withBusinessWrite(input?.workspaceId, () => withProjectWrite(input?.projectId, () => businessListing.export(input))));
+  for (const method of ['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery']) handle(`commerce-${method}`, input => ['read', 'history', 'cancel', 'exportRecovery'].includes(method) ? commerceImages[method](input) : withProjectWrite(input?.projectId, () => commerceImages[method](input)));
   handle('asset-builtin-import', input => assets.flush().then(() => builtinAssets.import(input)));
   handle('asset-builtin-attach', input => withProjectWrite(input?.projectId, () => builtinAssets.attach(input)));
   handle('asset-builtin-save', async input => {
@@ -294,13 +330,17 @@ function registerRuntime(credentials) {
   handle('workspace-ensure-project', input => withProjectWrite(input?.projectId, () => workspaceStorage.ensureProject(input)));
   handle('workspace-move-project', async input => {
     const release = await automationCenter.reserveProject(input?.projectId);
+    const workspaceLocks = [];
     try {
-      if (relocatingProjects.has(input?.projectId) || writingProjects.has(input?.projectId)) throw new Error('项目目录正在移动。');
+      const location = (await workspaceStorage.list()).projects.find(project => project.projectId === input?.projectId), workspaces = [...new Set([location?.workspaceId, input?.workspaceId].filter(Boolean))];
+      if (relocatingProjects.has(input?.projectId) || writingProjects.has(input?.projectId) || isBusinessProjectBusy(input?.projectId) || workspaces.some(id => relocatingWorkspaces.has(id) || isBusinessWorkspaceBusy(id))) throw new Error('项目仍在制作、写入或移动，请等待当前操作结束。');
+      for (const id of workspaces) { relocatingWorkspaces.add(id); workspaceLocks.push(id); }
       if ((await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.some(run => run.projectId === input?.projectId && ['running', 'paused', 'waiting-review'].includes(run.status))) throw new Error('请先完成或取消项目任务，再移动工作区。');
-      if (writingProjects.has(input.projectId) || relocatingProjects.has(input.projectId)) throw new Error('项目有本地写入或目录操作尚未完成，请稍后再移动。');
+      if (writingProjects.has(input.projectId) || relocatingProjects.has(input.projectId) || isBusinessProjectBusy(input.projectId) || workspaces.some(isBusinessWorkspaceBusy)) throw new Error('项目有本地写入或目录操作尚未完成，请稍后再移动。');
       relocatingProjects.add(input.projectId);
       try { const location = await workspaceStorage.moveProject(input); await liveEngine.refreshArtifactLocations([location]); return location; } finally { relocatingProjects.delete(input.projectId); }
     } finally {
+      workspaceLocks.forEach(id => relocatingWorkspaces.delete(id));
       const location = (await workspaceStorage.list().catch(() => undefined))?.projects.find(project => project.projectId === input?.projectId);
       await release(location ? { workspaceId: location.workspaceId } : undefined);
     }

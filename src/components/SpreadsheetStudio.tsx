@@ -51,6 +51,7 @@ import { registerEditorSession } from '../lib/editor-session-guard';
 import { RecoveryDraftNotice } from './RecoveryDraftNotice';
 import { ProjectReferences } from './ProjectReferences';
 import './spreadsheet-editor.css';
+import { businessSpreadsheetFocus, clearBusinessEditorFocus, readBusinessEditorFocus } from '../lib/business-editor-focus';
 const StudioAssetPicker = lazy(() => import('./StudioAssetPicker').then(module => ({ default: module.StudioAssetPicker })));
 const OfficeFilePreview = lazy(() => import('./OfficeFilePreview').then(module => ({ default: module.OfficeFilePreview })));
 
@@ -117,6 +118,11 @@ export function SpreadsheetStudio(props: PageProps) {
   const autoSourceAttempt = useRef('');
   const formulaEditor = useRef<HTMLTextAreaElement>(null);
   const ready = loadedKey === projectKey;
+  useEffect(() => {
+    if (!ready) return;
+    try { const request = readBusinessEditorFocus(sessionStorage, project.id); if (!request) return; const target = businessSpreadsheetFocus(workbook, request.target); if (!target) { setActionError('客户反馈所指单元格已变化，请在制作单中重新核对。'); return; } setSelectedSheetId(target.sheetId); setSelectedAddress(target.address); setInstruction(request.text); setInspector('refine'); clearBusinessEditorFocus(sessionStorage, project.id); }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : '返修单元格暂未定位，原内容仍保留。'); }
+  }, [ready, project.id]);
   const bridge = window.desktop?.spreadsheets;
   const sheet = workbook.sheets.find(item => item.id === selectedSheetId) || workbook.sheets[0];
   const selectedCell = sheet.cells[selectedAddress];

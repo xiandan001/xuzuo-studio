@@ -55,6 +55,7 @@ import { ProjectReferences } from './ProjectReferences';
 import { LocalRefinement } from './LocalRefinement';
 import { applyDocumentRefinement, documentRefinementTargets } from '../lib/local-refinement';
 import './document-editor.css';
+import { businessDocumentFocus, clearBusinessEditorFocus, focusBusinessDocumentField, readBusinessEditorFocus } from '../lib/business-editor-focus';
 const StudioAssetPicker = lazy(() => import('./StudioAssetPicker').then(module => ({ default: module.StudioAssetPicker })));
 const OfficeFilePreview = lazy(() => import('./OfficeFilePreview').then(module => ({ default: module.OfficeFilePreview })));
 
@@ -90,6 +91,11 @@ export function EditableDocumentStudio(props: PageProps) {
   const illustrationRequest = useRef<IllustrationPickerContext | undefined>(undefined);
   const [recoveryNotice, setRecoveryNotice] = useState('');
   const workbench = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ready || record?.projectId !== project.id) return;
+    try { const request = readBusinessEditorFocus(sessionStorage, project.id); if (!request) return; const id = businessDocumentFocus(document, request.target); if (!id) { setActionError('客户反馈所指位置已变化，请在制作单中重新核对段落或页面。'); return; } setSelectedId(id); setInstruction(request.text); setInspector('refine'); clearBusinessEditorFocus(sessionStorage, project.id); requestAnimationFrame(() => focusBusinessDocumentField(workbench.current, id, request.target.selectedText)); }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : '返修位置暂未定位，原内容仍保留。'); }
+  }, [ready, project.id, record?.projectId]);
   const [brief, setBrief] = useState(initialForm.brief);
   const [instruction, setInstruction] = useState(initialForm.instruction);
   const [modelId, setModelId] = useState(initialForm.modelId);

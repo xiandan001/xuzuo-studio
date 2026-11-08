@@ -1,0 +1,4 @@
+import { Check, LoaderCircle, Save } from 'lucide-react';
+export function BusinessFormStatus({ dirty, saving, error, onSave, onReset }: { dirty: boolean; saving: boolean; error?: string; onSave: () => void; onReset?: () => void }) {
+  return <div className="bs-form-status"><span role="status" aria-live="polite">{saving ? <><LoaderCircle size={14} className="spin" />正在保存，请稍候…</> : error ? <><Save size={14} />保存失败，输入已保留</> : dirty ? <><Save size={14} />输入将自动保存</> : <><Check size={14} />资料已保存</>}</span>{error && <span className="bs-error" role="alert">{error}</span>}{dirty && <button type="button" className="text-button" disabled={saving} onClick={onSave}>{error ? '重试保存' : '立即保存'}</button>}{dirty && onReset && <button type="button" className="text-button" disabled={saving} onClick={onReset}>撤回未保存修改</button>}</div>;
+}

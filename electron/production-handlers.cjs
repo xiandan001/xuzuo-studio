@@ -3,21 +3,23 @@ const path = require('node:path');
 const { assertSaveAuthority } = require('./dialog-save.cjs');
 const { inside } = require('./workspace-paths.cjs');
 
-function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, writingProjects, withProjectWrite, automationCenter }) {
+function registerProductionHandlers({ handle, dialog, getWindow, workspaceStorage, liveEngine, backupManager, deliveries, batches, relocatingProjects, relocatingWorkspaces = new Set(), writingProjects, withProjectWrite, automationCenter, isWorkspaceBusy = () => false, isProjectBusy = () => false }) {
   const inspectedBackups = new Set();
   async function lockWorkspace(workspaceIds, action) {
     const locations = await workspaceStorage.list();
     if (!Array.isArray(workspaceIds) || !workspaceIds.length || workspaceIds.some(id => !locations.workspaces.some(item => item.workspaceId === id))) throw new Error('请选择已连接的工作区。');
     const ids = locations.projects.filter(item => workspaceIds.includes(item.workspaceId)).map(item => item.projectId);
     const [snapshot, queues] = await Promise.all([liveEngine.snapshot(undefined, { summaryOnly: true }), batches.list()]);
-    if (ids.some(id => relocatingProjects.has(id) || writingProjects.has(id)) || snapshot.runs.some(run => ids.includes(run.projectId) && run.status === 'running') || queues.some(queue => workspaceIds.includes(queue.workspaceId) && queue.status === 'running')) throw new Error('请等待当前写入和调用结束，并暂停本区批量队列后重试。');
+    const busy = () => workspaceIds.some(id => relocatingWorkspaces.has(id) || isWorkspaceBusy(id)) || ids.some(id => relocatingProjects.has(id) || writingProjects.has(id) || isProjectBusy(id));
+    if (busy() || snapshot.runs.some(run => ids.includes(run.projectId) && run.status === 'running') || queues.some(queue => workspaceIds.includes(queue.workspaceId) && queue.status === 'running')) throw new Error('请等待当前写入和调用结束，并暂停本区批量队列后重试。');
     const leases = [], ownedLocks = [];
+    workspaceIds.forEach(id => relocatingWorkspaces.add(id));
     try {
       if (automationCenter) for (const id of ids) leases.push(await automationCenter.reserveProject(id, { allowReview: true }));
-      if (ids.some(id => relocatingProjects.has(id) || writingProjects.has(id))) throw Error('项目已开始写入或目录操作，请等待后重新备份。');
+      if (workspaceIds.some(isWorkspaceBusy) || ids.some(id => relocatingProjects.has(id) || writingProjects.has(id) || isProjectBusy(id))) throw Error('项目已开始写入或目录操作，请等待后重新备份。');
       ids.forEach(id => { relocatingProjects.add(id); ownedLocks.push(id); });
       return await action();
-    } finally { ownedLocks.forEach(id => relocatingProjects.delete(id)); for (const release of leases.reverse()) await release(); }
+    } finally { ownedLocks.forEach(id => relocatingProjects.delete(id)); workspaceIds.forEach(id => relocatingWorkspaces.delete(id)); for (const release of leases.reverse()) await release(); }
   }
   handle('backup-export', async input => {
     const result = await dialog.showSaveDialog(getWindow(), { title: '保存完整内部备份（不含 API Key）', defaultPath: '序作-内部备份.zip', filters: [{ name: '序作完整备份', extensions: ['zip'] }], validateSelection: async paths => { const locations = await workspaceStorage.list(); if (locations.workspaces.some(item => input.workspaceIds?.includes(item.workspaceId) && inside(item.directory, paths[0]))) throw new Error('请把内部备份保存到工作区以外，避免重复备份自身。'); } });

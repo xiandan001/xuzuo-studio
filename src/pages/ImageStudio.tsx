@@ -21,6 +21,7 @@ import { ArtifactResults } from '../components/ArtifactResults';
 import { ImageGallery, ImageHistoryNavigation } from '../components/ImageGallery';
 import type { NativeImagePreviewMetadata } from '../components/ImageGallery';
 import { StudioWorkbench } from '../components/StudioWorkbench';
+import { CommerceEditorDialog } from '../components/CommerceEditorDialog';
 import { useStudioToolRequests } from '../hooks/useStudioToolRequests';
 import type { StudioTool } from '../lib/studio-commands';
 import { RememberedDetails } from '../components/RememberedDetails';
@@ -68,6 +69,7 @@ export function ImageStudio(props: PageProps) {
 }
 
 function ImageProject({ props, project }: { props: PageProps; project: Project }) {
+  const [commerceSource, setCommerceSource] = useState<string>();
   const [credentialIds, setCredentialIds] = useState(() => ({ 'image-generation': readStudioCredentialPreference(project.id, 'image-generation'), 'image-editing': readStudioCredentialPreference(project.id, 'image-editing') }));
   const workbench = useRef<HTMLDivElement>(null);
   const [actionError, setActionError] = useState('');
@@ -647,8 +649,10 @@ function ImageProject({ props, project }: { props: PageProps; project: Project }
       {deliveryTarget.engineeringReferenceId && <div className="sw-scope-label"><strong>工程成品 · 原图尺寸 {deliveryTarget.size?.replace('x', ' × ')} px</strong><span>原图与编辑版本独立保留。</span></div>}
       {selectedImage?.mimeType === 'image/png' && (wallpaperEnabled || deliveryTarget.wallpaperTarget) && <div className="sw-scope-label"><button type="button" className="btn btn-secondary" disabled={busy || saving || importing} onClick={() => { void saveWallpaper4K(); }}><Download size={15} />另存4K</button><span>本地 4K 适配，不提升模型原生细节 · 0 API</span></div>}
       {selectedImage?.mimeType === 'image/svg+xml' && <div className="sw-scope-label"><strong>静态矢量原文件，可在矢量工具中编辑</strong><p>平台内AI精修使用PNG参考，转换免费；原SVG保留。</p><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />转PNG作参考</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />另存原SVG</button></div>}
+      {selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) && <div className="sw-scope-label"><button type="button" className="btn btn-secondary" onClick={() => setCommerceSource(selectedImage.id)}><Layers3 size={16} />排版／保护区</button><span>独立改文字和Logo，精确保留不修改的像素；不重新生图。</span></div>}
       <ImageGallery hideActions showHistory={false} onCreate={() => layout.openPanel('ai')} reference={draft.mode === 'refine' && draft.references.length ? { name: draft.references[0].name, url: referencePreview, loading: checkingReferences, error: referenceError } : undefined} onImageReady={inspectImageMetadata} onMetadataReady={inspectNativePreviewMetadata} images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} onRefine={refineImage} onSave={artifact => { void saveImage(artifact); }} saving={saving} canRefine={!busy && !importing} />
     </StudioWorkbench>
+    {commerceSource && <CommerceEditorDialog props={props} projectId={project.id} artifactId={commerceSource} onClose={() => setCommerceSource(undefined)} onExport={() => props.notify('本地图层成品已保存到项目，可在项目文件中查看。')} />}
     {groupBatchOpen && <Suspense fallback={<p role="status">正在打开分组生成…</p>}><ImageGroupBatchPanel key={props.workspaceId + '/' + project.id} props={props} project={project} settings={{ model: generationModel, credentialId: groupCredential, size: draft.size, background: task.parameters.imageBackground, imageOptions: effectiveImageOptions(draft.imageOptions, generationModel?.modelId, 'image-generation'), wallpaperEnabled: draft.wallpaperEnabled, wallpaperTarget: draft.wallpaperTarget }} busy={busy || importing || saving} onClose={() => setGroupBatchOpen(false)} /></Suspense>}
     {purposeManager && <PurposeTemplates templates={props.configuration.useTemplates || []} workspaceId={props.workspaceId} workspaceName={props.workspace.name} initialMode={purposeManager} onSave={props.configuration.saveUseTemplate} onDelete={props.configuration.deleteUseTemplate} onClose={() => setPurposeManager(undefined)} />}
     {promptPickerOpen && <PromptPicker useTemplates={props.configuration.useTemplates} prompts={props.prompts} category="image" onClose={() => setPromptPickerOpen(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPickerOpen(false); }} />}

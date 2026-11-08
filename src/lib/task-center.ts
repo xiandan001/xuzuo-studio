@@ -11,7 +11,7 @@ export function taskStatusLabel(run: Pick<WorkflowRun, 'status' | 'supersededByR
   return run.status === 'cancelled' && run.supersededByRunId ? '已由后续创作替代' : ({ running: '执行中', paused: '已暂停', 'waiting-review': '等待检查', complete: '执行完成', cancelled: '已取消', interrupted: '已中断', failed: '执行失败' })[run.status];
 }
 export function taskNextAction(run: Pick<WorkflowRun, 'status'> & Partial<Pick<WorkflowRun, 'purpose' | 'snapshot' | 'attempts'>>): 'project' | 'detail' {
-  if (run.purpose === 'automation-plan' || !['complete', 'waiting-review'].includes(run.status)) return 'detail';
+  if (['automation-plan', 'business-assist'].includes(run.purpose || '') || !['complete', 'waiting-review'].includes(run.status)) return 'detail';
   const kind = run.snapshot?.outputKind;
   const files = run.attempts?.filter(attempt => attempt.status === 'complete').flatMap(attempt => attempt.artifacts || []) || [];
   const available = files.filter(file => !file.trashedAt && !file.unavailable);

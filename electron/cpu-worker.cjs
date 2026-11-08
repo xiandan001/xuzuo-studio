@@ -1,5 +1,10 @@
 const { parentPort, workerData } = require('node:worker_threads');
 async function run() {
+  if (workerData.task === 'commerce-compose') return require('./commerce-compositor.cjs').composeCommerceImage(workerData.input);
+  if (workerData.task === 'commerce-alpha') return require('./commerce-compositor.cjs').applyCommerceAlpha(workerData.input);
+  if (workerData.task === 'commerce-protect') return require('./commerce-compositor.cjs').protectCommercePixels(workerData.input);
+  if (workerData.task === 'commerce-preview') return require('./commerce-compositor.cjs').previewCommerceRaster(workerData.input);
+  if (workerData.task === 'business-listing-zip') return require('./business-listing.cjs').createListingZip(workerData.input);
   if (workerData.task === 'bead') return require('./bead-pattern.runtime.cjs').createBeadPattern(workerData.input.raster, workerData.input.settings, workerData.input.palette);
   if (workerData.task === 'bead-export') return require('./bead-exports.cjs').createBeadExport(workerData.input);
   if (workerData.task === 'bead-bundle') return require('./bead-exports.cjs').createBeadBundle(workerData.input);

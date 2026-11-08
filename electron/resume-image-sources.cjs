@@ -1,4 +1,5 @@
 const { imageType } = require('./image-output-formats.cjs');
+const { explicitStepReferences } = require('./workflow-references.cjs');
 
 const RASTER = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const DELIVERABLE = new Set([...RASTER, 'image/svg+xml', 'image/gif']);
@@ -41,6 +42,7 @@ async function unreadableReference(store, step, picture, cause) {
 }
 async function validateResumeImageSources(run, remaining, artifactStore) {
   const completed = new Set();
+  for (const step of remaining.filter(item => item.enabled)) await explicitStepReferences(step, run.projectId, artifactStore);
   for (const [id, purposes] of sourceUses(run, remaining)) {
     const step = remaining.find(item => item.id === id);
     if (!step || step.enabled) continue;

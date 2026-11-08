@@ -4,6 +4,7 @@ const { imageExportSourceError } = require('./image-export-sources.cjs');
 const { validateMarkup } = require('./image-output-formats.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { readEngineeringSource } = require('./engineering-export.cjs');
+const { stepReferenceIssue, explicitStepReferences } = require('./workflow-references.cjs');
 
 async function markupPreflightError(step, projectId, inputs, artifactStore, dynamicSource) {
   let markup;
@@ -46,14 +47,16 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
   if (!Array.isArray(workflow.steps) || !workflow.steps.length || workflow.steps.length > 40) return failure('工作流需要 1 到 40 个步骤。');
   if (!Array.isArray(request.models) || !Array.isArray(request.connections) || !Array.isArray(request.attachmentIds) || request.attachmentIds.length > 16) return failure('模型、连接或附件配置无效；附件最多16份。', !Array.isArray(request.models) ? 'modelConfigId' : !Array.isArray(request.connections) ? 'connection' : 'attachments');
   const enabled = workflow.steps.filter(step => step.enabled);
-  if (request.purpose !== undefined && (request.purpose !== 'automation-plan' || workflow.steps.length !== 1 || enabled.length !== 1 || enabled[0].kind !== 'text' || enabled[0].role !== 'planner' || request.attachmentIds.length)) addError('AI规划只能执行一个无附件的文字规划步骤，不能混入制作、导出或其他操作。');
-  if (request.purpose === 'automation-plan' && (request.replaceWaitingReviewRunId !== undefined || request.replaceWaitingReviewAttemptId !== undefined || request.refinementFork !== undefined)) addError('AI规划不会替代或取消已有制作任务。');
+  if (request.purpose !== undefined && !['automation-plan', 'business-assist'].includes(request.purpose)) addError('任务用途不受支持，未开始模型请求。');
+  if (request.purpose === 'automation-plan' && (workflow.steps.length !== 1 || enabled.length !== 1 || enabled[0].kind !== 'text' || enabled[0].role !== 'planner' || request.attachmentIds.length)) addError('AI规划只能执行一个无附件的文字规划步骤，不能混入制作、导出或其他操作。');
+  if (request.purpose === 'business-assist' && (workflow.steps.length !== 1 || enabled.length !== 1 || !['text', 'vision'].includes(enabled[0].kind) || enabled[0].role !== 'planner')) addError('业务辅助只执行一个资料文字或识读步骤，不执行制作、导出或任意工具。');
+  if (request.purpose !== undefined && (request.replaceWaitingReviewRunId !== undefined || request.replaceWaitingReviewAttemptId !== undefined || request.refinementFork !== undefined)) addError('辅助资料任务不会替代或取消已有制作任务。');
   if (request.refinementFork !== undefined && (!request.refinementFork || typeof request.refinementFork !== 'object' || !request.replaceWaitingReviewRunId || !text(request.refinementFork.reviewAttemptId, 160) || !text(request.refinementFork.sourceArtifactId, 160))) addError('精修接续的复核或原图引用无效，原任务没有改变。');
   const metadata = enabled.some(modelStep) ? await credentials.list() : [];
-  const inputKinds = new Set(), inputFiles = [];
-  for (const id of request.attachmentIds) {
+  const inputFiles = [];
+  for (const id of enabled.some(step => step.referenceArtifactIds === undefined) ? request.attachmentIds : []) {
     try {
-      const file = await artifactStore.read(id); inputKinds.add(file.kind); inputFiles.push(file);
+      const file = await artifactStore.read(id); inputFiles.push(file);
       if (file.kind === 'text' || file.kind === 'office') { try { await extractReferenceText(file); } catch (error) { addError(error.message, 'attachments'); } }
       if (file.mimeType === 'application/pdf') addError('当前 PDF 参考文件不执行 OCR 或正文提取，请先转换成文字或受支持的 Office 文件。', 'attachments');
     } catch { addError('有参考文件已不可用，请重新添加。', 'attachments'); }
@@ -64,6 +67,15 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
   let estimatedCents = 0, unknownCost = false, previousKind, previousModelStep;
   for (const step of enabled) {
     const previousInputKind = previousKind;
+    let stepInputFiles = inputFiles;
+    const referenceIssue = stepReferenceIssue(step);
+    if (referenceIssue) addError(`“${step.name}”：${referenceIssue}`, 'attachments', step.id);
+    else if (step.referenceArtifactIds !== undefined) {
+      try { stepInputFiles = await explicitStepReferences(step, project.id, artifactStore); }
+      catch (error) { stepInputFiles = []; addError(`“${step.name}”：${error.message}`, 'attachments', step.id); }
+    }
+    const stepInputKinds = new Set(stepInputFiles.map(file => file.kind));
+    const inheritsAttachments = step.referenceArtifactIds === undefined && step.inputSource === 'previous';
     const detail = { id: step.id, name: step.name, kind: step.kind };
     steps.push(detail);
     if (!text(step.id, 160) || ids.has(step.id)) addError('工作流步骤 ID 无效或重复。', undefined, step.id);
@@ -106,7 +118,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
       if (!['references', 'previous'].includes(step.documentImageSource) || step.kind !== 'text' || !['word', 'ppt'].includes(project.kind)) addError(`“${step.name}”的图文排版配置无效。`, 'inputSource', step.id);
       else if (step.documentImageSource === 'references') {
         let pictures = [];
-        try { pictures = (await artifactStore.list(request.attachmentIds)).filter(item => item.kind === 'image'); } catch { /* Missing references already produce an attachment issue above. */ }
+        try { pictures = stepInputFiles.filter(item => item.kind === 'image'); } catch { /* Missing references already produce an attachment issue above. */ }
         if (!pictures.length || pictures.length > 12 || pictures.some(item => item.projectId !== project.id || !['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType))) addError(`“${step.name}”请选择当前项目的 1–12 张 PNG、JPEG 或 WebP 插图。`, 'attachments', step.id);
       } else if (previousKind !== 'image' && !(Array.isArray(step.documentImageStepIds) && step.documentImageStepIds.every(id => completedImageStepIds.has(id)))) addError(`“${step.name}”需要前一步先生成实际配图。`, 'inputSource', step.id);
       if (step.documentImageSource === 'previous' && step.kind === 'text' && ['word', 'ppt'].includes(project.kind)) {
@@ -124,11 +136,11 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
       }
     }
     if (!modelStep(step)) continue;
-    const hasInput = kind => inputKinds.has(kind) || (step.inputSource === 'previous' && previousKind === kind) || kind === 'image' && step.kind === 'image-editing' && !!step.imageSourceStepId;
+    const hasInput = kind => stepInputKinds.has(kind) || (inheritsAttachments && previousKind === kind) || kind === 'image' && step.kind === 'image-editing' && !!step.imageSourceStepId;
     if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image')) addError(`“${step.name}”需要参考图片，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'transcription' && !hasInput('audio') && !hasInput('video')) addError(`“${step.name}”需要添加音频参考文件。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'video-understanding' && !hasInput('video')) addError(`“${step.name}”需要添加视频文件，或前一步生成的视频。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
-    if (step.kind === 'image-generation' && inputKinds.has('image')) warnings.push(`“${step.name}”采用纯文字生图，不使用附图；需要保留人物或商品参考时请选择图片编辑步骤。`);
+    if (step.kind === 'image-generation' && stepInputKinds.has('image')) warnings.push(`“${step.name}”采用纯文字生图，不使用附图；需要保留人物或商品参考时请选择图片编辑步骤。`);
     previousKind = ['image-generation', 'image-editing'].includes(step.kind) ? 'image' : step.kind === 'speech' ? 'audio' : step.kind === 'video-generation' ? 'video' : 'text';
     previousModelStep = step;
     const resolved = replaceVariables(typeof step.prompt === 'string' ? step.prompt : '', request.variables || {});
@@ -140,10 +152,10 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (!model || !connection) { addError(`“${step.name}”请选择启用的真实模型和连接。`, !model ? 'modelConfigId' : 'connection', step.id); continue; }
     const outputError = imageOptionsError(model.modelId, step.kind, { count: step.count, size: step.imageSize, background: step.imageBackground, outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort });
     if (outputError) addError(`“${step.name}”：${outputError}`, 'prompt', step.id);
-    const dynamicImage = !!step.imageSourceStepId || step.inputSource === 'previous' && previousInputKind === 'image';
-    if (step.kind === 'image-editing' && !dynamicImage && inputFiles.some(file => file.id !== step.imageMarkupId && ['image/gif', 'image/svg+xml'].includes(file.mimeType))) addError(`“${step.name}”的精修原图仅支持PNG、JPEG或WebP，请先转换SVG或GIF。`, 'attachments', step.id);
+    const dynamicImage = !!step.imageSourceStepId || inheritsAttachments && previousInputKind === 'image';
+    if (step.kind === 'image-editing' && !dynamicImage && stepInputFiles.some(file => file.id !== step.imageMarkupId && ['image/gif', 'image/svg+xml'].includes(file.mimeType))) addError(`“${step.name}”的精修原图仅支持PNG、JPEG或WebP，请先转换SVG或GIF。`, 'attachments', step.id);
     if (step.imageMarkupId && !outputError) {
-      const markupError = await markupPreflightError(step, project.id, inputFiles, artifactStore, dynamicImage);
+      const markupError = await markupPreflightError(step, project.id, stepInputFiles, artifactStore, dynamicImage);
       if (markupError) addError(`“${step.name}”：${markupError}`, 'attachments', step.id);
       else if (dynamicImage) warnings.push(`“${step.name}”已检查标注层；原图生成后会再次核对尺寸，不匹配时不会发送该精修请求。`);
     }

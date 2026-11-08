@@ -7,12 +7,15 @@ const { validateQuoteBackups } = require('./quote-backup.cjs');
 const { validateRecords } = require('./run-history-store.cjs');
 const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset-categories.cjs');
 const { purgedProjectAudit } = require('./backup-project-audits.cjs');
+const { isBusinessPath, isBusinessStatePath, validateBusinessBackup, businessForSelection, businessAfterRestore, remapBusinessAssistMarkers } = require('./business-backup.cjs');
+const { isCommerceImagePath, isCommerceOpaquePath, validateCommerceImageBackup, remapCommerceImage, renamedCommercePath } = require('./commerce-image-backup.cjs');
 const APP_VERSION = require('../package.json').version;
 const controlledPath = relative => {
   const parts = relative.split('/'), basename = parts.at(-1);
   const beadRecovery = /^bead-before-restore-[a-f0-9-]{36}\.json$/i.test(basename) || parts.at(-2) === 'bead-revisions-v1' && /^index-invalid-[a-f0-9-]{36}\.json$/i.test(basename);
   if (parts.includes('.xuzuo') && beadRecovery) return false;
-  return relative.endsWith('.json') && (parts.includes('.xuzuo') || basename === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(basename));
+  if (isCommerceOpaquePath(relative)) return false;
+  return relative.endsWith('.json') && (parts.includes('.xuzuo') || isBusinessPath(relative) || basename === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(basename));
 };
 
 function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, automationProvider, receiptProvider, fileSystem = fsDefault, loadModule = require }) {
@@ -49,9 +52,15 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (!bytes || bytes.length !== artifact.bytes || artifact.sha256 && hash(bytes) !== artifact.sha256) throw new Error('备份产物登记与实际文件的大小或哈希不一致。');
       artifact.sha256 ||= hash(bytes);
     }
+    const commerceLinks = [], commerceSnapshots = new Map();
     for (const [relative, bytes] of files) {
       if (!relative.endsWith('.json')) continue;
       const parts = relative.split('/'), basename = parts.at(-1);
+      if (isBusinessPath(relative)) validateBusinessBackup(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), relative);
+      if (isCommerceImagePath(relative) && !isCommerceOpaquePath(relative)) {
+        const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); validateCommerceImageBackup(value, relative);
+        if (/\/exports\//.test(relative)) commerceLinks.push(value);
+      }
       if (parts.includes('.xuzuo') && basename === 'project-v1.json') {
         const marker = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
         const project = manifest.locations.projects.find(item => item.projectId === marker.projectId), workspace = project && manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
@@ -73,7 +82,19 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
         if (!match || snapshot.version !== 1 || snapshot.projectId !== snapshot.record?.projectId || !manifest.locations.projects.some(item => item.projectId === snapshot.projectId) || Number(match[1]) !== snapshot.record.revision || match[2] !== snapshot.hash || snapshot.hash !== hash(JSON.stringify(snapshot.record))) throw new Error('备份独立修订的身份或内部哈希无效，未重写历史。');
       }
     }
-    return { manifest, files };
+    for (const link of commerceLinks) {
+      const artifact = manifest.artifacts.find(row => row.id === link.snapshotId);
+      if (!artifact) continue;
+      if (artifact.projectId !== link.projectId || artifact.mimeType !== 'application/json' || artifact.bytes > 2 * 1024 * 1024) throw Error('回编辑快照不属于当前项目或不是有效内部JSON。');
+      const project = manifest.locations.projects.find(row => row.projectId === artifact.projectId), workspace = manifest.locations.workspaces.find(row => row.workspaceId === project.workspaceId);
+      const name = artifact.trashedAt ? artifact.trashFileName : artifact.fileName;
+      const relative = artifact.storageDirectory ? 'workspaces/' + workspace.workspaceId + '/' + path.relative(workspace.directory, project.directory).split(path.sep).join('/') + '/' + (artifact.trashedAt ? 'trash' : 'files') + '/' + name : 'legacy-artifacts/' + artifact.id + '/' + name;
+      const bytes = files.get(relative); if (!bytes) continue;
+      let document; try { document = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { throw Error('可编辑图层快照不是有效JSON，未导入。'); }
+      if (document?.type !== 'xuzuo-commerce-image' || document.projectId !== link.projectId || !validateCommerceImageBackup(document, relative)) throw Error('可编辑图层快照内容与来源不一致。');
+      commerceSnapshots.set(relative, { artifactId: artifact.id, document });
+    }
+    return { manifest, files, commerceSnapshots };
   }
   async function exportBackup({ meta, workspaceIds, projectIds, filePath, beforeWrite }) {
     const locations = await workspaceStorage.list(), nativePurges = await workspaceStorage.listPurges?.() || [], requested = new Set(workspaceIds);
@@ -111,8 +132,13 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     const manifest = { kind: 'xuzuo-internal-backup', version: audits.length ? 3 : automations || modelReceipts || filteredMeta.quoteDrafts?.length ? 2 : 1, appVersion: APP_VERSION, backupId: randomUUID(), createdAt: new Date().toISOString(), scope: projectIds ? 'projects' : 'workspaces', meta: filteredMeta, locations: { workspaces, projects }, artifacts, records: withoutSecrets(records), batches: withoutSecrets(batches), ...(automations ? { automations } : {}), ...(modelReceipts ? { modelReceipts } : {}), files: [], secretsIncluded: false };
     const Zip = loadModule('jszip'), zip = new Zip(); let total = 0;
     async function add(source, relative) {
-      safePath(relative); const stat = await checkedFile(fs, source), buffer = await fs.readFile(source), after = await checkedFile(fs, source);
+      safePath(relative); const stat = await checkedFile(fs, source), original = await fs.readFile(source), after = await checkedFile(fs, source);
+      let buffer = original;
       if (stat.size !== buffer.length || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) throw new Error('备份期间源文件发生变化，请保存编辑后重试。');
+      if (isBusinessStatePath(relative)) {
+        const value = businessForSelection(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer)), projectIds ? [...selected] : undefined, artifacts.map(row => row.id));
+        buffer = Buffer.from(JSON.stringify(withoutSecrets(value)) + '\n');
+      }
       if ((total += buffer.length) > MAX_TOTAL || manifest.files.length >= MAX_FILES - 1) throw new Error('备份范围超过 512 MB 或 9999 个文件，请缩小范围。');
       if (manifest.files.some(item => item.path.toLowerCase() === relative.toLowerCase())) return;
       manifest.files.push({ path: relative, bytes: buffer.length, sha256: hash(buffer) }); zip.file(relative, buffer, { createFolders: false });
@@ -182,7 +208,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     return { meta: receipt.meta, locations: receipt.locations, idMap: receipt.idMap, backupId: receipt.backupId, receiptPath: path.join(receipts, `${receipt.backupId}.json`) };
   }
   async function importBackup({ filePath, directory: target }) {
-    const { manifest, files } = await readBackup(filePath); await checkedDirectory(fs, receipts, true);
+    const { manifest, files, commerceSnapshots } = await readBackup(filePath); await checkedDirectory(fs, receipts, true);
     const receiptFile = path.join(receipts, `${manifest.backupId}.json`);
     try { const previous = await readJson(receiptFile); if (previous.phase === 'acknowledged') throw new Error('这份备份已导入，未重复导入历史费用。'); return completeReceipt(previous); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -191,6 +217,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       try { controls.push(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
       catch { throw new Error('备份编辑源或管理索引不是有效 JSON，未登记导入工作区。'); }
     }
+    for (const snapshot of commerceSnapshots.values()) controls.push(snapshot.document);
     await checkedDirectory(fs, target);
     const existing = await workspaceStorage.list();
     if (existing.workspaces.some(item => inside(item.directory, target) || inside(target, item.directory))) throw new Error('导入位置不能包含现有工作区或位于现有工作区内。');
@@ -207,7 +234,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       const destination = path.join(pathMap[oldWorkspace.directory], path.relative(oldWorkspace.directory, project.directory));
       pathMap[project.directory] = destination; locations.projects.push({ ...remap(project, idMap), directory: destination });
     }
-    const staged = [];
+    const staged = [], changedSnapshotArtifacts = new Map();
     for (const [relative, original] of files) {
       if (relative.split('/').some(name => /^credentials-v1\.json(?:\.|$)/i.test(name))) throw new Error('备份包含凭证库文件，已拒绝导入。');
       const parts = relative.split('/'); let destination, buffer = original;
@@ -218,15 +245,31 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
         destination = path.join(project.directory, artifact.trashedAt ? 'trash' : 'files', renamedNames[parts[2]] || parts[2]);
       } else throw new Error('备份包含未知文件区域。');
       if (!inside(importRoot, destination) || key(importRoot) === key(destination)) throw new Error('恢复路径超出独立导入目录。');
-      const controlled = controlledPath(relative);
+      if (isCommerceImagePath(relative)) {
+        const renamed = renamedCommercePath(relative, idMap).split('/');
+        destination = path.join(importRoot, idMap[parts[1]], ...renamed.slice(2));
+        if (!inside(importRoot, destination)) throw Error('图层恢复位置超出导入目录。');
+      }
+      const frozenSnapshot = commerceSnapshots.get(relative), controlled = controlledPath(relative) || !!frozenSnapshot;
       if (controlled && relative.endsWith('.json')) {
-        let value; try { const raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(original)); value = relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames); } catch { throw new Error('备份的编辑源或独立修订不是有效 JSON，未登记导入工作区。'); }
+        let value;
+        try {
+          const raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(original));
+          value = isCommerceImagePath(relative) || frozenSnapshot ? remapCommerceImage(raw, idMap, relative) : relative.includes('/.xuzuo-assets/') && relative.endsWith('/categories-v1.json') ? remapAssetCategoryState(raw, idMap) : remap(raw, idMap, pathMap, renamedNames);
+          if (isBusinessStatePath(relative)) value = businessAfterRestore(value, remap(manifest.records, idMap, pathMap, renamedNames).map(record => record.run));
+          if (isCommerceImagePath(relative)) {
+            const renamed = renamedCommercePath(relative, idMap, value).split('/');
+            destination = path.join(importRoot, idMap[parts[1]], ...renamed.slice(2));
+            if (!inside(importRoot, destination)) throw Error('图层恢复位置超出导入目录。');
+          }
+        } catch { throw new Error('备份的编辑源或独立修订不是有效 JSON，未登记导入工作区。'); }
         if (/^revision-[1-9]\d*-[a-f0-9]{64}(?:-[a-f0-9-]+)?\.json$/.test(parts.at(-1)) && value.record) {
-          value.hash = hash(JSON.stringify(value.record)); const before = path.basename(destination), after = `revision-${value.record.revision}-${value.hash}.json`;
+          value.hash = hash(JSON.stringify(value.record)); const before = parts.at(-1), after = `revision-${value.record.revision}-${value.hash}.json`;
           fileNames[before] = after; destination = path.join(path.dirname(destination), after);
         }
         buffer = Buffer.from(`${JSON.stringify(value)}\n`);
       }
+      if (frozenSnapshot) changedSnapshotArtifacts.set(idMap[frozenSnapshot.artifactId], { bytes: buffer.length, sha256: hash(buffer) });
       staged.push({ destination, buffer, controlled });
     }
     for (const item of staged) {
@@ -245,8 +288,8 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (hash(await fs.readFile(item.destination)) !== hash(buffer)) throw new Error('恢复文件写入核验失败，保留独立副本供检查。');
     }
     for (const project of locations.projects) for (const name of ['files', 'trash', '.xuzuo']) await checkedDirectory(fs, path.join(project.directory, name), true);
-    const meta = remap(manifest.meta, idMap, pathMap, renamedNames), artifacts = remap(manifest.artifacts, idMap, pathMap, renamedNames).map(item => ({ ...item, storageDirectory: locations.projects.find(project => project.projectId === item.projectId).directory }));
-    const records = remap(manifest.records, idMap, pathMap, renamedNames);
+    const meta = remap(manifest.meta, idMap, pathMap, renamedNames), artifacts = remap(manifest.artifacts, idMap, pathMap, renamedNames).map(item => ({ ...item, ...(changedSnapshotArtifacts.get(item.id) || {}), storageDirectory: locations.projects.find(project => project.projectId === item.projectId).directory }));
+    const records = remapBusinessAssistMarkers(remap(manifest.records, idMap, pathMap, renamedNames), idMap);
     for (const workspace of meta.workspaces) workspace.directory = pathMap[manifest.meta.workspaces.find(item => idMap[item.id] === workspace.id)?.directory] || locations.workspaces.find(item => item.workspaceId === workspace.id).directory;
     for (const project of meta.projects) {
       if (project.purgedAt) { delete project.directory; continue; }

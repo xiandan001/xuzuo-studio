@@ -23,7 +23,7 @@ interface HomeRunContext {
 export function homeCreationRun(runs: WorkflowRun[], context: HomeRunContext): WorkflowRun | undefined {
   const { job } = context;
   if (!job || !context.ruleId || job.ruleId !== context.ruleId || job.workspaceId && job.workspaceId !== context.workspaceId || job.projectId && job.projectId !== context.projectId) return undefined;
-  return runs.find(run => run.mode === 'live' && run.purpose !== 'automation-plan' && run.workspaceId === context.workspaceId && run.projectId === context.projectId && (!context.workflowId || run.workflowId === context.workflowId) && (run.id === job.runId || !!job.dispatchKey && run.dispatchKey === job.dispatchKey));
+  return runs.find(run => run.mode === 'live' && !['automation-plan', 'business-assist'].includes(run.purpose || '') && run.workspaceId === context.workspaceId && run.projectId === context.projectId && (!context.workflowId || run.workflowId === context.workflowId) && (run.id === job.runId || !!job.dispatchKey && run.dispatchKey === job.dispatchKey));
 }
 
 const officeMimeTypes: Record<Exclude<ProjectKind, 'image'>, string> = {
@@ -41,7 +41,7 @@ export function homeCreationArtifacts(run: WorkflowRun, kind: ProjectKind): Arti
 }
 
 export function homeCreationDocumentSource(run: WorkflowRun, kind: ProjectKind, trashedIds: ReadonlySet<string> = new Set()): ArtifactMetadata | undefined {
-  if (kind === 'image' || run.mode !== 'live' || run.purpose === 'automation-plan' || run.snapshot.outputKind && run.snapshot.outputKind !== kind) return undefined;
+  if (kind === 'image' || run.mode !== 'live' || ['automation-plan', 'business-assist'].includes(run.purpose || '') || run.snapshot.outputKind && run.snapshot.outputKind !== kind) return undefined;
   const exportStep = run.snapshot.steps.filter(step => step.enabled && step.kind === 'export').at(-1);
   const end = exportStep ? run.snapshot.steps.findIndex(step => step.id === exportStep.id) : run.snapshot.steps.length;
   const sources = run.snapshot.steps.slice(0, end).filter(step => step.enabled && !['planner', 'reviewer'].includes(step.role || '') && ['text', 'transcription'].includes(step.kind)).reverse();

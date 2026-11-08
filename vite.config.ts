@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 
 export default defineConfig(({ command }) => ({
   plugins: [react(), {
@@ -11,6 +12,7 @@ export default defineConfig(({ command }) => ({
     }] : undefined,
   }],
   base: './',
+  optimizeDeps: { entries: ['index.html', 'dialog.html'] },
   build: { rollupOptions: { input: { main: 'index.html', dialog: 'dialog.html' } } },
-  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  server: { host: '127.0.0.1', port: 5173, strictPort: true, watch: { ignored: ['work', 'outputs', 'output'].map(directory => path.resolve(directory).replaceAll('\\', '/') + '/**') } },
 }));

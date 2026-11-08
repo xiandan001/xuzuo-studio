@@ -9,6 +9,7 @@ export type PrimaryNavigationView = 'overview' | 'projects' | 'assets' | 'automa
 
 // The full catalog remains available to search and existing deep links.
 export const APP_NAVIGATION: AppNavigationItem[] = [
+  { id: 'business', label: '业务制作', icon: Layers3 },
   { id: 'overview', label: '创作对话', icon: MessageSquare },
   { id: 'documents', label: '文档工作台', icon: FileText },
   { id: 'images', label: '图片工作台', icon: Image },
@@ -34,11 +35,11 @@ const tool = (id: ViewId, description: string): ToolNavigationItem => ({ ...APP_
 export const TOOL_GROUPS: ToolNavigationGroup[] = [
   { id: 'flows', label: '流程与任务', items: [tool('automation', '管理自动运行规则和待处理事项'), tool('workflows', '编辑制作步骤，复用常用流程'), tool('activity', '查看进度，处理暂停、失败与检查')] },
   { id: 'resources', label: '内容与整理', items: [tool('prompts', '保存创作要求，少打重复的文字'), tool('categories', '整理作品、提示词和工作流')] },
-  { id: 'management', label: '设置与经营', items: [tool('models', '管理模型、API Key 和连接'), tool('finance', '查看真实花费，计算客户报价'), tool('settings', '调整外观、偏好，备份与恢复数据')] },
+  { id: 'management', label: '设置与经营', items: [tool('business', '商品套餐、数字上架、客户资料与实际收益'), tool('models', '管理模型、API Key 和连接'), tool('finance', '查看真实花费，计算客户报价'), tool('settings', '调整外观、偏好，备份与恢复数据')] },
 ];
 
 export function primaryNavigationView(view: ViewId): PrimaryNavigationView {
-  if (view === 'overview') return view;
+  if (view === 'overview' || view === 'business') return 'overview';
   if (['assets', 'prompts', 'categories'].includes(view)) return 'assets';
   if (view === 'projects' || view === 'documents' || view === 'images') return 'projects';
   if (['automation', 'workflows', 'activity'].includes(view)) return 'automation';

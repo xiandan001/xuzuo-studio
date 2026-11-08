@@ -13,7 +13,7 @@ import type { AssetLibraryBridge, ProjectReference } from './asset-types';
 import type { AppUpdateBridge } from './update-types';
 import type { ReactNode } from 'react';
 
-export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools';
+export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools' | 'business';
 export type ProjectKind = 'ppt' | 'word' | 'excel' | 'image';
 export type PromptCategory = ProjectKind | 'general';
 export interface Workspace {
@@ -110,6 +110,9 @@ export interface Preferences {
   reduceMotion: boolean;
 }
 export interface PageProps {
+  businessIntent?: { token: string; recipe: import('./business-types').BusinessRecipe; orderId?: string };
+  onBusinessIntentConsumed?: (token: string) => void;
+  onOpenBusiness?: (recipe: import('./business-types').BusinessRecipe, orderId?: string) => void;
   activeView?: ViewId;
   automationIntent?: import('./automation-types').AutomationIntent;
   onAutomationIntentConsumed?: (token: string) => void;
@@ -163,6 +166,8 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  business?: import('./business-types').BusinessBridge;
+  commerceImages?: import('./commerce-image-types').CommerceImagesBridge;
   beads?: import('./bead-types').BeadBridge;
   projectPurge?: import('./project-purge-types').ProjectPurgeBridge;
   automationPlanning?: import('./natural-automation-types').AutomationPlanningBridge;

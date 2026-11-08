@@ -18,7 +18,7 @@ export type LiveStartResult = { status: 'started'; runId: string; recovered?: bo
 export type LiveCheckedStartResult = { status: 'started'; run: WorkflowRun; recovered?: boolean } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
 export interface LiveStartLookup { projectId: string; workspaceId: string; dispatchKey: string; }
 export interface LiveStartRequest {
-  purpose?: 'automation-plan';
+  purpose?: 'automation-plan' | 'business-assist';
   workflow: WorkflowDefinition;
   project: Project;
   connections: ModelConnection[];
