@@ -17,24 +17,24 @@ assert(!fs.existsSync(output), 'Retain previous evidence and use a clean CI outp
 app.setPath('userData', path.join(temporary, 'profile')); app.setPath('sessionData', path.join(temporary, 'profile')); app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
 const report = { passed: false, phase: 'bootstrap', checkpoints: [], commit: process.env.GITHUB_SHA, nonce: owner.nonce, probeSourceSha256, syntheticMarketplace: true, actualChromium: true, visibleOnlyInIsolatedCIDesktop: true, providerCalls: 0, externalRequests: 0, userProfileAccessed: false, normalApplicationStarted: false, windowsCreated: 0, shown: 0, quotes: [], loginConfirmations: [], processIds: [process.pid], errors: [], sourceSha256: createHash('sha256').update(fs.readFileSync(path.join(root, 'electron/bead-market-browser.cjs'))).digest('hex') };
-let browser, finishing = false; const windows = [], views = [];
+let browser, finishing = false; const windows = [], views = [], remoteContents = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function checkpoint(phase) { report.phase = phase; report.checkpoints.push({ phase, at: new Date().toISOString() }); fs.writeFileSync(path.join(output, 'progress.json'), JSON.stringify({ nonce: owner.nonce, commit: report.commit, phase, checkpoints: report.checkpoints }, null, 2) + '\n'); process.stdout.write('Marketplace probe phase: ' + phase + '\n'); }
 async function bounded(task, label, timeoutMs = 6000) { let timer; try { return await Promise.race([task, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Marketplace operation timed out: ' + label)), timeoutMs); })]); } finally { clearTimeout(timer); } }
 const deadline = setTimeout(() => { void finish(Error('Native marketplace browser probe exceeded 40 seconds')); }, 40000);
 async function finish(error) {
-  if (finishing) return; finishing = true; clearTimeout(deadline); if (error) report.errors.push(String(error.stack || error));
+  if (finishing) return; finishing = true; clearTimeout(deadline); if (error) { report.errors.push(String(error.stack || error)); process.stderr.write('Marketplace probe failure: ' + String(error.stack || error) + '\n'); }
   checkpoint('shutdown');
   try { await bounded(browser?.shutdown(), 'browser shutdown', 6000); } catch (cause) { report.errors.push(String(cause)); }
   if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)])];
-  report.remainingWindows = BrowserWindow.getAllWindows().length; report.remainingRemoteViews = views.filter(view => !view.webContents.isDestroyed()).length;
+  report.remainingWindows = BrowserWindow.getAllWindows().length; report.remainingRemoteViews = remoteContents.filter(contents => !contents.isDestroyed()).length;
   if (report.remainingWindows || report.remainingRemoteViews || report.shown !== report.windowsCreated || report.windowsCreated !== 4) report.errors.push('Expected four displayed isolated CI windows and no remaining windows/views');
   for (const window of BrowserWindow.getAllWindows()) window.destroy(); report.passed = report.errors.length === 0;
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' }); process.stdout.write(JSON.stringify({ passed: report.passed, report: path.join(output, 'report.json'), errors: report.errors }) + '\n'); app.exit(report.passed ? 0 : 1);
 }
 async function until(check, label) { const end = Date.now() + 5000; while (Date.now() < end) { if (await check()) return; await delay(25); } throw Error('Timed out waiting for ' + label); }
 function QAWindow(options) { const window = new BrowserWindow({ ...options, show: false }); windows.push(window); report.windowsCreated++; window.on('show', () => { report.shown++; }); return window; }
-function QAView(options) { const view = new WebContentsView(options); views.push(view); return view; }
+function QAView(options) { const view = new WebContentsView(options); views.push(view); remoteContents.push(view.webContents); return view; }
 async function run() {
   process.stdout.write('Marketplace owned native probe bootstrap reached\n');
   await app.whenReady();
@@ -49,8 +49,8 @@ async function run() {
     report.processIds.push(window.webContents.getOSProcessId(), view.webContents.getOSProcessId());
     assert(window.isVisible(), 'The production browser must be visible in the isolated CI desktop'); checkpoint(platform + '-rendered');
     await until(() => window.webContents.executeJavaScript('Boolean(window.marketBrowser&&document.getElementById("capture"))'), 'local toolbar bridge');
-    const count = report.quotes.length; await bounded(window.webContents.executeJavaScript('document.getElementById("capture").click()'), 'toolbar click'); await until(() => report.quotes.length > count, 'trusted toolbar capture'); checkpoint(platform + '-captured');
-    assert.equal(BrowserWindow.getAllWindows().length, 1); assert.equal(views.filter(item => !item.webContents.isDestroyed()).length, 1);
+    const count = report.quotes.length; await bounded(window.webContents.executeJavaScript('document.getElementById("capture").click()'), 'toolbar click'); await until(() => report.quotes.length > count, 'trusted toolbar capture'); await bounded(browser.drain(), 'capture persistence'); checkpoint(platform + '-captured');
+    await until(() => BrowserWindow.getAllWindows().length === 1 && remoteContents.filter(contents => !contents.isDestroyed()).length === 1, 'previous platform view destroyed');
     if (platform === 'taobao') {
       checkpoint('taobao-fonts-and-frames'); await bounded(view.webContents.executeJavaScript('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))'), 'visible product fonts and frames');
       checkpoint('taobao-toolbar-pixels'); const toolbar = await bounded(window.webContents.capturePage(), 'toolbar pixels'); checkpoint('taobao-product-pixels'); const product = await bounded(view.webContents.capturePage(), 'product pixels'); assert(!toolbar.isEmpty() && !product.isEmpty());
