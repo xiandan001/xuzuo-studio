@@ -91,7 +91,9 @@ namespace Xuzuo.Setup
                 var source = SetupJson.Serializer().Deserialize<SetupMetadata>(utf8.GetString(metadataBytes));
                 var manifest = SetupJson.Serializer().Deserialize<SetupManifest>(utf8.GetString(manifestBytes));
                 Check(source != null && source.format == 1 && !source.validation && source.version == args[4] && source.appId == args[5] && source.executable == metadata.executable, "Source metadata identity differs.");
-                Check(manifest != null && manifest.format == 1 && manifest.version == source.version && manifest.appId == source.appId && manifest.executable == source.executable && manifest.files != null && manifest.files.Count == 74, "Expected a full source runtime manifest.");
+                int expectedFiles;
+                Check(Int32.TryParse(args[6], NumberStyles.None, CultureInfo.InvariantCulture, out expectedFiles) && expectedFiles > 0 && expectedFiles <= 512, "Invalid bound source runtime count.");
+                Check(manifest != null && manifest.format == 1 && manifest.version == source.version && manifest.appId == source.appId && manifest.executable == source.executable && manifest.files != null && manifest.files.Count == expectedFiles, "Expected the complete bound source runtime manifest.");
                 var expected = new Dictionary<string, SetupFile>(StringComparer.OrdinalIgnoreCase); long total = 0;
                 foreach (var item in manifest.files)
                 {
@@ -210,6 +212,8 @@ namespace Xuzuo.Setup
             Check(!File.Exists(readyFile) && !Directory.Exists(readyFile) && !File.Exists(journalPath) && !Directory.Exists(journalPath) && !engine.HasRecoverableOperation(root), "Preparing fixture must start without old evidence or journal.");
             engine.ValidateRegisteredRoot(root); var before = engine.ReadRegistration();
             Check(before != null && !before.Machine && Same(before.Root, root), "Preparing fixture needs an owned installed baseline.");
+            var expectedManifest = SetupJson.Resource<SetupManifest>("Setup.Manifest.json");
+            Check(expectedManifest != null && expectedManifest.version == metadata.version && expectedManifest.appId == metadata.appId && expectedManifest.files != null, "Preparing source manifest differs.");
             var announced = false;
             engine.Progress = delegate(string stage, string detail, double? percent)
             {
@@ -218,7 +222,7 @@ namespace Xuzuo.Setup
                 Check(engine.HasRecoverableOperation(root) && journal.operation == "install" && journal.phase == "preparing" && Same(journal.root, root), "Expected the actual install-preparing journal.");
                 var stageRoot = Owned(metadata, journal.stage); var backup = Owned(metadata, journal.backup);
                 Check(Same(stageRoot, Path.Combine(Path.GetDirectoryName(root), ".xuzuo-stage-" + journal.nonce)) && Same(backup, Path.Combine(Path.GetDirectoryName(root), ".xuzuo-backup-" + journal.nonce)) && Directory.Exists(stageRoot) && Directory.Exists(root) && !Directory.Exists(backup) && !File.Exists(backup), "Preparing stage/root/backup differs.");
-                Check(journal.newManifest != null && journal.newManifest.version == metadata.version && journal.newManifest.files.Count == 74 && journal.oldManifest != null && journal.oldManifest.version == before.Version, "Preparing manifests differ.");
+                Check(journal.newManifest != null && journal.newManifest.version == metadata.version && journal.newManifest.files.Count == expectedManifest.files.Count && journal.oldManifest != null && journal.oldManifest.version == before.Version, "Preparing manifests differ.");
                 var ownerPath = Owned(metadata, Path.Combine(stageRoot, ".xuzuo-setup-owner.json")); var owner = SetupJson.File<Dictionary<string, object>>(ownerPath);
                 Check(Convert.ToInt32(owner["format"]) == 1 && Convert.ToString(owner["appId"]) == metadata.appId && Convert.ToString(owner["installGuid"]) == metadata.installGuid && Convert.ToString(owner["nonce"]) == journal.nonce, "Preparing stage owner differs.");
                 engine.ValidateRegisteredRoot(root); Check(engine.ReadRegistration().Version == before.Version && !File.Exists(Path.Combine(root, ".xuzuo-setup-operation.json")), "Old root was already switched or changed.");
@@ -355,7 +359,7 @@ namespace Xuzuo.Setup
                 else if (args.Length == 3 && args[0] == "hold-preparing") result = HoldPreparing(engine, args[1], args[2]);
                 else if (args.Length == 2 && args[0] == "recover-pending") result = RecoverPreparing(engine, args[1]);
                 else if (args.Length == 2 && args[0] == "shortcut-probe") result = ShortcutProbe(engine, args[1]);
-                else if (args.Length == 6 && args[0] == "extract-source") result = ExtractSource(metadata, args);
+                else if (args.Length == 7 && args[0] == "extract-source") result = ExtractSource(metadata, args);
                 else if (args.Length == 3 && args[0] == "process-info")
                 {
                     var expected = Owned(metadata, args[2]); int pid; Check(Int32.TryParse(args[1], out pid) && pid > 0, "Invalid owned PID.");

@@ -122,7 +122,8 @@ async function main() {
   const extracted = [];
   for (const [name, installer, version, sha] of [['old', oldInstaller, oldVersion, oldSha], ['current', path.join(release, `Xuzuo-Studio-Setup-${current.version}.exe`), current.version, current.deliveryFiles.find(file => file.name.endsWith('.exe')).sha256]]) {
     phase = 'extract-' + name; const destination = path.join(fixture, name); await fsp.mkdir(destination);
-    const output = await command(bootstrap, ['extract-source', installer, destination, sha, version, sourcePackage.build.appId]);
+    const expectedCount = version === oldVersion ? 74 : current.managedFiles; assert(Number.isSafeInteger(expectedCount) && expectedCount > 0 && expectedCount <= 512);
+    const output = await command(bootstrap, ['extract-source', installer, destination, sha, version, sourcePackage.build.appId, String(expectedCount)]);
     const manifest = await json(output.manifestFile), sourceMetadata = await json(output.metadataFile); assert.equal(manifest.version, version); assert.equal(sourceMetadata.validation, false);
     await verifyRuntime(output.runtime, manifest); extracted.push({ name, ...output, manifest, sourceMetadata });
   }
