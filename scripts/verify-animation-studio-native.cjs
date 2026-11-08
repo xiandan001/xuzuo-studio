@@ -71,9 +71,10 @@ async function shellLayout(width, height, mode, expanded) {
   })()`);
   report.shellLayouts.push(value);
   const detail = JSON.stringify(value);
+  const sidebarWidth = width <= 1100 ? 174 : width <= 1250 ? 190 : 216, headerHeight = width <= 1250 ? 64 : 70;
   assert.equal(value.width, width, detail); assert.equal(value.height, height, detail);
   assert.equal(value.mode, mode === 'atlas' ? '角色图集' : 'GIF 动画工坊', detail); assert.equal(value.expanded, expanded, detail);
-  assert.equal(value.sidebar.width, 216, detail); assert.equal(value.header.height, 70, detail); assert.equal(value.footer.height, 24, detail);
+  assert.equal(value.sidebar.width, sidebarWidth, detail); assert.equal(value.header.height, headerHeight, detail); assert.equal(value.footer.height, 24, detail);
   assert(value.backButton && value.contentOverflow === 'hidden', detail);
   assert(Math.abs(value.studio.width - value.content.width) <= 1, 'Animation studio must consume the available workspace width: ' + detail);
   assert(Math.abs(value.studio.left - value.content.left) <= 1 && Math.abs(value.studio.right - value.content.right) <= 1, detail);
