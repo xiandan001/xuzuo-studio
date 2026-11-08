@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { PageProps, Project } from '../../src/types';
 import type { StudioConfiguration } from '../../src/configuration-types';
 import { AnimationStudio } from '../../src/pages/AnimationStudio';
+import { setAppearanceMode, setAppearancePalette } from '../../src/lib/appearance';
 import '../../src/styles.css';
 import '../../src/theme.css';
 import '../../src/appearance-palettes.css';
@@ -13,7 +14,7 @@ interface Context { project: Project; configuration: StudioConfiguration; }
 function Fixture() {
   const [context, setContext] = useState<Context>(), [ledger, setLedger] = useState<PageProps['ledger']>([]), [dark, setDark] = useState(false), [notice, setNotice] = useState('');
   const sequence = useRef(0);
-  useLayoutEffect(() => { document.documentElement.dataset.appTheme = dark ? 'dark' : 'light'; document.documentElement.dataset.appPalette = 'violet'; }, [dark]);
+  useLayoutEffect(() => { setAppearanceMode(dark ? 'dark' : 'light'); setAppearancePalette('violet'); }, [dark]);
   useEffect(() => {
     let alive = true;
     const refresh = async () => { const ticket = ++sequence.current; const snapshot = await window.desktop!.runtime.snapshot(); if (alive && ticket === sequence.current) setLedger(snapshot.ledger); };
