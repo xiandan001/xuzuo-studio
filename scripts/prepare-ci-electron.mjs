@@ -22,11 +22,17 @@ try {
 } catch { /* A fresh npm package defers the Electron binary download. */ }
 await assert.rejects(fsp.lstat(dist), { code: 'ENOENT' });
 const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'xuzuo-locked-runtime-preparation' };
-const response = await fetch(`https://api.github.com/repos/electron/electron/releases/tags/v${version}`, { headers, signal: AbortSignal.timeout(30000) });
-assert.equal(response.status, 200); const release = await response.json(); assert.equal(release.tag_name, 'v' + version);
-const matches = release.assets.filter(asset => asset.name === name); assert.equal(matches.length, 1); const asset = matches[0];
-assert(Number.isSafeInteger(asset.id) && asset.id > 0 && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 256 * 1024 * 1024);
-assert.equal(asset.digest, 'sha256:' + expected);
+const networkCodes = ['DOWNLOAD_HTTP_ERROR', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'];
+const unavailable = error => ['AbortError', 'TimeoutError'].includes(error.name) || networkCodes.includes(error.code || error.cause?.code);
+let asset;
+try {
+  const response = await fetch(`https://api.github.com/repos/electron/electron/releases/tags/v${version}`, { headers, signal: AbortSignal.timeout(30000) });
+  if (response.status !== 200) { await response.body?.cancel(); throw Object.assign(Error('Official metadata HTTP ' + response.status), { code: 'DOWNLOAD_HTTP_ERROR' }); }
+  const release = await response.json(); assert.equal(release.tag_name, 'v' + version);
+  const matches = release.assets.filter(asset => asset.name === name); assert.equal(matches.length, 1); asset = matches[0];
+  assert(Number.isSafeInteger(asset.id) && asset.id > 0 && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 256 * 1024 * 1024);
+  assert.equal(asset.digest, 'sha256:' + expected);
+} catch (error) { if (!unavailable(error)) throw error; console.log(JSON.stringify({ officialMetadataUnavailable: true, reason: error.message, pinnedChecksumStillRequired: true })); }
 await fsp.mkdir(path.join(root, 'work'), { recursive: true });
 assert.equal((await fsp.realpath(path.join(root, 'work'))).toLowerCase(), path.join(root, 'work').toLowerCase());
 const temporary = await fsp.mkdtemp(path.join(root, 'work/electron-download-'));
@@ -40,19 +46,19 @@ async function downloadArchive(initial, hosts, filename) {
   }
   if (response.status !== 200) { await response.body?.cancel(); throw Object.assign(Error('Runtime download HTTP ' + response.status), { code: 'DOWNLOAD_HTTP_ERROR' }); }
   const hash = createHash('sha256'); let bytes = 0;
-  const meter = new Transform({ transform(chunk, _encoding, done) { bytes += chunk.length; if (bytes > asset.size) return done(Object.assign(Error('Runtime exceeded its pinned size'), { code: 'INTEGRITY_ERROR' })); hash.update(chunk); done(null, chunk); } });
+  const meter = new Transform({ transform(chunk, _encoding, done) { bytes += chunk.length; if (bytes > (asset?.size ?? 256 * 1024 * 1024)) return done(Object.assign(Error('Runtime exceeded its allowed size'), { code: 'INTEGRITY_ERROR' })); hash.update(chunk); done(null, chunk); } });
   await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(filename, { flags: 'wx' }));
-  assert.equal(bytes, asset.size); assert.equal(hash.digest('hex'), expected); return bytes;
+  if (asset) assert.equal(bytes, asset.size); assert.equal(hash.digest('hex'), expected); return bytes;
 }
 let archive = path.join(temporary, name), bytes, downloadOrigin = 'github-api';
 try {
+  if (!asset) throw Object.assign(Error('Official metadata is unavailable'), { code: 'DOWNLOAD_HTTP_ERROR' });
   const response = await fetch(`https://api.github.com/repos/electron/electron/releases/assets/${asset.id}?download=${randomUUID()}`, { redirect: 'manual', headers: { ...headers, Accept: 'application/octet-stream', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(30000) });
   if (response.status !== 302) { await response.body?.cancel(); throw Object.assign(Error('Official asset redirect HTTP ' + response.status), { code: 'DOWNLOAD_HTTP_ERROR' }); }
   const location = response.headers.get('location'); assert(typeof location === 'string' && location); await response.body?.cancel();
   bytes = await downloadArchive(location, ['release-assets.githubusercontent.com', 'objects.githubusercontent.com'], archive);
 } catch (error) {
-  const networkCodes = ['DOWNLOAD_HTTP_ERROR', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'];
-  if (!['AbortError', 'TimeoutError'].includes(error.name) && !networkCodes.includes(error.code || error.cause?.code)) throw error;
+  if (!unavailable(error)) throw error;
   console.log(JSON.stringify({ officialDownloadUnavailable: true, reason: error.message }));
   downloadOrigin = 'npmmirror-checksum-verified'; archive = path.join(temporary, 'mirror-' + name);
   bytes = await downloadArchive(`https://npmmirror.com/mirrors/electron/${version}/${name}`, ['npmmirror.com', 'cdn.npmmirror.com'], archive);
@@ -64,6 +70,6 @@ assert.equal((await fsp.readFile(path.join(runtime, 'electron.exe'))).subarray(0
 const definitions = path.join(runtime, 'electron.d.ts');
 if (await fsp.lstat(definitions).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) await fsp.rename(definitions, path.join(directory, 'electron.d.ts'));
 await fsp.rename(runtime, dist); await fsp.writeFile(path.join(directory, 'path.txt'), 'electron.exe');
-const report = { passed: true, version, officialAssetId: asset.id, bytes, sha256: expected, downloadOrigin, checksumSource: 'locked-electron-npm-package', applicationStarted: false };
+const report = { passed: true, version, officialAssetId: asset?.id, bytes, sha256: expected, downloadOrigin, checksumSource: 'locked-electron-npm-package', applicationStarted: false };
 await fsp.writeFile(path.join(root, 'work/electron-runtime-preparation.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(report));
