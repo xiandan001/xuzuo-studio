@@ -59,7 +59,7 @@ describe('offline animation process adapter (synthetic helper protocol, no Pytho
       const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
       const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
       shortSource = path.join(alias, 'source.png');
-      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: (filename, options) => fs.stat(map(filename), options) } };
     });
     await expect(f.tool.status()).resolves.toEqual({ available: true });
     const manifest = { ...f.manifest, atlases: [{ id: 'source', path: shortSource }] };
@@ -71,7 +71,7 @@ describe('offline animation process adapter (synthetic helper protocol, no Pytho
     const f = await fixture(async value => {
       const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'normal-redirect');
       const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
-      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: (filename, options) => fs.stat(map(filename), options) } };
     });
     await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
   });
@@ -79,7 +79,7 @@ describe('offline animation process adapter (synthetic helper protocol, no Pytho
     const f = await fixture(async value => {
       const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
       const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
-      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: async filename => { const stat = await fs.stat(map(filename)); return filename.startsWith(alias + path.sep) ? Object.assign(Object.create(stat), { ino: stat.ino + 1 }) : stat; } } };
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: async (filename, options) => { const stat = await fs.stat(map(filename), options); return filename.startsWith(alias + path.sep) ? Object.assign(Object.create(stat), { ino: typeof stat.ino === 'bigint' ? stat.ino === 0n ? 1n : 0n : stat.ino === 0 ? 1 : 0 }) : stat; } } };
     });
     await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
   });
@@ -87,7 +87,7 @@ describe('offline animation process adapter (synthetic helper protocol, no Pytho
     const f = await fixture(async value => {
       const actual = await fs.realpath(value.directory), alias = path.join(path.dirname(actual), 'XUZUOA~1');
       const map = filename => filename === alias || filename.startsWith(alias + path.sep) ? actual + filename.slice(alias.length) : filename;
-      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => filename === alias ? Promise.resolve({ isSymbolicLink: () => true, isDirectory: () => true }) : fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: filename => fs.stat(map(filename)) } };
+      return { executablePath: path.join(alias, 'owned-helper.exe'), fileSystem: { ...fs, lstat: filename => filename === alias ? Promise.resolve({ isSymbolicLink: () => true, isDirectory: () => true }) : fs.lstat(map(filename)), realpath: filename => fs.realpath(map(filename)), stat: (filename, options) => fs.stat(map(filename), options) } };
     });
     await expect(f.tool.status()).resolves.toMatchObject({ available: false }); expect(f.calls).toHaveLength(0);
   });

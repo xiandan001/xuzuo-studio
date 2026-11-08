@@ -40,10 +40,10 @@ function createAnimationTool({ executablePath, directory, developmentPython = 'p
     const originalParts = resolved.slice(originalRoot.length).split(path.sep), canonicalParts = canonical.slice(canonicalRoot.length).split(path.sep);
     const shortName = /^(?=.{1,8}(?:\.|$))[^\\/. ]{1,6}~[1-9]\d{0,5}(?:\.[^\\/. ]{1,3})?$/i;
     if (process.platform !== 'win32' || originalRoot.toLowerCase() !== canonicalRoot.toLowerCase() || originalParts.length !== canonicalParts.length || originalParts.some((part, index) => part.toLowerCase() !== canonicalParts[index].toLowerCase() && !shortName.test(part))) throw Error('动画素材或工作目录发生了重定向。');
-    const before = await fs.stat(resolved); await inspectComponents(canonical, kind);
-    const target = await fs.stat(canonical), after = await fs.stat(resolved);
+    const before = await fs.stat(resolved, { bigint: true }); await inspectComponents(canonical, kind);
+    const target = await fs.stat(canonical, { bigint: true }), after = await fs.stat(resolved, { bigint: true });
     if (before.dev !== target.dev || before.ino !== target.ino || after.dev !== target.dev || after.ino !== target.ino || (await fs.realpath(resolved)).toLowerCase() !== canonical.toLowerCase()) throw Error('动画素材或工作目录身份发生了改变。');
-    return after;
+    return fs.stat(resolved);
   }
   async function command() {
     const bundled = executablePath || path.join(process.resourcesPath || path.resolve(__dirname, '..'), 'animation-tool', 'xuzuo-animation.exe');
