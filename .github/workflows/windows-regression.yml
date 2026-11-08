@@ -34,10 +34,8 @@ jobs:
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked Electron runtime
         run: |
-          $lockedElectronVersion = (Get-Content node_modules/electron/package.json -Raw | ConvertFrom-Json).version
-          $env:ELECTRON_CUSTOM_FILENAME = "electron-v${lockedElectronVersion}-win32-x64.zip?download=1"
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            node node_modules/electron/install.js
+            node scripts/prepare-ci-electron.mjs
             if ($LASTEXITCODE -eq 0) { break }
             if ($attempt -eq 3) { exit $LASTEXITCODE }
             Start-Sleep -Seconds ($attempt * 5)
@@ -149,7 +147,7 @@ jobs:
       - name: Build custom maintenance runtime
         run: node scripts/build-setup.mjs runtime
       - name: Package desktop application
-        run: node node_modules/electron-builder/cli.js --win dir --publish never
+        run: node node_modules/electron-builder/cli.js --win dir --publish never --config.electronDist=node_modules/electron/dist
       - name: Build custom Windows installer
         run: node scripts/build-setup.mjs package
       - name: Verify actual installer and packaged sources
