@@ -1,5 +1,4 @@
 import { useId, useMemo } from 'react';
-import { LayoutTemplate } from 'lucide-react';
 import type { ImageUseTemplate } from '../configuration-types';
 import type { ProjectKind } from '../types';
 import { HOME_CREATION_KINDS } from '../lib/home-creation';
@@ -42,8 +41,7 @@ export function ChatScenarioPicker({ workspaceId, templates = [], disabled = fal
   const scenarios = useMemo(() => chatScenarios(templates, workspaceId), [templates, workspaceId]);
   const customIds = new Set(templates.filter(template => !template.builtin && template.workspaceId === workspaceId && template.enabled).map(template => `image:${template.id}`));
   return <div className="chat-scenario-picker">
-    <LayoutTemplate size={16} aria-hidden="true" />
-    <Select aria-label="使用场景" aria-describedby={hintId} placeholder="使用场景" value="" disabled={disabled || !scenarios.length} options={scenarios.map(scenario => ({ value: scenario.id, label: scenario.name, group: scenario.outputKind !== 'image' ? '文档与表格' : customIds.has(scenario.id) ? '我的图片用途' : '内置图片用途', description: scenario.text.length > 100 ? `${scenario.text.slice(0, 100)}…` : scenario.text }))} onValueChange={id => {
+    <Select aria-label="使用场景" aria-describedby={hintId} placeholder="选择场景" value="" disabled={disabled || !scenarios.length} options={scenarios.map(scenario => ({ value: scenario.id, label: scenario.name, group: scenario.outputKind !== 'image' ? '文档与表格' : customIds.has(scenario.id) ? '我的图片用途' : '内置图片用途', description: scenario.text.length > 100 ? `${scenario.text.slice(0, 100)}…` : scenario.text }))} onValueChange={id => {
       const scenario = scenarios.find(item => item.id === id);
       if (!disabled && scenario) onSelect(scenario);
     }} />

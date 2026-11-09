@@ -1,5 +1,17 @@
 # macOS 开发与验收
 
+## 2.6.2 聊天输入区布局（2026-11-09）
+
+聊天模式、模型配置、制作格式和使用场景按分组排列。格式与场景并排并保留 24px 间距，
+窄容器自动分行；长模型名称单行省略，完整名称可悬停查看。降低次级按钮描边和字重，
+统一控件高度及键盘焦点，增大输入区留白。样式仅作用于新版聊天，不改变旧创作对话的模型控件。
+
+29 项现有聊天、场景与制作组件测试通过；隔离浏览器 19 个功能场景、48 组浅/深主题、
+窗口和账户布局检查通过，另有 48 组同行对齐检查通过，无页面异常或外部请求。
+2.6.2 构建、501 个源码文件与 50 个动画资源核对、签名及 DMG/ZIP 检查通过。
+本轮未启动 Electron GUI、访问真实钥匙串或调用供应商 API。
+本机报告位于 `outputs/composer-layout-validation-report.json`，截图位于 `work/composer-layout/`。
+
 ## 2.6.1 聊天附件与使用场景（2026-11-09）
 
 - 聊天与制作输入框恢复“添加附件”和“使用场景”，场景复用内置图片用途、本工作区启用的自定义用途及文档示例。选择场景会保留已有文字与附件，不自动调用模型。
@@ -85,7 +97,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.6.1/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.6.2/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -106,7 +118,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.6.1/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.6.2/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

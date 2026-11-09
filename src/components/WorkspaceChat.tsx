@@ -21,6 +21,7 @@ import { ChatScenarioPicker, type ChatScenarioSelection } from './ChatScenarioPi
 import { HomeBeadEntry } from './HomeBeadEntry';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from '../lib/bead-intent';
 import './workspace-chat.css';
+import './workspace-chat-composer.css';
 
 const ChatPlanProduction = lazy(() => import('./ChatPlanProduction').then(module => ({ default: module.ChatPlanProduction })));
 
@@ -143,8 +144,16 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     {turns.some(turn => turn.saveIssue) && <button type="button" className="btn btn-secondary" disabled={chat.pending || chat.running} onClick={() => { void chat.flush(); }}>重试保存 · 不调用 AI</button>}
     <form className="workspace-chat-composer" aria-label="聊天输入" onSubmit={event => { event.preventDefault(); void send(); }}>
       <div className="workspace-chat-composer-toolbar"><div className="workspace-chat-modes" role="group" aria-label="对话用途"><button type="button" aria-pressed={mode !== 'plan'} onClick={() => setMode('chat')}><MessageCircle size={15} />聊天</button><button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}><WandSparkles size={15} />制作</button></div><ConversationModelPicker configuration={props.configuration} value={binding} disabled={chat.pending || chat.running} onChange={chooseBinding} /></div>
-      {mode === 'plan' && <div className="workspace-chat-formats" role="group" aria-label="制作格式">{HOME_CREATION_KINDS.map(item => <button type="button" key={item.kind} aria-pressed={kind === item.kind} onClick={() => setKind(item.kind)}>{item.label}</button>)}<span>先看方案，再决定制作</span></div>}
-      <ChatScenarioPicker workspaceId={props.workspaceId} templates={props.configuration.useTemplates} disabled={chat.pending || chat.running || attachments.busy} onSelect={chooseScenario} />
+      <div className={`workspace-chat-context${mode === 'plan' ? ' is-production' : ''}`}>
+        {mode === 'plan' && <div className="workspace-chat-format-field">
+          <div className="workspace-chat-field-heading"><span>制作格式</span><small>先看方案，再决定制作</small></div>
+          <div className="workspace-chat-formats" role="group" aria-label="制作格式">{HOME_CREATION_KINDS.map(item => <button type="button" key={item.kind} aria-pressed={kind === item.kind} onClick={() => setKind(item.kind)}>{item.label}</button>)}</div>
+        </div>}
+        <div className="workspace-chat-scenario-field">
+          <div className="workspace-chat-field-heading"><span>使用场景</span><small>可选</small></div>
+          <ChatScenarioPicker workspaceId={props.workspaceId} templates={props.configuration.useTemplates} disabled={chat.pending || chat.running || attachments.busy} onSelect={chooseScenario} />
+        </div>
+      </div>
       <ChatAttachmentList files={attachments.items} onRemove={attachments.remove} disabled={chat.pending || attachments.busy} />
       <textarea ref={textarea} rows={3} maxLength={10000} aria-label="聊天内容" placeholder={mode === 'plan' ? '描述你想制作的图片、文档或表格…' : '直接提问，也可以接着讨论上一条回复…'} value={input.text} onChange={event => input.setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} />
       <div className="workspace-chat-composer-footer"><div className="workspace-chat-composer-tools"><button className="workspace-chat-attach" type="button" aria-label="添加附件" title="添加图片、PDF、文字或 Office 文档" disabled={chat.pending || chat.running || chat.loading || attachments.busy} onClick={() => { void attachments.add(); }}>{attachments.busy ? <LoaderCircle size={17} className="spin" /> : <Paperclip size={17} />}<span>{attachments.busy ? '正在读取…' : '添加附件'}</span></button><span>{!selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span></div>{chat.running ? <button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button> : <button className="workspace-chat-send" type="submit" disabled={(!input.text.trim() && !attachments.items.length) || attachments.busy || chat.pending || chat.loading || !chat.available} aria-label="发送聊天消息">{chat.pending ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={21} />}</button>}</div>

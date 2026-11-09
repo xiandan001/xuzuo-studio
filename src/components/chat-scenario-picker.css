@@ -1,15 +1,10 @@
 .chat-scenario-picker {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 7px;
-  width: 180px;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   color: var(--ui-fg-secondary);
-}
-
-.chat-scenario-picker > svg {
-  flex: 0 0 auto;
 }
 
 .chat-scenario-picker > .custom-select {
