@@ -43,7 +43,22 @@ async function click(selector, text) { const match = `(()=>[...document.querySel
 async function fill(label, value) { await dom(`document.querySelector('[aria-label=${JSON.stringify(label)}]')`, label); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.scrollIntoView({block:'center'});e.focus();Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(String(value))});e.dispatchEvent(new Event('input',{bubbles:true}))})()`); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.blur();e.dispatchEvent(new FocusEvent('focusout',{bubbles:true,relatedTarget:null}))})()`); }
 async function select(label, value) { await click(`[aria-label="${label}"]`); await click('[role="option"]', value); }
 async function openSection(text) { const match = `(()=>[...document.querySelectorAll('summary')].find(e=>e.textContent.includes(${JSON.stringify(text)})))()`; await dom(match, text); await evaluate(`(()=>{const e=${match};e.scrollIntoView({block:'center'});if(!e.parentElement.open)e.click()})()`); await dom(`${match}?.parentElement.open`, text + ' expanded'); }
-async function idle(expected = 'complete') { await delay(50); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer request accepted'); await until(async () => { const value = await service.read({ projectId }); return !!value.job && value.job.status !== 'running' && !service.isProjectBusy(projectId); }, 'native job settled', 18000); const value = await service.read({ projectId }); assert.equal(value.job.status, expected, value.job.error); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer idle'); await delay(300); }
+async function idle(expected = 'complete') {
+  try {
+    await delay(50); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer request accepted');
+    await until(async () => { const value = await service.read({ projectId }); return !!value.job && value.job.status !== 'running' && !service.isProjectBusy(projectId); }, 'native job settled', 18000);
+    const value = await service.read({ projectId }); assert.equal(value.job.status, expected, value.job.error);
+    await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer idle'); await delay(300);
+  } catch (error) {
+    const [ui, snapshot] = await Promise.allSettled([
+      evaluate(`({saveStatus:document.querySelector('.animation-save-status')?.textContent,alerts:[...document.querySelectorAll('[role="alert"],.animation-notice')].map(node=>node.textContent.trim().slice(0,400)).slice(0,3),caption:document.querySelector('[aria-label="当前条目文案"]')?.value,quantity:document.querySelector('[aria-label="角色作品数量"]')?.value,hidden:document.hidden})`),
+      service.read({ projectId })
+    ]);
+    const value = snapshot.status === 'fulfilled' ? snapshot.value : undefined, diagnostic = { phase: report.phase, expected, ui: ui.status === 'fulfilled' ? ui.value : String(ui.reason), revision: value?.document.revision, job: value?.job && { status: value.job.status, stage: value.job.stage, error: value.job.error } };
+    (report.idleFailures ||= []).push(diagnostic);
+    throw new Error(error.message + ' | animation idle state: ' + JSON.stringify(diagnostic), { cause: error });
+  }
+}
 async function step(name, action) { report.phase = name; process.stdout.write('Animation studio step: ' + name + '\n'); const started = Date.now(); await action(); report.steps.push({ name, ms: Date.now() - started }); }
 async function capture(filename, selector) { if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`); await evaluate(`Promise.all([...document.images].filter(e=>e.getClientRects().length).map(e=>e.decode().catch(()=>{}))).then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`); window.webContents.invalidate(); await delay(160); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) }); }
 async function layout(width, mode) {
@@ -234,17 +249,27 @@ async function scenario() {
   await step('cancel-real-localhost-model-request', async () => { const count = calls.length, ledger = structuredClone((await engine.snapshot()).ledger); holdNext = true; await click('.animation-creation button', 'AI 重新制作'); await until(() => calls.length === count + 1, 'held synthetic model request'); await click('button', '取消当前任务'); releaseResponse?.(); await idle('cancelled'); assert.equal((await service.read({ projectId })).job.status, 'cancelled'); const after = (await engine.snapshot()).ledger; for (const row of ledger) assert.deepEqual(after.find(item => item.id === row.id), row); report.cancelKeepsPriorCharges = true; });
   await step('workflow-engine-to-real-local-animation-runtime', async () => {
     const before = calls.length, ledger = structuredClone((await engine.snapshot()).ledger), files = await artifacts.listProject(projectId), source = files.find(file => file.mimeType === 'image/png' && !file.trashedAt && !file.unavailable); assert(source);
-    const step = { id: 'local-animation', name: '已有PNG合成动画', kind: 'animation-compose', inputSource: 'project', referenceArtifactIds: [source.id], enabled: true, prompt: '', animation: { mode: 'gif', style: 'pixel-light', columns: 1, rows: 1, width: 128, height: 128, fps: 10, loopMs: 400, background: 'transparent', entries: [{ caption: '本地流程', description: '', motion: 'sway' }] } };
+    const sourceFile = await artifacts.read(source.id), sourceSha256 = sha(sourceFile.buffer), resized = nativeImage.createFromBuffer(sourceFile.buffer).resize({ width: 1024, height: 1024, quality: 'best' });
+    assert(!resized.isEmpty()); assert.deepEqual(resized.getSize(), { width: 1024, height: 1024 });
+    const buffer = resized.toPNG(), previewSource = await artifacts.write({ name: '长文案预览验收-1024.png', mimeType: 'image/png', buffer, projectId });
+    report.previewFixture = { sourceArtifactId: source.id, sourceSha256, artifactId: previewSource.id, width: 1024, height: 1024, sha256: sha(buffer) };
+    const step = { id: 'local-animation', name: '已有PNG合成动画', kind: 'animation-compose', inputSource: 'project', referenceArtifactIds: [previewSource.id], enabled: true, prompt: '', animation: { mode: 'gif', style: 'pixel-light', columns: 1, rows: 1, width: 1024, height: 1024, fps: 10, loopMs: 400, background: 'transparent', entries: [{ caption: '本地流程', description: '', motion: 'sway' }] } };
     const workflow = { id: 'native-local-animation-workflow', workspaceId, name: '真实本地动画流程验收', description: 'Existing synthetic PNG, actual engine and bundled runtime; no provider request', outputKind: 'image', steps: [step], updatedAt: new Date().toISOString() };
     const run = await engine.start({ project: context.project, workflow, connections: context.connections, models: context.models, input: '使用已有PNG在本地合成', variables: {}, attachmentIds: [], acknowledgePaidCalls: false, acknowledgeUnknownCost: false });
     await until(async () => ['complete','failed','cancelled'].includes((await engine.runDetail(run.id)).status), 'actual local workflow finished', 18000);
     const final = await engine.runDetail(run.id); assert.equal(final.status, 'complete', final.error); const attempt = final.attempts.find(item => item.stepId === step.id); assert.equal(attempt.costCents, 0); assert(attempt.artifacts.some(file => file.mimeType === 'image/gif')); for (const item of attempt.artifacts) { const file = await artifacts.read(item.id); assert.equal(file.runId, run.id); assert.equal(file.projectId, projectId); }
-    assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger); report.workflowCompositionNoHttpOrLedgerEntry = true;
+    await click('[aria-label="刷新动画工程"]');
+    await dom(`document.querySelector('[aria-label="当前条目文案"]')?.value==='本地流程'&&document.querySelector('[aria-label="角色作品数量"]')?.value==='1'&&document.querySelector('.animation-save-status')?.textContent==='已保存到项目'&&![...document.querySelectorAll('.animation-notice button')].some(button=>button.textContent.includes('保留草稿并载入新结果'))`, 'renderer adopted the external one-entry workflow document');
+    assert.equal(sha((await artifacts.read(source.id)).buffer), sourceSha256); assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger); report.workflowCompositionNoHttpOrLedgerEntry = true;
   });
   await step('native-hidden-window-pauses-playback', async () => {
-    assert.equal(report.singlePlaybackVerified, true); await click('button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'workflow GIF playing before hide');
+    assert.equal(report.singlePlaybackVerified, true); await previewLayoutMatrix();
+    const before = calls.length, ledger = structuredClone((await engine.snapshot()).ledger);
+    await click('[role="tab"]', 'GIF 动画工坊'); await click('.animation-preview-actions button', '更新预览'); await idle();
+    assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger);
+    await click('.animation-preview-actions button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'workflow GIF playing before hide');
     visibilityRound = true; window.setOpacity(0); window.webContents.setBackgroundThrottling(true); window.showInactive(); await dom(`document.hidden===false`, 'native visibility round active'); window.hide(); await dom(`document.hidden===true`, 'actual hidden document'); await delay(150); window.webContents.setBackgroundThrottling(false); window.setOpacity(1); visibilityRound = false;
-    await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'hidden preview paused'); report.singlePlaybackAndHiddenPause = true; await previewLayoutMatrix();
+    await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'hidden preview paused'); report.singlePlaybackAndHiddenPause = true;
   });
   assert.equal(sha(await fsp.readFile(referencePath)), report.originalReferenceSha256); report.originalReferenceUnchanged = true; assert.equal(Object.keys(require.cache).some(filename => filename === path.join(root, 'electron/main.cjs')), false);
 }
