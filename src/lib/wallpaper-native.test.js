@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
+import { parseWallpaperTarget, wallpaperGenerationSize } from './wallpaper-target';
 const require = createRequire(import.meta.url);
 const { dependencies } = require('./production-test-fixtures.cjs');
 const { PNG } = dependencies('pngjs');
@@ -18,6 +19,23 @@ const pixel = (image, x, y) => [...image.data.subarray((y * image.width + x) * 4
 const target = { width: 64, height: 64, fit: 'cover' };
 
 describe('真实 PNG 壁纸后台适配', () => {
+  it.each([
+    ['iPad Pro 11 M5', 2420, 1668],
+    ['iPad Pro 11 M5 竖屏', 1668, 2420],
+  ])('keeps parsed %s direction through model sizing and the actual PNG worker', async (text, width, height) => {
+    const parsed = parseWallpaperTarget(text); expect(parsed.status).toBe('resolved');
+    expect(parsed.target).toMatchObject({ width, height, deviceId: 'ipad-pro-11-m5' });
+    const original = picture(), before = hash(original), tasks = createCpuTasks();
+    for (const model of ['gpt-image-2.5-sunburst', 'gpt-image-2.6-sunburst']) {
+      const [requestWidth, requestHeight] = wallpaperGenerationSize(parsed.target, model).split('x').map(Number);
+      expect(requestWidth > requestHeight).toBe(width > height);
+    }
+    try {
+      const output = PNG.sync.read(Buffer.from(await tasks.run('wallpaper', { buffer: original, target: parsed.target })));
+      expect([output.width, output.height]).toEqual([width, height]);
+      expect(hash(original)).toBe(before);
+    } finally { await tasks.drain(); }
+  });
   it('uses the actual CPU worker, keeps aspect and alpha-flattens without changing source bytes', async () => {
     const tasks = createCpuTasks(), buffer = picture(), before = hash(buffer);
     const output = Buffer.from(await tasks.run('wallpaper', { buffer, target })); await tasks.drain();

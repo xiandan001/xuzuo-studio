@@ -72,6 +72,19 @@ describe('wallpaper draft, model request and local delivery workflow', () => {
 });
 
 describe('wallpaper batch and conversation entry points', () => {
+  it('uses the same default horizontal iPad target in renderer and generated native conversation workflows', () => {
+    const request = natural('制作一张适合 iPad Pro 11 M5 的月夜壁纸');
+    const native = createRequire(import.meta.url)('../../electron/natural-automation-plan.runtime.cjs');
+    for (const compiled of [compileNaturalAutomationPlan(request, project, configuration()), native.compileNaturalAutomationPlan(request, project, configuration())]) {
+      expect(compiled.missing).toEqual([]);
+      const image = compiled.workflow.steps.find((step: WorkflowStep) => step.kind === 'image-generation');
+      const output = compiled.workflow.steps.find((step: WorkflowStep) => step.kind === 'export');
+      expect(output?.wallpaperTarget).toMatchObject({ width: 2420, height: 1668, deviceId: 'ipad-pro-11-m5' });
+      const [width, height] = image!.imageSize!.split('x').map(Number);
+      expect(width).toBeGreaterThan(height);
+      expect(compiled.workflow.steps.filter((step: WorkflowStep) => step.kind === 'image-generation')).toHaveLength(1);
+    }
+  });
   it('inherits exact targets per group and rewrites all native variant source IDs without adding image calls', () => {
     const settings = { model, credentialId: 'key', size: '1024x1024', background: 'auto' as const, wallpaperEnabled: true, wallpaperTarget: target };
     const batch = createImageGroupBatch({ version: 1, revision: 0, name: '两组壁纸', groups: [{ id: 'one', name: '山景', brief: '山景', count: '2' }, { id: 'two', name: '海景', brief: '海景', count: '3' }] }, settings, { workspaceId: project.workspaceId, configuration: configuration() });

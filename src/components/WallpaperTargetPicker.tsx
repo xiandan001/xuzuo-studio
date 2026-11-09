@@ -3,8 +3,8 @@ import type { CSSProperties, KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, Smartphone, X } from 'lucide-react';
 import type { WallpaperTarget } from '../wallpaper-types';
-import { wallpaperBrandLabel } from '../data/wallpaper-devices';
-import { parseWallpaperTarget, searchWallpaperDevices } from '../lib/wallpaper-target';
+import { WALLPAPER_DEVICES, wallpaperBrandLabel } from '../data/wallpaper-devices';
+import { parseWallpaperTarget, searchWallpaperDevices, wallpaperDeviceTarget } from '../lib/wallpaper-target';
 import { selectPopupPosition } from './Select';
 import './WallpaperTargetPicker.css';
 
@@ -18,9 +18,13 @@ interface Props {
 interface TargetOption { id: string; label: string; group: string; target: WallpaperTarget; }
 const targetText = (target?: WallpaperTarget) => !target ? '' : target.deviceId && target.label ? target.label : `${target.width} × ${target.height}`;
 const sameTarget = (first: WallpaperTarget | undefined, second: WallpaperTarget) => Boolean(first && first.width === second.width && first.height === second.height && first.deviceId === second.deviceId);
+const deviceFamilies = new Map(WALLPAPER_DEVICES.map(device => [device.id, device.category === 'tablet' ? 'tablet' : 'handset']));
+const targetDirection = (target: WallpaperTarget) => target.width > target.height ? '横屏' : target.width < target.height ? '竖屏' : '正方形';
 function typedSelection(target: WallpaperTarget, current: WallpaperTarget | undefined, text: string): WallpaperTarget {
-  const keepLandscape = target.deviceId && current && current.width > current.height && !/横屏|横向|竖屏|纵向|\b(?:landscape|portrait)\b/i.test(text);
-  return { ...target, ...(keepLandscape ? { width: Math.max(target.width, target.height), height: Math.min(target.width, target.height) } : {}), fit: current?.fit || target.fit };
+  const input = text.normalize('NFKC'), explicitPixels = /\d\s*(?:[x×*]|乘以?|\bby\b)\s*\d|(?:宽(?:度)?|width)\s*(?:为|是|[:：=])?\s*\d/i.test(input);
+  const keepDirection = target.deviceId && current?.deviceId && deviceFamilies.get(target.deviceId) === deviceFamilies.get(current.deviceId) && !explicitPixels && !/横屏|横向|竖屏|纵向|\b(?:landscape|portrait)\b/i.test(input);
+  const landscape = Boolean(current && current.width > current.height), low = Math.min(target.width, target.height), high = Math.max(target.width, target.height);
+  return { ...target, ...(keepDirection ? { width: landscape ? high : low, height: landscape ? low : high } : {}), fit: current?.fit || target.fit };
 }
 function visibleAnchor(anchor: HTMLElement, rect: DOMRect): boolean {
   if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.width === 0) return false;
@@ -43,13 +47,12 @@ export function WallpaperTargetPicker({ value, onChange, onIssueChange, disabled
   const parsed = useMemo(() => parseWallpaperTarget(query), [query]);
   const options = useMemo<TargetOption[]>(() => {
     const fit = value?.fit || 'cover';
-    const devices = searchWallpaperDevices(dirty ? query : '');
-    const landscape = Boolean(value && value.width > value.height);
-    const rows: TargetOption[] = devices.map(device => ({ id: device.id, label: device.name, group: wallpaperBrandLabel(device.brand), target: { width: landscape ? device.height : device.width, height: landscape ? device.width : device.height, fit, deviceId: device.id, label: device.name } }));
+    const devices = dirty && parsed.status === 'ambiguous' ? parsed.candidates : searchWallpaperDevices(dirty ? query : '');
+    const rows: TargetOption[] = devices.map(device => ({ id: device.id, label: device.name, group: wallpaperBrandLabel(device.brand), target: typedSelection({ ...wallpaperDeviceTarget(device, dirty ? query : ''), fit }, value, dirty ? query : '') }));
     if (dirty && parsed.status === 'resolved' && parsed.device && !rows.some(row => row.id === parsed.device!.id)) rows.unshift({ id: parsed.device.id, label: parsed.device.name, group: wallpaperBrandLabel(parsed.device.brand), target: typedSelection(parsed.target, value, query) });
     if (dirty && parsed.status === 'resolved' && !parsed.target.deviceId) rows.unshift({ id: 'custom', label: `使用 ${parsed.target.width} × ${parsed.target.height}`, group: '自定义像素', target: { ...parsed.target, fit } });
     return rows;
-  }, [dirty, query, parsed, value?.fit, value?.width, value?.height]);
+  }, [dirty, query, parsed, value?.fit, value?.width, value?.height, value?.deviceId]);
   const optionId = (index: number) => `${listId}-${index}`;
   function close() { setOpen(false); setActive(-1); }
   function show() {
@@ -116,8 +119,8 @@ export function WallpaperTargetPicker({ value, onChange, onIssueChange, disabled
       <input ref={input} id={id} role="combobox" aria-label="壁纸设备或分辨率" aria-expanded={open} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={open && active >= 0 ? optionId(active) : undefined} aria-describedby={messageId} aria-invalid={issue ? true : undefined} autoComplete="off" disabled={disabled} value={query} placeholder="搜索机型，或输入 1170×2532" onFocus={event => { show(); event.currentTarget.select(); }} onKeyDown={keyDown} onChange={event => { setQuery(event.target.value); setDirty(true); setError(''); setActive(-1); show(); onIssueChange?.('请应用输入的设备或尺寸后再生成。'); }} />
       {query && !disabled ? <button type="button" className="wallpaper-search-action" aria-label="清空设备搜索" onMouseDown={event => event.preventDefault()} onClick={() => { setQuery(''); setDirty(true); setActive(-1); setError(''); onIssueChange?.('请选择设备，或输入宽 × 高像素。'); input.current?.focus(); show(); }}><X size={15} /></button> : <button type="button" className="wallpaper-search-action" aria-label="展开壁纸设备列表" disabled={disabled} onClick={() => { input.current?.focus(); show(); }}><ChevronDown size={16} /></button>}
     </div>
-    {open && createPortal(<div ref={popup} className="wallpaper-device-popup" data-select-popup style={position}><div role="listbox" id={listId} aria-label="壁纸设备候选">{options.length ? options.map((option, index) => <div key={option.id}>{index === 0 || options[index - 1].group !== option.group ? <div className="wallpaper-device-group">{option.group}</div> : null}<button type="button" role="option" id={optionId(index)} aria-selected={sameTarget(value, option.target)} tabIndex={-1} className={`wallpaper-device-option ${active === index ? 'is-active' : ''}`} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => commit(option.target)}><Smartphone size={17} aria-hidden="true" /><span><strong>{option.label}</strong><small>{option.target.width} × {option.target.height} px</small></span>{sameTarget(value, option.target) && <Check size={16} aria-hidden="true" />}</button></div>) : <p className="wallpaper-device-empty">{query.trim() && parsed.status !== 'resolved' ? parsed.message : '输入机型名称，或直接填写宽 × 高像素。'}</p>}</div></div>, document.body)}
+    {open && createPortal(<div ref={popup} className="wallpaper-device-popup" data-select-popup style={position}><div role="listbox" id={listId} aria-label="壁纸设备候选">{options.length ? options.map((option, index) => <div key={option.id}>{index === 0 || options[index - 1].group !== option.group ? <div className="wallpaper-device-group">{option.group}</div> : null}<button type="button" role="option" id={optionId(index)} aria-selected={sameTarget(value, option.target)} tabIndex={-1} className={`wallpaper-device-option ${active === index ? 'is-active' : ''}`} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => commit(option.target)}><Smartphone size={17} aria-hidden="true" /><span><strong>{option.label}</strong><small>{option.target.width} × {option.target.height} px · {targetDirection(option.target)}</small></span>{sameTarget(value, option.target) && <Check size={16} aria-hidden="true" />}</button></div>) : <p className="wallpaper-device-empty">{query.trim() && parsed.status !== 'resolved' ? parsed.message : '输入机型名称，或直接填写宽 × 高像素。'}</p>}</div></div>, document.body)}
     <div className="wallpaper-target-options"><div role="group" aria-label="壁纸方向"><button type="button" disabled={!canAdjust} aria-pressed={!!value && value.height >= value.width} onClick={() => orient(false)}>竖屏</button><button type="button" disabled={!canAdjust} aria-pressed={!!value && value.width > value.height} onClick={() => orient(true)}>横屏</button></div><div role="group" aria-label="壁纸适配方式"><button type="button" disabled={!canAdjust} aria-pressed={value?.fit === 'cover'} title="等比铺满屏幕，边缘可能裁切" onClick={() => value && commit({ ...value, fit: 'cover' })}>铺满</button><button type="button" disabled={!canAdjust} aria-pressed={value?.fit === 'contain'} title="保留完整画面，不足区域补背景" onClick={() => value && commit({ ...value, fit: 'contain' })}>完整保留</button></div></div>
-    <p id={messageId} className={issue ? 'wallpaper-target-issue' : 'wallpaper-target-summary'} role={issue ? 'status' : undefined}>{issue || (value ? `最终尺寸 ${value.width} × ${value.height} px · PNG` : '支持苹果、三星、小米、华为、OPPO、vivo、荣耀及自定义像素。')}</p>
+    <p id={messageId} className={issue ? 'wallpaper-target-issue' : 'wallpaper-target-summary'} role={issue ? 'status' : undefined}>{issue || (value ? `${targetDirection(value)} · 最终尺寸 ${value.width} × ${value.height} px · PNG${value.deviceId && deviceFamilies.get(value.deviceId) === 'tablet' ? '；iPad 首次默认横屏，可切换竖屏；已有方向设置保留。' : ''}` : '支持苹果、三星、小米、华为、OPPO、vivo、荣耀及自定义像素。')}</p>
   </section>;
 }

@@ -685,6 +685,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.wallpaperTargetIssue = wallpaperTargetIssue;
 exports.readWallpaperTarget = readWallpaperTarget;
 exports.searchWallpaperDevices = searchWallpaperDevices;
+exports.wallpaperDeviceTarget = wallpaperDeviceTarget;
 exports.parseWallpaperTarget = parseWallpaperTarget;
 exports.wallpaperPrompt = wallpaperPrompt;
 exports.wallpaperGenerationSize = wallpaperGenerationSize;
@@ -777,9 +778,10 @@ function pixelPairs(text) {
     return [...new Map(pairs.map(pair => [`${pair.width}x${pair.height}:${pair.integer}:${pair.physical}`, pair])).values()];
 }
 function orientation(text) {
-    if (/横屏|横向|\blandscape\b/i.test(text))
+    const input = text.normalize('NFKC');
+    if (/横屏|横向|\blandscape\b/i.test(input))
         return 'landscape';
-    if (/竖屏|纵向|\bportrait\b/i.test(text))
+    if (/竖屏|纵向|\bportrait\b/i.test(input))
         return 'portrait';
 }
 const fitFromText = (text) => /留边|不(?:要)?裁[剪切]|完整保留(?:画面|图片|图像)/.test(text.replace(/不(?:要)?留边/g, '')) ? 'contain' : 'cover';
@@ -787,16 +789,20 @@ function orientTarget(target, text) {
     const direction = orientation(text);
     return direction === 'landscape' && target.width < target.height || direction === 'portrait' && target.width > target.height ? { ...target, width: target.height, height: target.width } : target;
 }
-function deviceTarget(device, text) { return orientTarget({ width: device.width, height: device.height, fit: fitFromText(text), deviceId: device.id, label: device.name }, text); }
+function wallpaperDeviceTarget(device, text = '') {
+    const low = Math.min(device.width, device.height), high = Math.max(device.width, device.height), landscape = device.category === 'tablet';
+    return orientTarget({ width: landscape ? high : low, height: landscape ? low : high, fit: fitFromText(text), deviceId: device.id, label: device.name }, text);
+}
 function ambiguous(candidates, message = '找到多个匹配，请选择具体机型或屏幕。') { return { status: 'ambiguous', candidates, message }; }
 function parseWallpaperTarget(text) {
     if (typeof text !== 'string' || !text.trim())
         return { status: 'unknown', message: '输入机型或像素即可，例如 iPhone 18 Pro、1170×2532。' };
     if (text.length > 4096)
         return { status: 'invalid', message: '描述过长，请只填写机型名称或宽×高像素。' };
-    if (/横屏|横向|\blandscape\b/i.test(text) && /竖屏|纵向|\bportrait\b/i.test(text))
+    const input = text.normalize('NFKC');
+    if (/横屏|横向|\blandscape\b/i.test(input) && /竖屏|纵向|\bportrait\b/i.test(input))
         return { status: 'invalid', message: '同时出现横屏和竖屏，请只保留本次需要的一个方向。' };
-    const input = text.normalize('NFKC'), pairs = pixelPairs(input), devices = screenCandidates(namedDevices(input), input);
+    const pairs = pixelPairs(input), devices = screenCandidates(namedDevices(input), input);
     if (!pairs.length && /\b(?:4k|uhd)\b/i.test(input)) {
         const direction = orientation(input);
         if (!direction)
@@ -821,7 +827,7 @@ function parseWallpaperTarget(text) {
     if (devices.length > 1)
         return ambiguous(devices);
     if (devices.length === 1)
-        return { status: 'resolved', device: devices[0], target: deviceTarget(devices[0], input) };
+        return { status: 'resolved', device: devices[0], target: wallpaperDeviceTarget(devices[0], input) };
     const ipads = ipadCandidates(input);
     if (ipads.length)
         return ambiguous(ipads, 'iPad 的代际可能影响尺寸，请选择具体型号。');
@@ -833,7 +839,8 @@ function wallpaperPrompt(target) {
     const issue = wallpaperTargetIssue(target);
     if (issue)
         throw Error(issue);
-    return `创作完整的原创设备壁纸，最终成品尺寸为 ${target.width} × ${target.height} 像素，按该长宽比安排构图。主体与关键细节集中在画面中部，顶部为系统时钟留出适量干净空间；不要绘制手机边框、设备样机、时间、应用图标、系统界面、品牌商标或水印。${target.fit === 'contain' ? '完整保留主体和画面边缘，不通过拉伸改变主体比例。' : '画面边缘可以适当裁切，重要主体不要贴边。'}主题、色彩与风格按用户本次要求创作。`;
+    const direction = target.width > target.height ? '横屏' : target.width < target.height ? '竖屏' : '正方形';
+    return `创作完整的原创设备壁纸，最终成品尺寸为 ${target.width} × ${target.height} 像素，采用${direction}构图，按该长宽比安排画面。主体与关键细节集中在画面中部，顶部为系统时钟留出适量干净空间；不要绘制手机边框、设备样机、时间、应用图标、系统界面、品牌商标或水印。${target.fit === 'contain' ? '完整保留主体和画面边缘，不通过拉伸改变主体比例。' : '画面边缘可以适当裁切，重要主体不要贴边。'}主题、色彩与风格按用户本次要求创作。`;
 }
 function wallpaperGenerationSize(target, modelId) {
     const issue = wallpaperTargetIssue(target);
