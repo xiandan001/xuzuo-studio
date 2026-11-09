@@ -213,8 +213,13 @@ async function main() {
   const update = launch(next.setup, ['--update', '--root', installed, '--wait-pid', String(processIdentity.pid), '--wait-start', String(processIdentity.startedAt), '--result', resultFile], 180000, process.env, 'update-cli');
   await delay(600); assert.equal(update.child.exitCode, null); assert.equal(oldApp.child.exitCode, null); assert.equal((await json(path.join(installed, 'resources/xuzuo-install-manifest.json'))).version, oldVersion);
   report.waitedForRealOldProcess = true; ownerProcess.child.stdin.end(); assert.equal((await ownerProcess.done).code, 0); assert.equal((await oldApp.done).code, 0);
-  const updateExit = await update.done; assert.equal(updateExit.code, 0); assert(!updateExit.timedOut);
-  const updateResult = await json(resultFile); assert.equal(updateResult.success, true); assert.equal(updateResult.version, current.version);
+  const updateExit = await update.done;
+  report.updateCliExit = updateExit;
+  let updateResult;
+  try { updateResult = await json(resultFile); report.updateCliResult = updateResult; }
+  catch (error) { report.updateCliResultError = { name: error.name, code: error.code, message: String(error.message).slice(0, 1200) }; }
+  assert.equal(updateExit.code, 0, `Update CLI failed: ${JSON.stringify({ timedOut: updateExit.timedOut, result: report.updateCliResult, resultError: report.updateCliResultError })}`); assert(!updateExit.timedOut);
+  assert(updateResult, 'Successful update did not write a result'); assert.equal(updateResult.success, true); assert.equal(updateResult.version, current.version);
   await verifyRuntime(installed, next.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']); const nextStatus = await command(next.driver, ['status', installed]); assert.equal(nextStatus.registration.Version, current.version); assert(nextStatus.shortcuts.every(file => file.exists));
   assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(syntheticFeeFile), syntheticFeeHash); assert.equal((await fsp.readdir(profile)).filter(name => /^credentials(?:[-.]|$)/i.test(name)).length, 0);
   report.updateCliVerified = true; report.fullRuntimeFilesVerified = true; report.oldProcess = processIdentity; report.preparingRetryVerified = true;
