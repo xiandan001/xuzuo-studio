@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WALLPAPER_DEVICES, wallpaperBrandLabel } from '../data/wallpaper-devices';
-import { parseWallpaperTarget, readWallpaperTarget, searchWallpaperDevices, wallpaperGenerationSize, wallpaperPrompt, wallpaperTargetIssue } from './wallpaper-target';
+import { parseWallpaperTarget, readWallpaperTarget, searchWallpaperDevices, wallpaperDeviceTarget, wallpaperGenerationSize, wallpaperPrompt, wallpaperTargetIssue } from './wallpaper-target';
 import type { WallpaperTarget } from '../wallpaper-types';
 
 const custom = (width = 1170, height = 2532): WallpaperTarget => ({ width, height, fit: 'cover' });
@@ -20,7 +20,7 @@ describe('verified wallpaper catalogue', () => {
   it('resolves every canonical catalogue label back to that exact device, including generations and fold screens', () => {
     for (const device of WALLPAPER_DEVICES) {
       const result = parseWallpaperTarget(device.name); expect(result.status, device.name).toBe('resolved');
-      if (result.status === 'resolved') expect(result.target, device.name).toMatchObject({ deviceId: device.id, width: device.width, height: device.height });
+      if (result.status === 'resolved') expect(result.target, device.name).toMatchObject({ deviceId: device.id, width: device.category === 'tablet' ? device.height : device.width, height: device.category === 'tablet' ? device.width : device.height });
     }
   });
 });
@@ -36,7 +36,7 @@ describe('local wallpaper device and resolution recognition', () => {
     ['华为Mate90 Pro', 'mate-90-pro', 1280, 2832],
     ['OPPO Find X10 Pro Max', 'find-x10-pro-max', 1272, 2772],
     ['荣耀Magic9超能版', 'magic9-super-power', 1280, 2788],
-    ['ipad pro 11 M5', 'ipad-pro-11-m5', 1668, 2420],
+    ['ipad pro 11 M5', 'ipad-pro-11-m5', 2420, 1668],
   ])('resolves %s without paid inference', (text, id, width, height) => {
     const result = parseWallpaperTarget(text); expect(result.status).toBe('resolved');
     if (result.status === 'resolved') { expect(result.device?.id).toBe(id); expect(result.target).toMatchObject({ width, height, fit: 'cover', deviceId: id }); }
@@ -47,6 +47,28 @@ describe('local wallpaper device and resolution recognition', () => {
   it('keeps Pro distinct from Pro Max while showing both in an editable search list', () => {
     expect(searchWallpaperDevices('iPhone18Pro').map(device => device.id)).toEqual(['iphone-18-pro', 'iphone-18-pro-max']);
     const result = parseWallpaperTarget('iPhone18Pro'); expect(result.status === 'resolved' && result.device?.id).toBe('iphone-18-pro');
+  });
+  it('defaults tablets to landscape and handsets to portrait without changing canonical catalogue pixels', () => {
+    const before = JSON.stringify(WALLPAPER_DEVICES);
+    for (const device of WALLPAPER_DEVICES) {
+      const target = wallpaperDeviceTarget(device);
+      expect(target.deviceId).toBe(device.id);
+      expect(target.width > target.height).toBe(device.category === 'tablet');
+      expect(readWallpaperTarget(target)).toEqual(target);
+    }
+    expect(JSON.stringify(WALLPAPER_DEVICES)).toBe(before);
+  });
+  it.each([
+    ['ipad pro 11 M5 竖屏', 1668, 2420],
+    ['ipad pro 11 M5 portrait', 1668, 2420],
+    ['ipad pro 11 M5 横屏', 2420, 1668],
+    ['ipad pro 11 M5 landscape', 2420, 1668],
+    ['ipad pro 11 M5 1668×2420', 1668, 2420],
+    ['ipad pro 11 M5 2420×1668', 2420, 1668],
+  ])('uses the explicit direction or numeric order in %s', (text, width, height) => {
+    const result = parseWallpaperTarget(text);
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') expect(result.target).toMatchObject({ width, height, deviceId: 'ipad-pro-11-m5' });
   });
   it('asks for the iPad generation and fold screen instead of silently using the first match', () => {
     const ipad = parseWallpaperTarget('给我一张 iPad Pro 11 的壁纸'); expect(ipad.status).toBe('ambiguous');
@@ -82,7 +104,7 @@ describe('local wallpaper device and resolution recognition', () => {
     const landscape = parseWallpaperTarget('iPhone18Pro 横屏壁纸'); expect(landscape.status === 'resolved' && landscape.target).toMatchObject({ width: 2622, height: 1206 });
     const customLandscape = parseWallpaperTarget('宽1080高1920，横屏'); expect(customLandscape.status === 'resolved' && customLandscape.target).toMatchObject({ width: 1920, height: 1080, label: '自定义 1920×1080' });
   });
-  it.each(['横屏和竖屏', '横向 portrait', 'landscape 纵向'])('does not choose between conflicting directions %s', text => expect(parseWallpaperTarget(`iPhone18Pro ${text}`).status).toBe('invalid'));
+  it.each(['横屏和竖屏', '横向 portrait', 'landscape 纵向', 'ｌａｎｄｓｃａｐｅ 竖屏', '横屏 ｐｏｒｔｒａｉｔ', 'ｌａｎｄｓｃａｐｅ ｐｏｒｔｒａｉｔ'])('does not choose between conflicting directions %s', text => expect(parseWallpaperTarget(`iPhone18Pro ${text}`).status).toBe('invalid'));
   it.each(['留边', '不裁剪', '不裁切', '完整保留画面'])('recognizes an explicit fit instruction %s for devices and custom pixels', instruction => {
     for (const input of [`iPhone18Pro ${instruction}`, `1920x1080 ${instruction}`]) { const result = parseWallpaperTarget(input); expect(result.status === 'resolved' && result.target.fit).toBe('contain'); }
     const bodyOnly = parseWallpaperTarget('iPhone18Pro 保留主体，背景可以调整'); expect(bodyOnly.status === 'resolved' && bodyOnly.target.fit).toBe('cover');
@@ -113,6 +135,21 @@ describe('strict target restoration and model-independent output intent', () => 
     expect(wallpaperGenerationSize(custom(2868, 1320), 'gpt-image-1.5')).toBe('1536x1024'); expect(wallpaperGenerationSize(target, 'gpt-image-1')).toBe('1024x1536');
     expect(wallpaperGenerationSize(custom(2048, 2048))).toBe('1024x1024'); expect(wallpaperGenerationSize(target, 'dall-e-3')).toBe('1024x1024');
     expect(() => wallpaperPrompt(custom(9000, 100))).toThrow(); expect(() => wallpaperGenerationSize(custom(9000, 100))).toThrow();
+  });
+  it('keeps iPad landscape composition aligned in model requests and preserves explicit portrait output', () => {
+    const device = WALLPAPER_DEVICES.find(item => item.id === 'ipad-pro-11-m5')!;
+    const landscape = wallpaperDeviceTarget(device), portrait = wallpaperDeviceTarget(device, '竖屏');
+    expect(wallpaperDeviceTarget(device, 'ｐｏｒｔｒａｉｔ')).toEqual(portrait);
+    expect(wallpaperPrompt(landscape)).toContain('采用横屏构图');
+    expect(wallpaperPrompt(portrait)).toContain('采用竖屏构图');
+    expect(wallpaperGenerationSize(landscape, 'gpt-image-1.5')).toBe('1536x1024');
+    expect(wallpaperGenerationSize(portrait, 'gpt-image-1.5')).toBe('1024x1536');
+    for (const model of ['gpt-image-2.5-sunburst', 'gpt-image-2.6-sunburst']) {
+      const [width, height] = wallpaperGenerationSize(landscape, model).split('x').map(Number);
+      expect(width).toBeGreaterThan(height);
+      expect(width * height).toBeLessThanOrEqual(3_686_400);
+    }
+    expect(readWallpaperTarget(portrait)).toEqual(portrait);
   });
   it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])('%s stays inside the conservative native budget for every catalogue size and direction', model => {
     const targets = [...WALLPAPER_DEVICES.map(device => custom(device.width, device.height)), custom(64, 8192), custom(4000, 4000)];

@@ -77,10 +77,10 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           path: |
-            outputs/release-v2.5.0/*-mac-*.dmg
-            outputs/release-v2.5.0/*-mac-*.zip
-            outputs/release-v2.5.0/macos-package-verification.json
-            outputs/release-v2.5.0/macos-installer-verification.json
+            outputs/release-v*/*-mac-*.dmg
+            outputs/release-v*/*-mac-*.zip
+            outputs/release-v*/macos-package-verification.json
+            outputs/release-v*/macos-installer-verification.json
             work/macos-desktop-*/report.json
             work/macos-desktop-*/*.png
             work/macos-package-launch-*/report.json

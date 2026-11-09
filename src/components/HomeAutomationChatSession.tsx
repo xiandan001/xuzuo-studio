@@ -246,7 +246,7 @@ export function HomeAutomationChatSession({ props, chat }: { props: PageProps; c
   }
   function newConversation() {
     const projectId = props.projects.find(project => project.id === draft.projectId && !project.trashedAt && !project.purgedAt)?.id || props.projects.find(project => !project.trashedAt && !project.purgedAt)?.id;
-    chat.newConversation({ projectId, planner: { modelConfigId: session.selected.model?.id || draft.planner.modelConfigId, credentialId: session.selected.credentialId || draft.planner.credentialId }, bindings: draft.ruleId && session.savedRule?.id === draft.ruleId ? { ...draft.bindings, ...session.readiness.bindings } : draft.bindings });
+    chat.newConversation({ projectId, planner: { ...draft.planner, modelConfigId: session.selected.model?.id || draft.planner.modelConfigId, credentialId: session.selected.credentialId || draft.planner.credentialId }, bindings: draft.ruleId && session.savedRule?.id === draft.ruleId ? { ...draft.bindings, ...session.readiness.bindings } : draft.bindings });
   }
   const currentMessages = chat.conversation.messages.slice(-visible);
   if (draft.plan && activeRequestId && !currentMessages.some(message => message.kind === 'plan' && message.requestId === activeRequestId)) {

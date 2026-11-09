@@ -6,6 +6,7 @@ const { executeVideo, VIDEO_TIMEOUT_MS } = require('./provider-video.cjs');
 const { createModelReceipts } = require('./model-receipts.cjs');
 const { imageOptionsError } = require('./image-output-options.cjs');
 const { imageType, rasterDimensions, validateMarkup } = require('./image-output-formats.cjs');
+const { reasoningRequestFields } = require('./reasoning-options.cjs');
 
 const TEXT_PROTOCOLS = new Set(['openai-chat', 'openai-responses', 'anthropic', 'gemini']);
 const IMAGE_PROTOCOLS = new Set(['image', 'openai-chat', 'openai-responses']);
@@ -33,6 +34,10 @@ function validateRequest(request) {
   for (const value of [request.prompt, request.input]) if (value !== undefined && (typeof value !== 'string' || value.length > 200_000)) throw failure('INVALID_INPUT', '模型输入需要是长度不超过 200000 字符的文字。');
   if (request.attachments !== undefined && (!Array.isArray(request.attachments) || request.attachments.length > 16)) throw failure('INVALID_ATTACHMENTS', '一次模型步骤最多使用 16 份附件。');
   const options = request.options || {};
+  if (options.reasoningEffort !== undefined) {
+    if (!['text', 'vision', 'video-understanding'].includes(request.kind)) throw failure('INVALID_OPTIONS', '推理强度仅用于文字或图像理解步骤。');
+    try { reasoningRequestFields(request.connection, request.model, options.reasoningEffort); } catch (cause) { throw failure('INVALID_OPTIONS', cause.message); }
+  }
   if (options.maxOutputTokens !== undefined && (!Number.isInteger(options.maxOutputTokens) || options.maxOutputTokens < 1 || options.maxOutputTokens > 128_000)) throw failure('INVALID_OPTIONS', '输出 Token 上限必须是 1 到 128000 的整数。');
   if (options.count !== undefined && (!Number.isInteger(options.count) || options.count < 1 || options.count > 4)) throw failure('INVALID_OPTIONS', '单次图片生成数量需要是 1 到 4 的整数。');
   if (options.count > 1 && !['image-generation', 'image-editing'].includes(request.kind)) throw failure('INVALID_OPTIONS', '多份输出仅用于图片步骤，其他步骤请分别执行。');

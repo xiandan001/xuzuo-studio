@@ -3,7 +3,8 @@ const path = require('node:path');
 const { backupRelative } = require('./backup-paths.cjs');
 const { randomUUID } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson, inside, key } = require('./workspace-paths.cjs');
-const { hash, MAX_TOTAL, MAX_FILES, safePath, inspectZip, withoutSecrets, validateManifest, createIdMap, remap, mappedName, validId } = require('./backup-format.cjs');
+const { hash, MAX_FILE, MAX_TOTAL, MAX_FILES, safePath, inspectZip, withoutSecrets, validateManifest, createIdMap, remap, mappedName, validId } = require('./backup-format.cjs');
+const { chatPath, readChatBackups, safeChatBackup, remapChatBackups } = require('./chat-backup.cjs');
 const { validateQuoteBackups } = require('./quote-backup.cjs');
 const { validateRecords } = require('./run-history-store.cjs');
 const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset-categories.cjs');
@@ -24,13 +25,14 @@ const controlledPath = relative => {
   return relative.endsWith('.json') && (parts.includes('.xuzuo') || isBusinessPath(relative) || basename === '.xuzuo-workspace-v1.json' || parts.includes('.xuzuo-assets') && ['library-v1.json', 'categories-v1.json'].includes(basename));
 };
 
-function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, automationProvider, receiptProvider, fileSystem = fsDefault, loadModule = require }) {
+function createProjectBackup({ directory, workspaceStorage, artifactStore, liveEngine, batchProduction, automationProvider, receiptProvider, chatProvider, fileSystem = fsDefault, loadModule = require }) {
   const fs = fileSystem, receipts = path.join(path.resolve(directory), 'backup-imports-v1');
   let pending = Promise.resolve();
   const serial = action => { const task = pending.then(action); pending = task.catch(() => undefined); return task; };
   const batchManager = () => typeof batchProduction === 'function' ? batchProduction() : batchProduction;
   const automationManager = () => typeof automationProvider === 'function' ? automationProvider() : automationProvider;
   const receiptManager = () => typeof receiptProvider === 'function' ? receiptProvider() : receiptProvider;
+  const chatManager = () => typeof chatProvider === 'function' ? chatProvider() : chatProvider;
   async function readJson(filename) { await checkedFile(fs, filename); return JSON.parse(await fs.readFile(filename, 'utf8')); }
   async function readBackup(filename) {
     await checkedDirectory(fs, path.dirname(filename)); const stat = await fs.lstat(filename);
@@ -48,6 +50,8 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       files.set(item.path, buffer);
     }
     validateRecords(manifest.records);
+    const chats = readChatBackups(manifest, files);
+    if (chats.length && !chatManager()?.restoreWorkspace) throw Error('当前版本缺少聊天恢复模块，请使用完整桌面版本导入。');
     if (manifest.batches?.length && !batchManager()) throw new Error('当前应用缺少批量记录恢复模块，请使用完整桌面版本导入。');
     for (const artifact of manifest.artifacts) {
       const project = manifest.locations.projects.find(item => item.projectId === artifact.projectId), workspace = manifest.locations.workspaces.find(item => item.workspaceId === project.workspaceId);
@@ -106,12 +110,17 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (document?.type !== 'xuzuo-commerce-image' || document.projectId !== link.projectId || !validateCommerceImageBackup(document, relative)) throw Error('可编辑图层快照内容与来源不一致。');
       commerceSnapshots.set(relative, { artifactId: artifact.id, document });
     }
-    return { manifest, files, commerceSnapshots };
+    return { manifest, files, commerceSnapshots, chats };
   }
   async function exportBackup({ meta, workspaceIds, projectIds, filePath, beforeWrite }) {
-    const locations = await workspaceStorage.list(), nativePurges = await workspaceStorage.listPurges?.() || [], requested = new Set(workspaceIds);
-    if (!requested.size || requested.size !== workspaceIds.length || workspaceIds.some(id => !locations.workspaces.some(item => item.workspaceId === id))) throw new Error('请选择已连接本地文件夹的工作区。');
-    const workspaces = locations.workspaces.filter(item => requested.has(item.workspaceId));
+    const locations = await workspaceStorage.list(), nativePurges = await workspaceStorage.listPurges?.() || [], requested = new Set(workspaceIds), chats = [];
+    if (!requested.size || requested.size !== workspaceIds.length || workspaceIds.some(id => !validId(id) || !meta.workspaces.some(item => item.id === id))) throw new Error('请选择有效的当前工作区。');
+    if (!projectIds && chatManager()?.exportWorkspace) for (const workspaceId of requested) chats.push(safeChatBackup(await chatManager().exportWorkspace(workspaceId)));
+    const workspaces = locations.workspaces.filter(item => requested.has(item.workspaceId)), chatOnlyWorkspaces = new Set();
+    for (const workspaceId of requested) if (!workspaces.some(item => item.workspaceId === workspaceId)) {
+      if (projectIds || !chats.some(snapshot => snapshot.workspaceId === workspaceId && snapshot.conversations.length) || meta.projects.some(item => item.workspaceId === workspaceId && !item.purgedAt)) throw new Error('请选择已连接本地文件夹的工作区。');
+      chatOnlyWorkspaces.add(workspaceId); workspaces.push({ workspaceId, name: meta.workspaces.find(item => item.id === workspaceId).name, directory: path.join(directory, 'chat-v1', workspaceId) });
+    }
     if (workspaces.some(item => inside(item.directory, path.resolve(directory)))) throw new Error('工作区包含应用资料目录，请把项目放入独立本地工作区后再备份。');
     const auditById = new Map(meta.projects.filter(item => item.purgedAt).map(item => [item.id, purgedProjectAudit(item)]));
     for (const item of nativePurges) {
@@ -141,8 +150,15 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     });
     filteredMeta.ledger = filteredMeta.ledger.map(entry => durableById.get(entry.id) || entry);
     for (const entry of durableLedger) if (!filteredMeta.ledger.some(existing => existing.id === entry.id)) filteredMeta.ledger.push(entry);
-    const manifest = { kind: 'xuzuo-internal-backup', version: audits.length ? 3 : automations || modelReceipts || filteredMeta.quoteDrafts?.length ? 2 : 1, appVersion: APP_VERSION, backupId: randomUUID(), createdAt: new Date().toISOString(), scope: projectIds ? 'projects' : 'workspaces', meta: filteredMeta, locations: { workspaces, projects }, artifacts, records: withoutSecrets(records), batches: withoutSecrets(batches), ...(automations ? { automations } : {}), ...(modelReceipts ? { modelReceipts } : {}), files: [], secretsIncluded: false };
+    const manifest = { kind: 'xuzuo-internal-backup', version: audits.length ? 3 : automations || modelReceipts || filteredMeta.quoteDrafts?.length || chats.length ? 2 : 1, appVersion: APP_VERSION, backupId: randomUUID(), createdAt: new Date().toISOString(), scope: projectIds ? 'projects' : 'workspaces', meta: filteredMeta, locations: { workspaces, projects }, artifacts, records: withoutSecrets(records), batches: withoutSecrets(batches), ...(automations ? { automations } : {}), ...(modelReceipts ? { modelReceipts } : {}), ...(chats.length ? { chatWorkspaces: chats.map(snapshot => snapshot.workspaceId) } : {}), files: [], secretsIncluded: false };
     const Zip = loadModule('jszip'), zip = new Zip(); let total = 0;
+    function addBytes(buffer, relative) {
+      safePath(relative);
+      if (buffer.length > MAX_FILE || (total += buffer.length) > MAX_TOTAL || manifest.files.length >= MAX_FILES - 1) throw Error('备份内容超过单文件100MB、合计512MB或9999个文件，请缩小范围。');
+      if (manifest.files.some(item => item.path.toLowerCase() === relative.toLowerCase())) throw Error('备份包含重复文件位置，未生成不完整备份。');
+      manifest.files.push({ path: relative, bytes: buffer.length, sha256: hash(buffer) }); zip.file(relative, buffer, { createFolders: false });
+    }
+    for (const snapshot of chats) addBytes(Buffer.from(JSON.stringify(snapshot) + '\n'), chatPath(snapshot.workspaceId));
     async function add(source, relative) {
       safePath(relative); const stat = await checkedFile(fs, source), original = await fs.readFile(source), after = await checkedFile(fs, source);
       let buffer = original;
@@ -166,6 +182,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       }
     }
     for (const workspace of workspaces) {
+      if (chatOnlyWorkspaces.has(workspace.workspaceId)) { addBytes(Buffer.from(JSON.stringify({ version: 1, workspaceId: workspace.workspaceId }) + '\n'), `workspaces/${workspace.workspaceId}/.xuzuo-workspace-v1.json`); continue; }
       await workspaceStorage.validateWorkspace(workspace.workspaceId);
       for (const project of projects.filter(item => item.workspaceId === workspace.workspaceId)) await workspaceStorage.projectDirectory(project.projectId);
       const allProjects = locations.projects.filter(item => item.workspaceId === workspace.workspaceId);
@@ -195,6 +212,10 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     return { saved: true, path: filePath, backupId: manifest.backupId, files: manifest.files.length, bytes: total, projects: projects.length, workspaces: workspaces.length };
   }
   async function completeReceipt(receipt) {
+    if (receipt.chats?.length) {
+      if (!chatManager()?.restoreWorkspace || !chatManager()?.validateWorkspaceSnapshot) throw Error('聊天恢复模块尚未就绪，恢复凭据和原数据保留。');
+      for (const snapshot of receipt.chats) await chatManager().validateWorkspaceSnapshot(snapshot);
+    }
     await artifactStore.importEntries(receipt.artifacts);
     await workspaceStorage.importLocations(receipt.locations);
     const audits = receipt.meta.projects.filter(project => project.purgedAt);
@@ -216,11 +237,12 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (!automationManager()?.importEntries) throw new Error('自动化恢复模块尚未就绪，恢复凭据和文件已保留。');
       await automationManager().importEntries({ records: receipt.automations, idMap: receipt.idMap, backupId: receipt.backupId });
     }
+    for (const snapshot of receipt.chats || []) await chatManager().restoreWorkspace(snapshot);
     receipt.phase = 'native-ready'; await atomicJson(fs, path.join(receipts, `${receipt.backupId}.json`), receipt);
     return { meta: receipt.meta, locations: receipt.locations, idMap: receipt.idMap, backupId: receipt.backupId, receiptPath: path.join(receipts, `${receipt.backupId}.json`) };
   }
   async function importBackup({ filePath, directory: target }) {
-    const { manifest, files, commerceSnapshots } = await readBackup(filePath); await checkedDirectory(fs, receipts, true);
+    const { manifest, files, commerceSnapshots, chats } = await readBackup(filePath); await checkedDirectory(fs, receipts, true);
     const receiptFile = path.join(receipts, `${manifest.backupId}.json`);
     try { const previous = await readJson(receiptFile); if (previous.phase === 'acknowledged') throw new Error('这份备份已导入，未重复导入历史费用。'); return completeReceipt(previous); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -233,8 +255,11 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     await checkedDirectory(fs, target);
     const existing = await workspaceStorage.list();
     if (existing.workspaces.some(item => inside(item.directory, target) || inside(target, item.directory))) throw new Error('导入位置不能包含现有工作区或位于现有工作区内。');
-    const importRoot = path.join(target, `序作恢复-${manifest.backupId.slice(0, 8)}-${randomUUID().slice(0, 8)}`); await fs.mkdir(importRoot);
+    const importRoot = path.join(target, `序作恢复-${manifest.backupId.slice(0, 8)}-${randomUUID().slice(0, 8)}`);
     const idMap = createIdMap({ manifest, controls }), pathMap = {}, fileNames = {}, renamedNames = {};
+    const restoredChats = remapChatBackups(chats, idMap, manifest.backupId);
+    for (const snapshot of restoredChats) await chatManager().validateWorkspaceSnapshot(snapshot);
+    await fs.mkdir(importRoot);
     for (const item of [...manifest.artifacts, ...controls.flatMap(value => Array.isArray(value.assets) ? value.assets : [])]) {
       for (const name of [item.fileName, item.trashFileName].filter(Boolean)) renamedNames[name] = mappedName(name, { [item.id]: idMap[item.id] });
     }
@@ -248,6 +273,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     }
     const staged = [], changedSnapshotArtifacts = new Map();
     for (const [relative, original] of files) {
+      if (relative.startsWith('chat/')) continue;
       if (relative.split('/').some(name => /^credentials-v1\.json(?:\.|$)/i.test(name))) throw new Error('备份包含凭证库文件，已拒绝导入。');
       const parts = relative.split('/'); let destination, buffer = original;
       if (parts[0] === 'workspaces' && idMap[parts[1]] && manifest.locations.workspaces.some(item => item.workspaceId === parts[1])) destination = path.join(importRoot, idMap[parts[1]], ...parts.slice(2, -1), renamedNames[parts.at(-1)] || parts.at(-1));
@@ -316,12 +342,12 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       for (const attempt of record.run.attempts) if (['running', 'waiting-review'].includes(attempt.status)) attempt.status = 'cancelled';
       for (const entry of record.ledger) if (entry.status === 'processing') { entry.status = 'cancelled'; entry.costState = 'unknown'; }
     }
-    const receipt = { version: 1, backupId: manifest.backupId, sourcePath: filePath, createdAt: new Date().toISOString(), phase: 'prepared', importRoot, idMap, meta, locations, artifacts, records, batches: remap(manifest.batches || [], idMap, pathMap, renamedNames), ...(manifest.automations ? { automations: manifest.automations } : {}), ...(manifest.modelReceipts ? { modelReceipts: manifest.modelReceipts } : {}) };
+    const receipt = { version: 1, backupId: manifest.backupId, sourcePath: filePath, createdAt: new Date().toISOString(), phase: 'prepared', importRoot, idMap, meta, locations, artifacts, records, batches: remap(manifest.batches || [], idMap, pathMap, renamedNames), ...(manifest.automations ? { automations: manifest.automations } : {}), ...(manifest.modelReceipts ? { modelReceipts: manifest.modelReceipts } : {}), ...(restoredChats.length ? { chats: restoredChats } : {}) };
     await atomicJson(fs, receiptFile, receipt); return completeReceipt(receipt);
   }
   return {
     exportBackup: input => serial(() => exportBackup(input)),
-    inspectBackup: filename => serial(async () => { const { manifest } = await readBackup(filename); return { backupId: manifest.backupId, createdAt: manifest.createdAt, scope: manifest.scope, workspaces: manifest.meta.workspaces.map(({ id, name }) => ({ id, name })), projects: manifest.meta.projects.filter(project => !project.purgedAt).map(({ id, name }) => ({ id, name })), files: manifest.files.length, bytes: manifest.files.reduce((sum, item) => sum + item.bytes, 0), secretsIncluded: false }; }),
+    inspectBackup: filename => serial(async () => { const { manifest, chats } = await readBackup(filename); return { backupId: manifest.backupId, createdAt: manifest.createdAt, scope: manifest.scope, workspaces: manifest.meta.workspaces.map(({ id, name }) => ({ id, name })), projects: manifest.meta.projects.filter(project => !project.purgedAt).map(({ id, name }) => ({ id, name })), files: manifest.files.length, bytes: manifest.files.reduce((sum, item) => sum + item.bytes, 0), ...(chats.length ? { chatConversations: chats.reduce((sum, snapshot) => sum + snapshot.conversations.length, 0) } : {}), secretsIncluded: false }; }),
     importBackup: input => serial(() => importBackup(input)),
     pendingImports: () => serial(async () => { await checkedDirectory(fs, receipts, true); const result = []; for (const name of await fs.readdir(receipts)) { if (!/^[A-Za-z0-9-]+\.json$/.test(name)) continue; const receipt = await readJson(path.join(receipts, name)); if (receipt.phase !== 'acknowledged') result.push(await completeReceipt(receipt)); } return result; }),
     acknowledgeImport: backupId => serial(async () => { if (!validId(backupId)) throw new Error('导入凭据编号无效。'); const filename = path.join(receipts, `${backupId}.json`), receipt = await readJson(filename); if (receipt.phase !== 'native-ready') throw new Error('本地文件恢复尚未完成。'); receipt.phase = 'acknowledged'; await atomicJson(fs, filename, receipt); }),

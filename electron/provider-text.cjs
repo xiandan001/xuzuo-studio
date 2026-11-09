@@ -1,5 +1,6 @@
 const { endpoint, failure, jsonRequest, normalizedUsage } = require('./provider-http.cjs');
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
+const { reasoningRequestFields } = require('./reasoning-options.cjs');
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/csv', 'application/json', 'application/xml']);
@@ -78,6 +79,8 @@ function textRequest(request, files, context) {
     headers['x-goog-api-key'] = context.secret;
     body = { contents: [{ role: 'user', parts: content }], generationConfig: { maxOutputTokens: maxTokens } };
   } else throw failure('UNSUPPORTED_PROTOCOL', '此协议没有可执行的文字适配器。', context);
+  const effortFields = reasoningRequestFields(request.connection, request.model, request.options.reasoningEffort);
+  body = { ...body, ...effortFields, ...(body.generationConfig ? { generationConfig: { ...body.generationConfig, ...(effortFields.generationConfig || {}) } } : {}) };
   const serialized = JSON.stringify(body);
   if (request.kind === 'video-understanding' && Buffer.byteLength(serialized, 'utf8') >= 20 * 1024 * 1024) throw failure('VIDEO_TOO_LARGE', 'Gemini 内联视频的完整请求需要小于 20 MB，请先压缩或裁剪 MP4。', context);
   return { url, options: { method: 'POST', headers, body: serialized }, billingRequestSnapshot: createBillingRequestSnapshot(request, body) };

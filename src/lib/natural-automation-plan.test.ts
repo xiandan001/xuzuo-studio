@@ -23,6 +23,20 @@ function imagePlan(): NaturalAutomationPlan {
 function wordPlan(): NaturalAutomationPlan { return { ...imagePlan(), name: '完整说明文档', objective: '制作完整说明文档', outputKind: 'word', steps: [{ kind: 'text', name: '完整正文', instruction: '依据资料完成完整说明文档' }], maxRepairs: 2 }; }
 const compileImage = (plan = imagePlan(), config = configuration()) => compileNaturalAutomationPlan(plan, project(), config);
 
+it('文字与看图制作保存推理强度，切换至不支持的型号回退默认且native结果一致', () => {
+  const config = configuration(); config.connections = config.connections.map(connection => ({ ...connection, providerId: 'openai' })); config.models = config.models.map(model => ({ ...model, modelId: model.capabilities.includes('text') || model.capabilities.includes('vision') ? 'gpt-6.1-terra' : model.modelId }));
+  const bindings = { text: { modelConfigId: 'model-text', credentialId: 'key-text', reasoningEffort: 'high' as const }, vision: { modelConfigId: 'model-vision', credentialId: 'key-vision', reasoningEffort: 'low' as const } };
+  const word = compileNaturalAutomationPlan(wordPlan(), project('word'), config, bindings);
+  expect(word.workflow.steps.filter(step => step.kind === 'text').every(step => step.reasoningEffort === 'high')).toBe(true);
+  const image = compileNaturalAutomationPlan(imagePlan(), project(), config, bindings);
+  expect(image.workflow.steps.filter(step => step.kind === 'vision').every(step => step.reasoningEffort === 'low')).toBe(true);
+  expect(image.workflow.steps.filter(step => step.kind.startsWith('image-')).every(step => step.reasoningEffort === undefined)).toBe(true);
+  const native = require('../../electron/natural-automation-plan.runtime.cjs').compileNaturalAutomationPlan(wordPlan(), project('word'), config, bindings);
+  expect(native.workflow.steps.map((step: { reasoningEffort?: string }) => step.reasoningEffort)).toEqual(word.workflow.steps.map(step => step.reasoningEffort));
+  config.models = config.models.map(model => ({ ...model, modelId: 'gpt-4.1' }));
+  expect(compileNaturalAutomationPlan(wordPlan(), project('word'), config, bindings).workflow.steps.filter(step => step.kind === 'text').every(step => step.reasoningEffort === 'auto')).toBe(true);
+});
+
 describe('自然语言自动化严格解析', () => {
   it('只接受完整JSON对象并返回独立有界结构，schema不暴露自由连接或执行字段', () => {
     const plan = imagePlan(), parsed = parseNaturalAutomationPlan(` \n${JSON.stringify(plan)}\n`);

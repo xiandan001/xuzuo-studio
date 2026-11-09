@@ -9,6 +9,8 @@ import type { WallpaperTarget } from '../wallpaper-types';
 let root: Root | undefined, container: HTMLDivElement;
 const phone = WALLPAPER_DEVICES.find(device => device.id === 'iphone-17')!;
 const initial: WallpaperTarget = { width: phone.width, height: phone.height, fit: 'cover', deviceId: phone.id, label: phone.name };
+const ipad = WALLPAPER_DEVICES.find(device => device.id === 'ipad-pro-11-m5')!;
+const ipadPortrait: WallpaperTarget = { width: ipad.width, height: ipad.height, fit: 'cover', deviceId: ipad.id, label: ipad.name };
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -32,8 +34,14 @@ async function focus() { await act(async () => field().focus()); }
 async function type(value: string) { await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field(), value); field().dispatchEvent(new Event('input', { bubbles: true })); }); }
 async function key(value: string) { await act(async () => field().dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))); }
 async function click(label: string) { const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label); expect(button, label).toBeDefined(); await act(async () => button!.click()); }
+async function chooseDevice(name: string) { const option = [...document.querySelectorAll<HTMLButtonElement>('[role=option]')].find(item => item.querySelector('strong')?.textContent === name); expect(option, name).toBeDefined(); await act(async () => option!.click()); }
 
 describe('壁纸设备选择的实际DOM交互', () => {
+  it('全角英文与中文方向冲突时保留原设置，不静默选择横屏', async () => {
+    const f = await fixture(initial); await focus(); await type('iPad Pro 11 M5 ｌａｎｄｓｃａｐｅ 竖屏'); await key('Enter');
+    expect(f.changed).not.toHaveBeenCalled();
+    expect(container.querySelector('.wallpaper-target-issue')?.textContent).toContain('同时出现横屏和竖屏');
+  });
   it('本地搜索设备、按品牌显示并一次选定，无模型或网络调用', async () => {
     const f = await fixture(); await focus(); await type('iPhone 17');
     expect(field().getAttribute('aria-expanded')).toBe('true');
@@ -55,6 +63,80 @@ describe('壁纸设备选择的实际DOM交互', () => {
     await act(async () => option.click()); expect(f.changed).toHaveBeenCalledTimes(1);
     await focus(); await type('iPhone 18 Pro'); const next = [...document.querySelectorAll<HTMLButtonElement>('[role=option]')].find(item => item.querySelector('strong')?.textContent === 'iPhone 18 Pro')!;
     await act(async () => next.click()); const target = f.changed.mock.calls.at(-1)![0]; expect(target.width).toBeGreaterThan(target.height);
+  });
+  it('首次点击iPad候选默认横屏，并直接显示方向说明', async () => {
+    const f = await fixture(); await focus(); await type('iPad Pro 11 M5');
+    await chooseDevice(ipad.name);
+    expect(f.changed).toHaveBeenCalledExactlyOnceWith({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    expect(container.textContent).toContain(`横屏 · 最终尺寸 ${ipad.height} × ${ipad.width}`);
+    expect(container.textContent).toContain('iPad 首次默认横屏，可切换竖屏；已有方向设置保留');
+  });
+  it('首次完整机型输入按Enter也默认横屏', async () => {
+    const f = await fixture(); await focus(); await type('帮我做 ipad pro 11 M5 壁纸'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width });
+  });
+  it('从手机或自定义像素切换iPad使用横屏默认，切回手机使用竖屏默认', async () => {
+    const f = await fixture(initial); await focus(); await type('iPad Pro 11 M5'); await chooseDevice(ipad.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width });
+    await focus(); await type('iPhone 17'); await chooseDevice(phone.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(initial);
+    await f.external({ width: 1080, height: 2400, fit: 'contain' });
+    await focus(); await type('iPad Pro 11 M5'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width, fit: 'contain' });
+  });
+  it('手动iPad竖屏在同类换机时保留，显式横屏关键词优先', async () => {
+    const f = await fixture({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    await click('竖屏');
+    const air = WALLPAPER_DEVICES.find(device => device.id === 'ipad-air-13-m4')!;
+    await focus(); await type('iPad Air 13 M4'); await chooseDevice(air.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: air.id, width: air.width, height: air.height });
+    await focus(); await type('iPad Pro 11 M5 横屏'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width });
+    await focus(); await type('iPad Pro 11 M5 竖屏'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
+  });
+  it('同一iPad手动竖屏后重选或输入默认名称仍保持竖向', async () => {
+    const f = await fixture({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    await click('竖屏');
+    await focus(); await type('iPad Pro 11 M5'); await chooseDevice(ipad.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
+    await focus(); await type('iPad Pro 11 M5'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
+    await focus(); await type('iPad Pro 11 M5 横屏'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width });
+  });
+  it('已保存的iPad竖屏和外部恢复都不会自动旋转', async () => {
+    const f = await fixture(ipadPortrait);
+    expect(f.changed).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(`竖屏 · 最终尺寸 ${ipad.width} × ${ipad.height}`);
+    await f.external({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    await f.external(ipadPortrait);
+    expect(f.changed).not.toHaveBeenCalled();
+    expect([...container.querySelectorAll<HTMLButtonElement>('[aria-label="壁纸方向"] button')].find(item => item.textContent === '竖屏')?.getAttribute('aria-pressed')).toBe('true');
+  });
+  it('模糊的iPad横屏口语仍提供可选择的具体代际', async () => {
+    const f = await fixture(); await focus(); await type('给我一张 iPad Pro 11 横屏壁纸');
+    expect(document.querySelectorAll('[role=option]')).toHaveLength(2);
+    const m2 = WALLPAPER_DEVICES.find(device => device.id === 'ipad-pro-11-m2')!;
+    await chooseDevice(m2.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: m2.id, width: m2.height, height: m2.width });
+  });
+  it('明确像素顺序不会被当前同类横屏偏好覆盖', async () => {
+    const f = await fixture({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    await focus(); await type('iPad Pro 11 M5 1668×2420'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
+  });
+  it('全宽英文方向在Enter和模糊代际候选中都优先于当前方向', async () => {
+    const f = await fixture(ipadPortrait);
+    await focus(); await type('iPad Pro 11 M5 ｌａｎｄｓｃａｐｅ'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toMatchObject({ deviceId: ipad.id, width: ipad.height, height: ipad.width });
+    await focus(); await type('iPad Pro 11 ｐｏｒｔｒａｉｔ');
+    expect(document.querySelectorAll('[role=option]')).toHaveLength(2);
+    await chooseDevice(ipad.name);
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
+    await f.external({ ...ipadPortrait, width: ipad.height, height: ipad.width });
+    await focus(); await type('iPad Pro 11 M5 ｐｏｒｔｒａｉｔ'); await key('Enter');
+    expect(f.changed.mock.calls.at(-1)?.[0]).toEqual(ipadPortrait);
   });
   it('Tab提交完整像素，但不替模糊折叠屏选择内屏或外屏', async () => {
     const f = await fixture(); await focus(); await type('1080x2400'); await key('Tab'); expect(f.changed.mock.calls[0][0]).toMatchObject({ width: 1080, height: 2400 });

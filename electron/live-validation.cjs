@@ -6,6 +6,7 @@ const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { readEngineeringSource } = require('./engineering-export.cjs');
 const { stepReferenceIssue, explicitStepReferences } = require('./workflow-references.cjs');
 const { checkedAnimationWorkflowSettings } = require('./animation-document.runtime.cjs');
+const { reasoningRequestFields } = require('./reasoning-options.cjs');
 
 async function markupPreflightError(step, projectId, inputs, artifactStore, dynamicSource) {
   let markup;
@@ -166,6 +167,10 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     const connection = request.connections.find(item => item.id === model?.connectionId && item.enabled && !item.demo);
     const credential = metadata.find(item => item.id === step.credentialId && item.enabled && item.connectionId === connection?.id);
     if (!model || !connection) { addError(`“${step.name}”请选择启用的真实模型和连接。`, !model ? 'modelConfigId' : 'connection', step.id); continue; }
+    if (step.reasoningEffort !== undefined) {
+      if (!['text', 'vision', 'video-understanding'].includes(step.kind)) addError(`“${step.name}”的推理强度只用于文字或图像理解步骤。`, 'prompt', step.id);
+      else try { reasoningRequestFields(connection, model, step.reasoningEffort); } catch (cause) { addError(`“${step.name}”：${cause.message}`, 'modelConfigId', step.id); }
+    }
     const outputError = imageOptionsError(model.modelId, step.kind, { count: step.count, size: step.imageSize, background: step.imageBackground, outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort });
     if (outputError) addError(`“${step.name}”：${outputError}`, 'prompt', step.id);
     const dynamicImage = !!step.imageSourceStepId || inheritsAttachments && previousInputKind === 'image';

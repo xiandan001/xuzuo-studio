@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PageProps, Project } from '../../src/types';
-import type { StudioConfiguration } from '../../src/configuration-types';
+import type { StudioConfiguration, WorkflowRun } from '../../src/configuration-types';
 import { AnimationStudio } from '../../src/pages/AnimationStudio';
+import { StudioRunStatus } from '../../src/components/StudioRunStatus';
 import { setAppearanceMode, setAppearancePalette } from '../../src/lib/appearance';
 import '../../src/styles.css';
 import '../../src/theme.css';
@@ -11,6 +12,11 @@ import '../../src/surface-depth.css';
 import '../../src/next-interface.css';
 
 interface Context { project: Project; configuration: StudioConfiguration; }
+function layoutRun(project: Project): WorkflowRun {
+  const updatedAt = '2026-01-01T00:00:00.000Z';
+  const snapshot = { id: 'layout-only-workflow', workspaceId: project.workspaceId, name: '壳层布局夹具（合成完成记录）', description: '只供真实状态组件展开布局使用，不执行工作流或调用模型。', outputKind: 'image' as const, updatedAt, steps: Array.from({ length: 8 }, (_, index) => ({ id: `layout-step-${index}`, name: `布局夹具步骤 ${index + 1}`, kind: 'image-generation' as const, prompt: '', inputSource: 'project' as const, enabled: true })) };
+  return { id: 'layout-only-run', workspaceId: project.workspaceId, projectId: project.id, workflowId: snapshot.id, workflowName: snapshot.name, snapshot, status: 'complete', stepIndex: 7, attempts: [], variables: {}, input: '', createdAt: updatedAt, updatedAt, mode: 'simulation' };
+}
 function Fixture() {
   const [context, setContext] = useState<Context>(), [ledger, setLedger] = useState<PageProps['ledger']>([]), [dark, setDark] = useState(false), [notice, setNotice] = useState('');
   const sequence = useRef(0);
@@ -22,23 +28,18 @@ function Fixture() {
     const remove = window.desktop!.animation?.onChanged?.(() => { void refresh(); });
     return () => { alive = false; sequence.current++; remove?.(); };
   }, []);
-  const runner = useMemo(() => ({ runs: [], importFiles: (projectId?: string) => window.desktop!.runtime.importFiles(projectId), previewArtifact: (id: string) => window.desktop!.runtime.previewArtifact(id), thumbnailArtifact: (id: string) => window.desktop!.runtime.thumbnailArtifact(id), listProjectArtifacts: (projectId: string) => window.desktop!.runtime.listProjectArtifacts(projectId), saveArtifact: (id: string) => window.desktop!.runtime.saveArtifact(id) }), []);
+  const runner = useMemo(() => ({ runs: context ? [layoutRun(context.project)] : [], importFiles: (projectId?: string) => window.desktop!.runtime.importFiles(projectId), previewArtifact: (id: string) => window.desktop!.runtime.previewArtifact(id), thumbnailArtifact: (id: string) => window.desktop!.runtime.thumbnailArtifact(id), listProjectArtifacts: (projectId: string) => window.desktop!.runtime.listProjectArtifacts(projectId), saveArtifact: (id: string) => window.desktop!.runtime.saveArtifact(id) }), [context]);
   const props = context ? { workspaceId: context.project.workspaceId, project: context.project, activeProject: context.project, projects: [context.project], configuration: context.configuration, ledger, preferences: { hourlyRate: 0, confirmGeneration: false, reduceMotion: true }, workflowRunner: runner, navigate: () => setNotice('本验收不进入正常应用'), notify: setNotice, workspace: { id: context.project.workspaceId, name: '独立原创夹具工作区' }, workflows: [] } as unknown as PageProps : undefined;
-  return <div className="animation-fixture next-interface"><header className="animation-fixture-toolbar"><div><strong>原创图集与 GIF · 独立真实界面验收</strong><small>真实 React／原生存储／本地动画工具；模型为 localhost 合成 PNG 响应，不使用真实 Key 或账户费用。</small></div><button type="button" className="btn btn-secondary" onClick={() => setDark(value => !value)}>{dark ? '切到白天' : '切到黑夜'}</button></header>{notice && <p role="status" className="animation-fixture-notice">{notice}</p>}<main className="app-content content-images"><div className="workspace-panel">{props && context ? <AnimationStudio props={props} project={context.project} initialMode="atlas" /> : <p role="status">正在连接独立测试资料…</p>}</div></main></div>;
+  return <div className="animation-fixture desktop-shell studio-app-shell next-interface app-layout-studio reduce-motion">
+    <div className="desktop-titlebar"><span className="titlebar-caption">原创图集与 GIF · 独立真实界面验收</span><span>localhost 合成 PNG · 无真实费用</span></div>
+    <div className="app-body">
+      <aside className="sidebar"><div className="brand"><div><strong>序作工作台</strong><small>独立验收夹具</small></div></div><nav className="sidebar-nav" aria-label="夹具工作区"><button type="button" className="nav-item active">图片工作台</button></nav><div className="sidebar-bottom"><small>原生存储与本地动画工具</small>{notice && <p role="status">{notice}</p>}</div></aside>
+      <div className="app-main">
+        <header className="app-header"><div className="breadcrumb"><span>独立原创夹具工作区</span><strong>{context?.project.name || '正在连接'}</strong></div><button type="button" className="btn btn-secondary" onClick={() => setDark(value => !value)}>{dark ? '切到白天' : '切到黑夜'}</button></header>
+        <main className="app-content content-images"><div className="workspace-panel">{props && context ? <><StudioRunStatus props={props} /><AnimationStudio props={props} project={context.project} initialMode="atlas" onClose={() => setNotice('已触发返回图片工作台；独立验收保留当前工坊。')} /></> : <p role="status">正在连接独立测试资料…</p>}</div></main>
+        <footer className="statusbar"><span>数据仅存于独立测试目录</span><span>独立测试窗口 · 非正式工作区</span></footer>
+      </div>
+    </div>
+  </div>;
 }
-// Use the production fixed-height images workspace. A naturally scrolling body
-// hides flex sizing and clipping regressions that occur inside the desktop shell.
-const style = document.createElement('style');
-style.textContent = `
-  html, body, #root { height: 100%; min-width: 0 !important; min-height: 0 !important; }
-  body { background: var(--ui-bg); margin: 0; overflow: hidden; }
-  .animation-fixture { height: 100%; min-width: 0; min-height: 0; max-width: 100%; color: var(--ui-fg); display: flex; flex-direction: column; }
-  .animation-fixture-toolbar { display: flex; flex: 0 0 auto; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 26px; background: var(--ui-surface); border-bottom: 1px solid var(--ui-border); }
-  .animation-fixture-toolbar strong, .animation-fixture-toolbar small { display: block; }
-  .animation-fixture-toolbar small { font-size: 12px; color: var(--ui-fg-secondary); margin-top: 4px; }
-  .animation-fixture-notice { flex: 0 0 auto; margin: 0; padding: 10px 24px; font-size: 13px; }
-  .animation-fixture > .app-content { flex: 1; min-width: 0; min-height: 0; }
-  @media (max-width: 1000px) { .animation-fixture-toolbar { padding: 12px 18px; } }
-`;
-document.head.append(style);
 createRoot(document.getElementById('root')!).render(<Fixture />);

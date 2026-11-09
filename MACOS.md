@@ -1,5 +1,25 @@
 # macOS 开发与验收
 
+## 2.6.0 合并回归（2026-11-09）
+
+`develop-macos` 合入 `develop-owner` 的 7 个新提交，截至 `4bd387f`。
+保留 macOS 原生窗口、Command 快捷键、路径与备份处理、钥匙串延迟授权和动画布局修复，
+接入独立聊天、推理强度选择、快速模型接入、图集/GIF 制作与导出优化及 iPad 横屏壁纸。
+新聊天适配器同时保留明确的凭证授权错误：拒绝钥匙串后不发送请求，且不回显原始异常或密钥。
+
+- 最终源码回归：3062 项通过，0 项失败；4 项 Windows 专用用例跳过。
+- Python 离线测试：26 项通过；独立动画运行时实际导出、解码、帧时长及取消清理共 16 场景通过。
+- 真实 React 与生产样式的隔离浏览器验收：图集/GIF 20 项基础布局、16 项完整 Mac 壳层、32 项长标题预览通过；导出按钮可滚达，Command 撤销/重做与切换条目停止播放通过。
+- 实际 `App.tsx` 在最小桌面窗口 1120×760 下，15 个页面的浅/深主题及 Mac 标题栏、隐藏 Windows 窗口按钮、Command-K 搜索与发送按钮可达性，共 34 项通过。
+- 独立聊天在内存桥接下通过 9 项功能及 24 项 Mac 布局检查，覆盖推理强度、流式回复、停止、重新回答、快捷键、会话恢复、制作入口与失败保留输入；无项目时也可聊天。
+- 2.6.0 `.app`、DMG 与 ZIP 构建成功；499 个源码文件及 50 个动画资源核对一致，Electron 45.2.3、arm64 架构与完整 ad-hoc 签名检查通过；DMG 只读挂载及 ZIP 解压后检查通过。
+- 修正 macOS CI 产物收集路径，支持新版 `release-v*` 输出目录。
+
+本次使用隔离浏览器和模拟桥接验证界面，不启动 Electron GUI、不访问真实钥匙串、
+不调用外部供应商 API。因此不将本轮结果表述为新版原生 GUI 或所有外部模型已实测。
+Intel、外部 LibreOffice 和 Developer ID 公证的限制同下文。
+完整本机证据见 `outputs/macos-merge-validation-report.json`；原始日志与截图保存在 `work/`。
+
 ## 本机验收记录（2026-11-08）
 
 环境：macOS 26.6.2、Apple Silicon arm64、Node.js 24、Electron 45.2.3。
@@ -54,7 +74,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.5.0/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.6.0/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 

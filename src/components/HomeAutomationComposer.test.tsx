@@ -12,9 +12,9 @@ function fixture(ready = true, pending = false, hasPlan = false) {
   return renderToStaticMarkup(<HomeAutomationComposer props={props} session={session} blocked={pending} kind="image" onKind={() => {}} needsFolder input="做一张产品图" onText={() => {}} textareaRef={{ current: null }} onSend={async () => {}} />);
 }
 describe('首页发送前模型入口', () => {
-  it('未生成方案、未打开设置时模型Key和制作配置就存在于输入区，选择出现在发送按钮前', () => {
+  it('未生成方案时模型与推理就可选择，单Key用账户摘要避免多余下拉', () => {
     const html = fixture();
-    expect(html).toContain('aria-label="对话模型"'); expect(html).toContain('aria-label="对话Key"'); expect(html).toContain('已选对话模型'); expect(html).toContain('我的对话 Key');
+    expect(html).toContain('aria-label="对话模型"'); expect(html).toContain('aria-label="推理强度"'); expect(html).not.toContain('aria-label="对话Key"'); expect(html).toContain('conversation-account-summary'); expect(html).toContain('已选对话模型'); expect(html).toContain('我的对话 Key');
     expect(html).toContain('aria-label="提前选择制作模型"'); expect(html.indexOf('aria-label="对话模型"')).toBeLessThan(html.indexOf('aria-label="首页自动化对话输入"')); expect(html).not.toContain('<select');
   });
   it('缺配置时就地说明先选择，不要求先完成对话或生成方案', () => {

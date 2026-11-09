@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const localTypeScript = path.join(root, 'work/ui-build/node_modules/typescript');
 const ts = require(fs.existsSync(localTypeScript) ? localTypeScript : 'typescript');
-const modules = ['spreadsheet-engine', 'spreadsheet-generated-formatting', 'spreadsheet-generated', 'word-table', 'editor-generated', 'delivery-quality', 'spreadsheet-delivery'];
+const modules = ['spreadsheet-engine', 'spreadsheet-generated-formatting', 'spreadsheet-generated', 'word-table', 'editor-generated', 'delivery-quality', 'spreadsheet-delivery', 'reasoning-options'];
 for (const name of modules) {
   const filename = path.join(root, `src/lib/${name}.ts`);
   const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, strict: true }, reportDiagnostics: true });
@@ -18,7 +18,7 @@ for (const name of modules) {
   fs.writeFileSync(path.join(root, `electron/${name}.cjs`), `// Generated from src/lib/${name}.ts; run scripts/build-spreadsheet-runtime.mjs.\n${output}`, 'utf8');
 }
 
-const naturalModules = ['natural-automation-plan', 'automation-recipes', 'creation-quality', 'creation-profiles', 'document-illustrations', 'studio-run', 'prompt-variables', 'wallpaper-target', 'image-output-options', '../data/wallpaper-devices', 'bead-intent', 'animation-workflow', 'animation-document', 'animation-validation', 'animation-styles', 'animation-hash'];
+const naturalModules = ['natural-automation-plan', 'automation-recipes', 'creation-quality', 'creation-profiles', 'document-illustrations', 'studio-run', 'prompt-variables', 'wallpaper-target', 'image-output-options', '../data/wallpaper-devices', 'bead-intent', 'animation-workflow', 'animation-document', 'animation-validation', 'animation-styles', 'animation-hash', 'reasoning-options'];
 const naturalModuleId = name => name.startsWith('../') ? name : `./${name}`;
 const factories = naturalModules.map(name => {
   const filename = path.join(root, `src/lib/${name}.ts`);
