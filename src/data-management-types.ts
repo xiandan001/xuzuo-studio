@@ -6,6 +6,7 @@ import type { QuoteBackupRecord } from './quote-backup-types';
 export type BackupMeta = Omit<WorkspaceState, 'activeWorkspaceId'> & { activeWorkspaceId?: string; configuration: ConfigurationState; quoteDrafts?: QuoteBackupRecord[] };
 export interface BackupSelection { workspaceIds: string[]; projectIds?: string[]; }
 export interface BackupInspection {
+  chatConversations?: number;
   filePath: string;
   backupId: string;
   createdAt: string;

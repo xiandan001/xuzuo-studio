@@ -13,12 +13,12 @@ import { HomeProductionResult } from './HomeProductionResult';
 import { automationProjectAvailability } from '../lib/automation-project-availability';
 import './home-plan-card.css';
 
-export function HomePlanCard({ props, session, onOpenModels, continuation }: { props: PageProps; session: NaturalAutomationSession; onOpenModels?: (capability?: string) => void; continuation?: AutomationContinuation }) {
+export function HomePlanCard({ props, session, onOpenModels, continuation, deferProject, onChooseProject }: { props: PageProps; session: NaturalAutomationSession; onOpenModels?: (capability?: string) => void; continuation?: AutomationContinuation; deferProject?: boolean; onChooseProject?: () => void }) {
   const { draft, readiness, result } = session, plan = draft.plan!;
   const failedFollowup = draft.acceptedRequestId && draft.requestId !== draft.acceptedRequestId && session.planning.record?.id === draft.requestId && session.planning.record?.status === 'failed';
   const planError = result.error || (!failedFollowup ? session.error : undefined);
   const { targetPurged } = useMemo(() => automationProjectAvailability(props.workspaceId, props.projects, props.purgedProjects, draft.projectId, undefined), [props.workspaceId, props.projects, props.purgedProjects, draft.projectId]);
-  const [preparing, setPreparing] = useState(!!plan.questions.length || !session.project || session.project.kind !== plan.outputKind), [importing, setImporting] = useState(false);
+  const [preparing, setPreparing] = useState(!!plan.questions.length || !deferProject && (!session.project || session.project.kind !== plan.outputKind)), [importing, setImporting] = useState(false);
   const panel = useRef<HTMLDivElement>(null), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { if (session.preparationRequest) setPreparing(true); }, [session.preparationRequest]);
@@ -46,7 +46,7 @@ export function HomePlanCard({ props, session, onOpenModels, continuation }: { p
     if (targetPurged) return;
     if (unknown) { await readiness.readDispatch(); return; }
     if (job) { props.navigate(hasWork ? plan.outputKind === 'image' ? 'images' : 'documents' : 'activity', draft.projectId); return; }
-    if (projectMissing) { setPreparing(true); return; }
+    if (projectMissing) { if (onChooseProject) onChooseProject(); else setPreparing(true); return; }
     if (missingModels.length) { onOpenModels?.(missingModels[0]); }
     const outcome = await session.createAndRun({ continuation });
     if (mounted.current) { if (outcome.status === 'needs-input') setPreparing(true); else if (['started', 'existing', 'unknown'].includes(outcome.status)) setPreparing(false); }
@@ -66,7 +66,7 @@ export function HomePlanCard({ props, session, onOpenModels, continuation }: { p
   return <><section className={`home-plan${run && !unknown ? ' home-plan-has-run' : ''}`} aria-label="当前对话方案"><div className="home-plan-eyebrow">为你准备的制作方案</div><header><span className="home-plan-format">{naturalKindLabel[plan.outputKind]}</span><h3>{plan.name}</h3>{created && <span className="home-plan-saved"><Check size={13} />已保存</span>}</header><p className="home-plan-goal">{plan.objective}</p>
     <ol className="home-plan-steps">{steps.slice(0, 3).map((step, index) => <li key={index}><span>{index + 1}</span>{step.replace(/^\d+\.\s*/, '')}</li>)}{steps.length > 3 && <li className="home-plan-more">另含检查、导出等 {steps.length - 3} 步</li>}</ol>
     {plan.trigger.type !== 'manual' && <p className="home-plan-schedule"><strong>{plan.trigger.type === 'schedule' ? `每隔 ${plan.trigger.intervalMinutes} 分钟` : plan.trigger.type === 'reference-imported' ? '导入资料后' : '指定流程完成后'}</strong><span>{created && session.savedRule?.enabled ? '自动运行已开启' : '当前只试运行一次，自动运行待开启'}</span>{created && <button type="button" className="text-button" onClick={() => props.navigate('automation')}>设置自动运行</button>}</p>}
-    <div className="home-plan-destination"><span>保存到</span><strong>{session.project?.name || '选择一个本地项目'}</strong><button type="button" className="text-button" disabled={blocked || !!job} onClick={() => setPreparing(value => !value)}>更换 / 补充资料</button></div>
+    <div className="home-plan-destination"><span>保存到</span><strong>{projectMissing && deferProject ? '开始制作时选择' : session.project?.name || '选择一个本地项目'}</strong><button type="button" className="text-button" disabled={blocked || !!job} onClick={() => setPreparing(value => !value)}>更换 / 补充资料</button></div>
     {planError && <p className="home-plan-error" role="alert">{planError}</p>}
     {unknown && <p className="home-plan-error" role="alert">{readiness.errors.join('\n') || '上次提交结果尚未确认，读取状态不会重发任务。'}</p>}
     {(!run || unknown) && <div className="home-plan-primary"><button type="button" className="btn btn-primary" disabled={blocked || created && readiness.dispatchLoading} onClick={() => { void primary(); }}>{blocked ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}{primaryLabel}</button><button type="button" className="text-button" disabled={blocked} onClick={() => { void (created ? readiness.perform('save') : session.save()).then(() => { if (mounted.current && missingCount) setPreparing(true); }); }}><Save size={14} />以后再做 · 仅保存流程</button>{!!missingCount && !job && <button className="home-plan-missing" type="button" onClick={() => { setPreparing(true); if (missingModels.length && !naturalPreparationMissing(plan, answers).length && !projectMissing) onOpenModels?.(missingModels[0]); }}>还需补充 {missingCount} 项<ArrowRight size={13} /></button>}</div>}

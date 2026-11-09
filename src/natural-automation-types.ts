@@ -1,6 +1,7 @@
 import type { AutomationTrigger } from './automation-types';
 import type { ModelCapability } from './configuration-types';
 import type { ProjectKind } from './types';
+import type { ReasoningEffort } from './lib/reasoning-options';
 
 export interface NaturalAutomationPlan {
   version: 1;
@@ -16,8 +17,8 @@ export interface NaturalAutomationPlan {
   questions: string[];
   unsupported: string[];
 }
-export interface AutomationPlanningRequest { id: string; workspaceId: string; projectId: string; modelConfigId: string; credentialId: string; input: string; priorPlanId?: string; currentPlan?: NaturalAutomationPlan; contextNotes?: string; calendarResolved?: boolean; }
-export interface AutomationPlanningRecord { id: string; workspaceId: string; projectId: string; modelConfigId?: string; credentialId?: string; input: string; priorPlanId?: string; runId?: string; status: 'starting' | 'running' | 'complete' | 'failed' | 'interrupted' | 'cancelled' | 'cancelling'; resultText?: string; error?: string; createdAt: string; updatedAt: string; }
+export interface AutomationPlanningRequest { id: string; workspaceId: string; projectId: string; modelConfigId: string; credentialId: string; reasoningEffort?: ReasoningEffort; input: string; priorPlanId?: string; currentPlan?: NaturalAutomationPlan; contextNotes?: string; calendarResolved?: boolean; }
+export interface AutomationPlanningRecord { id: string; workspaceId: string; projectId: string; modelConfigId?: string; credentialId?: string; reasoningEffort?: ReasoningEffort; input: string; priorPlanId?: string; runId?: string; status: 'starting' | 'running' | 'complete' | 'failed' | 'interrupted' | 'cancelled' | 'cancelling'; resultText?: string; error?: string; createdAt: string; updatedAt: string; }
 export interface AutomationPlanningBridge {
   start: (request: AutomationPlanningRequest) => Promise<AutomationPlanningRecord>;
   read: (input: { id: string; workspaceId: string }) => Promise<AutomationPlanningRecord>;

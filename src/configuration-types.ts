@@ -4,6 +4,7 @@ import type { ArtifactMetadata, CostState, LivePreflight, LiveRuntimeStatus, Mod
 import type { BillingRequestSnapshot, CostCalculation } from './billing-types';
 import type { WallpaperTarget } from './wallpaper-types';
 import type { AnimationWorkflowSettings } from './lib/animation-workflow';
+import type { ReasoningEffort } from './lib/reasoning-options';
 
 export interface BusinessCategory { id: string; workspaceId: string; name: string; parentId?: string; archived: boolean; }
 export interface ImageUseTemplate { id: string; workspaceId: string; name: string; prompt: string; size: string; background: 'auto' | 'opaque' | 'transparent'; minReferences: number; enabled: boolean; builtin?: boolean; }
@@ -23,7 +24,7 @@ export interface CredentialsBridge {
   setEnabled: (input: { id: string; enabled: boolean }) => Promise<CredentialMetadata>;
 }
 export type WorkflowStepKind = ModelCapability | 'manual-review' | 'export' | 'animation-compose';
-export interface WorkflowStep extends ImageOutputOptions { animation?: AnimationWorkflowSettings; referenceArtifactIds?: string[]; beadBaseRequestId?: string; engineeringReferenceId?: string; wallpaperTarget?: WallpaperTarget | null; imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
+export interface WorkflowStep extends ImageOutputOptions { reasoningEffort?: ReasoningEffort; animation?: AnimationWorkflowSettings; referenceArtifactIds?: string[]; beadBaseRequestId?: string; engineeringReferenceId?: string; wallpaperTarget?: WallpaperTarget | null; imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
 export interface WorkflowDefinition { goalBrief?: import('./lib/automation-recipes').GoalBrief; foundationVersion?: string; id: string; workspaceId: string; name: string; description: string; outputKind: ProjectKind; businessCategoryId?: string; steps: WorkflowStep[]; updatedAt: string; }
 export type WorkflowDraft = Omit<WorkflowDefinition, 'id' | 'workspaceId' | 'updatedAt'>;
 export interface StudioAction { id: string; workspaceId: string; name: string; description: string; studio: 'documents' | 'images'; outputKind: ProjectKind; workflowId: string; enabled: boolean; }

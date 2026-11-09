@@ -5,6 +5,7 @@ import { naturalAutomationRequestIssues, parseNaturalAutomationPlan } from '../l
 import { naturalModelSelection, type NaturalBinding } from '../components/NaturalAutomationModels';
 import { normalizedNaturalDraftPlan, type NaturalAutomationDraft, type useNaturalAutomationDraft } from './useNaturalAutomationDraft';
 import { naturalTargetProject } from '../lib/natural-automation-composer-state';
+import { normalizeReasoningEffort } from '../lib/reasoning-options';
 
 export interface NaturalAutomationPlanningStartOptions {
   input?: string; priorPlanId?: string; currentPlan?: NaturalAutomationPlan; contextNotes?: string; calendarResolved?: boolean; billingProjectId?: string;
@@ -73,11 +74,12 @@ export function useNaturalAutomationPlanning(props: PageProps, store: ReturnType
     const { props, store } = current.current, draft = store.current.current;
     const input = options?.input ?? draft.input, billingProjectId = options?.billingProjectId || draft.projectId;
     const selected = naturalModelSelection(props.configuration, 'text', draft.planner);
+    const reasoning = draft.planner.reasoningEffort === undefined ? {} : { reasoningEffort: normalizeReasoningEffort(props.configuration.connections.find(connection => connection.id === selected.model?.connectionId), selected.model, draft.planner.reasoningEffort) };
     if (!input.trim() || !props.projects.some(project => project.id === billingProjectId && project.workspaceId === props.workspaceId && !project.trashedAt) || !selected.model || !selected.credentialId) { onError('先写下需求，并选择保存项目和一个可用的文字模型 / Key。'); return; }
     if (options && !options.priorPlanId && (options.currentPlan || options.contextNotes?.trim())) { onError('续改需要先选择一份已完成的方案；已有方案和费用没有改变。'); return; }
     let contextPlan: NaturalAutomationPlan | undefined;
     try { if (options?.priorPlanId && (options.currentPlan || draft.plan)) contextPlan = parseNaturalAutomationPlan(JSON.stringify(normalizedNaturalDraftPlan(options.currentPlan || draft.plan!))); } catch (cause) { error(cause); return; }
-    const next = naturalPlanningStartDraft(draft, crypto.randomUUID(), input, billingProjectId, { modelConfigId: selected.model.id, credentialId: selected.credentialId }, options);
+    const next = naturalPlanningStartDraft(draft, crypto.randomUUID(), input, billingProjectId, { modelConfigId: selected.model.id, credentialId: selected.credentialId, ...reasoning }, options);
     try { store.persist(next); } catch (cause) { error(cause); return; }
     const attempt = { id: next.requestId!, cancelled: false, dispatched: false, generation: ++generation.current }; flight.current = attempt;
     sending.current = true; setPending(true); setRecord(undefined); onError('');
@@ -85,7 +87,7 @@ export function useNaturalAutomationPlanning(props: PageProps, store: ReturnType
       await window.desktop?.automation?.syncContext({ workspaceId: props.workspaceId, workspaces: props.workspaces, projects: props.projects, workflows: props.configuration.workflows, models: props.configuration.models, connections: props.configuration.connections });
       if (attempt.cancelled || attempt.generation !== generation.current || current.current.store.current.current.requestId !== next.requestId) return;
       attempt.dispatched = true;
-      const request = { id: next.requestId!, workspaceId: props.workspaceId, projectId: billingProjectId, input: input.trim(), modelConfigId: selected.model.id, credentialId: selected.credentialId, ...(options?.priorPlanId ? { priorPlanId: options.priorPlanId, ...(contextPlan ? { currentPlan: contextPlan } : {}), ...(options.contextNotes !== undefined ? { contextNotes: options.contextNotes } : {}), calendarResolved: next.requestedCalendarResolved } : {}) };
+      const request = { id: next.requestId!, workspaceId: props.workspaceId, projectId: billingProjectId, input: input.trim(), modelConfigId: selected.model.id, credentialId: selected.credentialId, ...reasoning, ...(options?.priorPlanId ? { priorPlanId: options.priorPlanId, ...(contextPlan ? { currentPlan: contextPlan } : {}), ...(options.contextNotes !== undefined ? { contextNotes: options.contextNotes } : {}), calendarResolved: next.requestedCalendarResolved } : {}) };
       let result = await bridge.start(request);
       if (attempt.cancelled) result = await bridge.cancel({ id: next.requestId!, workspaceId: props.workspaceId });
       if (attempt.generation === generation.current && mounted.current && current.current.store.current.current.requestId === next.requestId) { accept(result); return attempt.cancelled ? undefined : result; }
@@ -112,7 +114,7 @@ export function useNaturalAutomationPlanning(props: PageProps, store: ReturnType
   function restore(item: AutomationPlanningRecord, plan?: NaturalAutomationPlan) {
     if (sending.current || item.workspaceId !== current.current.props.workspaceId) return;
     const { props, store } = current.current;
-    const planner = { modelConfigId: item.modelConfigId, credentialId: item.credentialId };
+    const planner = { modelConfigId: item.modelConfigId, credentialId: item.credentialId, ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}) };
     const target = props.projects.some(project => project.id === store.current.current.projectId) ? store.current.current.projectId : props.projects[0]?.id || '';
     try { const restored = plan && parseNaturalAutomationPlan(JSON.stringify(normalizedNaturalDraftPlan(plan))); store.persist({ version: 1, workspaceId: props.workspaceId, projectId: target, planningProjectId: item.projectId, input: item.input, planner, requestId: item.id, bindings: { text: planner }, preparationAnswers: {}, ...(restored ? { plan: restored, acceptedRequestId: item.id, acceptedInput: item.input, acceptedPlanningProjectId: item.projectId } : {}) }); generation.current++; setRecord(item); void read(); return true; } catch (cause) { error(cause); return false; }
   }

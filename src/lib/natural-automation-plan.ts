@@ -11,10 +11,13 @@ import { parseWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from '
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 import { animationRequestMode, animationStyleForRequest, makeAnimationWorkflow } from './animation-workflow';
 import { animationGenerationPrompt, animationStyle, checkedAnimationDocument, newAnimationDocument } from './animation-document';
+import { isReasoningEffort, normalizeReasoningEffort } from './reasoning-options';
+import type { ReasoningEffort } from './reasoning-options';
 export { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 
 type Capability = NaturalAutomationPlan['steps'][number]['kind'];
-export type NaturalAutomationBindings = Partial<Record<Capability, { modelConfigId?: string; credentialId?: string }>>;
+type ModelBinding = { modelConfigId?: string; credentialId?: string; reasoningEffort?: ReasoningEffort };
+export type NaturalAutomationBindings = Partial<Record<Capability, ModelBinding>>;
 export interface NaturalAutomationCompileOptions { allowPreparationQuestions?: boolean; calendarResolved?: boolean; }
 type Configuration = Pick<StudioConfiguration, 'models' | 'connections' | 'credentials' | 'workflows'>;
 const capabilities: Capability[] = ['text', 'vision', 'image-generation', 'image-editing'];
@@ -211,19 +214,22 @@ export function adjustNaturalImageRefinements(input: NaturalAutomationPlan, roun
 function bindingResolver(configuration: Configuration, bindings: NaturalAutomationBindings, missing: Set<string>) {
   object(bindings, '模型选择', capabilities, []);
   for (const [kind, value] of Object.entries(bindings)) {
-    const entry = object(value, `${labels[kind as Capability]}模型选择`, ['modelConfigId', 'credentialId'], []);
+    const entry = object(value, `${labels[kind as Capability]}模型选择`, ['modelConfigId', 'credentialId', 'reasoningEffort'], []);
     for (const name of ['modelConfigId', 'credentialId']) if (entry[name] !== undefined) text(entry[name], '模型或Key编号', 160);
+    if (entry.reasoningEffort !== undefined && !isReasoningEffort(entry.reasoningEffort)) throw Error('推理强度无效，请重新选择。');
+    if (!['text', 'vision'].includes(kind) && entry.reasoningEffort !== undefined && entry.reasoningEffort !== 'auto') throw Error('推理强度仅用于文字与看图检查。');
   }
-  const cache = new Map<Capability, { modelConfigId?: string; credentialId?: string }>();
+  const cache = new Map<Capability, ModelBinding>();
   return (kind: Capability) => {
     if (cache.has(kind)) return cache.get(kind)!;
     const protocols = kind === 'image-generation' || kind === 'image-editing' ? ['image', 'openai-chat', 'openai-responses'] : ['openai-chat', 'openai-responses', 'anthropic', 'gemini'];
     const available = configuration.models.filter(model => model.enabled && !model.demo && model.capabilities.includes(kind) && configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled && !connection.demo && protocols.includes(connection.protocol)));
     const chosen = bindings[kind], model = chosen?.modelConfigId ? available.find(model => model.id === chosen.modelConfigId) : available.length === 1 ? available[0] : undefined;
-    const result: { modelConfigId?: string; credentialId?: string } = { modelConfigId: undefined, credentialId: undefined };
+    const result: ModelBinding = { modelConfigId: undefined, credentialId: undefined };
     if (!model) missing.add(`${labels[kind]}：${chosen?.modelConfigId ? '所选模型不可用，请重新选择' : available.length ? '请选择一个模型' : '请添加可用的真实模型'}`);
     else {
       result.modelConfigId = model.id;
+      if (chosen?.reasoningEffort !== undefined && ['text', 'vision'].includes(kind)) result.reasoningEffort = normalizeReasoningEffort(configuration.connections.find(connection => connection.id === model.connectionId), model, chosen.reasoningEffort);
       const keys = configuration.credentials.filter(key => key.enabled && key.connectionId === model.connectionId);
       const credential = chosen?.credentialId ? keys.find(key => key.id === chosen.credentialId) : keys.length === 1 ? keys[0] : undefined;
       if (credential) result.credentialId = credential.id;

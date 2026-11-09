@@ -3,6 +3,7 @@ import type { Project } from '../types';
 import type { NaturalAutomationPlan } from '../natural-automation-types';
 import type { NaturalAutomationBindings } from './natural-automation-plan';
 import { naturalModelSelection, type NaturalBinding } from '../components/NaturalAutomationModels';
+import { normalizeReasoningEffort } from './reasoning-options';
 
 export const naturalKindLabel = { word: 'Word 文档', ppt: 'PPT 演示', excel: 'Excel 表格', image: '图片' };
 export const naturalQuestionAnswer = (answers: Record<string, string>, question: string): string => Object.hasOwn(answers, question) && typeof answers[question] === 'string' ? answers[question] : '';
@@ -37,8 +38,8 @@ export function naturalBoundWorkflow(workflow: WorkflowDefinition, configuration
     if (!['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind)) return step;
     const explicitlyChanged = !changedCapabilities || changedCapabilities.includes(step.kind as keyof NaturalAutomationBindings);
     if (!explicitlyChanged && step.modelConfigId && step.credentialId) return step;
-    const preferred = explicitlyChanged || !step.modelConfigId && !step.credentialId ? bindings[step.kind as keyof NaturalAutomationBindings] : { modelConfigId: step.modelConfigId, credentialId: step.credentialId };
+    const preferred = explicitlyChanged || !step.modelConfigId && !step.credentialId ? bindings[step.kind as keyof NaturalAutomationBindings] : { modelConfigId: step.modelConfigId, credentialId: step.credentialId, reasoningEffort: step.reasoningEffort };
     const chosen = naturalModelSelection(configuration, step.kind as ModelCapability, preferred);
-    return { ...step, modelConfigId: chosen.model?.id, credentialId: chosen.credentialId };
+    return { ...step, modelConfigId: chosen.model?.id, credentialId: chosen.credentialId, ...(['text', 'vision'].includes(step.kind) && (preferred?.reasoningEffort !== undefined || step.reasoningEffort !== undefined) ? { reasoningEffort: preferred?.reasoningEffort === undefined ? undefined : normalizeReasoningEffort(configuration.connections.find(connection => connection.id === chosen.model?.connectionId), chosen.model, preferred.reasoningEffort) } : {}) };
   }) };
 }

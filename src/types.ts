@@ -78,6 +78,9 @@ export interface Project {
   favorite?: boolean;
 }
 export interface LedgerEntry {
+  workspaceId?: string;
+  scope?: 'chat';
+  conversationId?: string;
   billingRequestSnapshot?: BillingRequestSnapshot;
   calculation?: CostCalculation;
   costReason?: string;
@@ -166,6 +169,7 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  chat?: import('./chat-types').ChatBridge;
   animation?: import('./animation-types').AnimationBridge;
   beadMarket?: import('./bead-market-types').BeadMarketBridge;
   business?: import('./business-types').BusinessBridge;

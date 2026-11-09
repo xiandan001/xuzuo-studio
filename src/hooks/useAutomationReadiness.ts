@@ -23,13 +23,13 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
   const recoveryKey = `xuzuo-automation-readiness-v1:${props.workspaceId}:${rule?.id || ''}`;
   const panelRef = useRef<HTMLElement>(null);
   const reveal = () => { setExpanded(true); requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })); };
-  const flowFingerprint = (value: WorkflowDefinition) => JSON.stringify(value.steps.map(step => [step.id, step.modelConfigId, step.credentialId]));
+  const flowFingerprint = (value: WorkflowDefinition) => JSON.stringify(value.steps.map(step => step.reasoningEffort === undefined ? [step.id, step.modelConfigId, step.credentialId] : [step.id, step.modelConfigId, step.credentialId, step.reasoningEffort]));
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!rule || !workflow || owner.current === rule.id) return;
     owner.current = rule.id;
     const initial: NaturalAutomationBindings = {};
-    for (const step of workflow.steps) if (['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind) && !initial[step.kind as keyof NaturalAutomationBindings]) initial[step.kind as keyof NaturalAutomationBindings] = { modelConfigId: step.modelConfigId, credentialId: step.credentialId };
+    for (const step of workflow.steps) if (['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind) && !initial[step.kind as keyof NaturalAutomationBindings]) initial[step.kind as keyof NaturalAutomationBindings] = { modelConfigId: step.modelConfigId, credentialId: step.credentialId, ...(step.reasoningEffort !== undefined ? { reasoningEffort: step.reasoningEffort } : {}) };
     let restored: { answers?: Record<string, string>; bindings?: NaturalAutomationBindings; changedCapabilities?: (keyof NaturalAutomationBindings)[] } | undefined;
     const fingerprint = flowFingerprint(workflow);
     try { const raw = localStorage.getItem(recoveryKey), value = raw ? JSON.parse(raw) : undefined; if (value?.version === 1 && value.ruleId === rule.id && value.updatedAt === rule.updatedAt && value.workflowFingerprint === fingerprint && value.answers && typeof value.answers === 'object' && !Array.isArray(value.answers) && Object.values(value.answers).every(answer => typeof answer === 'string') && value.bindings && typeof value.bindings === 'object' && !Array.isArray(value.bindings)) restored = value; } catch { /* The authoritative rule still supplies the saved values. */ }
@@ -85,7 +85,7 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
         const check = await source.props.workflowRunner.preflight(bound, project.id, input, source.rule.variables, attachments);
         if (!check.ok) { if (stillCurrent()) { setErrors(check.errors); reveal(); } return { status: 'needs-input' }; }
       }
-      const changed = source.workflow.steps.some((step, index) => step.modelConfigId !== bound.steps[index].modelConfigId || step.credentialId !== bound.steps[index].credentialId);
+      const changed = source.workflow.steps.some((step, index) => step.modelConfigId !== bound.steps[index].modelConfigId || step.credentialId !== bound.steps[index].credentialId || step.reasoningEffort !== bound.steps[index].reasoningEffort);
       if (changed && !source.props.configuration.saveWorkflow(bound, bound.id, { silent: true })) throw Error('调用设置未能可靠保存，原流程和费用保留。');
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       if (!stillCurrent()) return { status: 'failed' };
@@ -115,7 +115,7 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
     finally { pending.current = false; if (mounted.current) setBusy(false); }
   }
   const setCapability = (capability: keyof NaturalAutomationBindings, value: NonNullable<NaturalAutomationBindings[keyof NaturalAutomationBindings]>) => { setBindings(previous => ({ ...previous, [capability]: value })); setChangedCapabilities(previous => previous.includes(capability) ? previous : [...previous, capability]); };
-  const mixed = capabilities.some(capability => new Set(workflow?.steps.filter(step => step.kind === capability).map(step => `${step.modelConfigId}:${step.credentialId}`)).size > 1);
+  const mixed = capabilities.some(capability => new Set(workflow?.steps.filter(step => step.kind === capability).map(step => `${step.modelConfigId}:${step.credentialId}:${step.reasoningEffort || 'auto'}`)).size > 1);
   const scope = `${props.workspaceId}/${rule?.id || ''}`, ownsDispatch = !!rule && dispatchScope === scope;
   return { answers, setAnswers, bindings: effective, setCapability, mixed, expanded, setExpanded, panelRef, reveal, busy, loadedRuleId: loadedId, lastJob: lastJob && lastJob.ruleId === rule?.id && lastJob.workspaceId === props.workspaceId ? lastJob : undefined, dispatchUnknown: ownsDispatch && dispatchUnknown, dispatchLoading: dispatchLoadingScope === scope && dispatchLoading, readDispatch, errors: [...(owner.current === rule?.id ? errors : []), ...(ownsDispatch && dispatchError ? [dispatchError] : []), ...(recovery.error ? [recovery.error] : [])], missing, unanswered, questions, capabilities, project, perform, addReferences, remaining: missing.length + unanswered.length };
 }

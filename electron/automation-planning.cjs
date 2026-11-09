@@ -1,6 +1,7 @@
 const fsDefault = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { isReasoningEffort, reasoningRequestFields } = require('./reasoning-options.cjs');
 const { atomicJson, checkedDirectory, checkedFile } = require('./workspace-paths.cjs');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -42,7 +43,7 @@ function createAutomationPlanning({ directory, liveEngine, automationCenter, cre
       await checkedDirectory(fs, path.dirname(filename), true); await atomicJson(fs, filename, value); records = next;
     }); writes = task.catch(() => undefined); return task;
   }
-  const publicRecord = item => Object.fromEntries(['id', 'workspaceId', 'projectId', 'input', 'priorPlanId', 'modelConfigId', 'credentialId', 'runId', 'status', 'resultText', 'error', 'createdAt', 'updatedAt'].filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+  const publicRecord = item => Object.fromEntries(['id', 'workspaceId', 'projectId', 'input', 'priorPlanId', 'modelConfigId', 'credentialId', 'reasoningEffort', 'runId', 'status', 'resultText', 'error', 'createdAt', 'updatedAt'].filter(key => item[key] !== undefined).map(key => [key, item[key]]));
   async function scoped({ id, workspaceId } = {}) { await ready; await writes; if (!validId(id) || !validId(workspaceId)) throw Error('规划编号或工作区无效。'); const item = records.find(item => item.id === id && item.workspaceId === workspaceId); if (!item) throw Error('这条AI规划不属于当前工作区。'); return structuredClone(item); }
   async function nativeRun(item) {
     const detail = async id => { const run = await liveEngine.runDetail(id); if (run.projectId !== item.projectId || run.workspaceId !== item.workspaceId || run.purpose !== 'automation-plan' || run.dispatchKey !== item.dispatchKey) throw Error('规划运行归属不一致，未读取其他项目结果。'); return terminal.has(run.status) && run.status !== 'complete' && liveEngine.recoverPlanningReceipt ? liveEngine.recoverPlanningReceipt(id) : run; };
@@ -85,6 +86,7 @@ function createAutomationPlanning({ directory, liveEngine, automationCenter, cre
   }
   function contextOptions(input) {
     const result = {};
+    if (input.reasoningEffort !== undefined) { if (!isReasoningEffort(input.reasoningEffort)) throw Error('推理强度无效，请重新选择。'); result.reasoningEffort = input.reasoningEffort; }
     if (input.priorPlanId !== undefined) { if (!validId(input.priorPlanId) || input.priorPlanId === input.id) throw Error('对话上文编号无效，不能引用本轮自身。'); result.priorPlanId = input.priorPlanId; }
     if (['currentPlan', 'contextNotes', 'calendarResolved'].some(key => input[key] !== undefined) && !result.priorPlanId) throw Error('本地方案、补充资料或时间确认必须关联已有的上文规划。');
     if (input.currentPlan !== undefined) { const text = JSON.stringify(input.currentPlan); if (typeof text !== 'string' || text.length > CURRENT_PLAN_LIMIT) throw Error('本地方案超过32000字或格式无效，请缩短后再发送。'); result.currentPlan = parsePlan(text); }
@@ -121,13 +123,14 @@ function createAutomationPlanning({ directory, liveEngine, automationCenter, cre
       const model = context.models.find(model => model.id === input.modelConfigId && model.enabled && !model.demo && model.capabilities.includes('text'));
       const connection = context.connections.find(connection => connection.id === model?.connectionId && connection.enabled && !connection.demo);
       if (!model || !connection || !metadata.some(key => key.id === input.credentialId && key.enabled && key.connectionId === connection.id)) throw Error('请为AI规划选择可用的文本模型及其API Key。');
+      reasoningRequestFields(connection, model, input.reasoningEffort);
       if (await assertAdmission(context.project) === false || closing) throw Error('项目正在整理或应用正在退出，请稍后重新规划。');
       item = await scoped(input);
       if (item.cancelRequestedAt) { await mutate(next => { const current = next.find(record => record.id === input.id); current.status = 'cancelled'; current.error = undefined; }); return publicRecord(await scoped(input)); }
       const usableModels = context.models.filter(model => model.enabled && !model.demo && context.connections.some(connection => connection.id === model.connectionId && connection.enabled && !connection.demo && metadata.some(key => key.connectionId === connection.id && key.enabled)));
       const planContext = { project: { name: context.project.name, kind: context.project.kind }, workflows: context.workflows.map(flow => ({ id: flow.id, name: flow.name, outputKind: flow.outputKind })), capabilities: [...new Set(usableModels.flatMap(model => model.capabilities).filter(kind => ['text', 'vision', 'image-generation', 'image-editing'].includes(kind)))] };
       const composed = await planningInput(input, planContext);
-      const workflow = { id: `plan-${input.id}`.slice(0, 160), workspaceId: input.workspaceId, name: 'AI规划自动化', description: '只生成可审阅方案，不执行生产或启用规则。', outputKind: context.project.kind, updatedAt: now(), steps: [{ id: 'automation-plan-text', name: '理解需求并规划方案', role: 'planner', kind: 'text', inputSource: 'project', enabled: true, modelConfigId: model.id, credentialId: input.credentialId, maxOutputTokens: 4096, prompt: plannerPrompt(context.project.kind) }] };
+      const workflow = { id: `plan-${input.id}`.slice(0, 160), workspaceId: input.workspaceId, name: 'AI规划自动化', description: '只生成可审阅方案，不执行生产或启用规则。', outputKind: context.project.kind, updatedAt: now(), steps: [{ id: 'automation-plan-text', name: '理解需求并规划方案', role: 'planner', kind: 'text', inputSource: 'project', enabled: true, modelConfigId: model.id, credentialId: input.credentialId, ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}), maxOutputTokens: ['high', 'xhigh', 'max'].includes(input.reasoningEffort) ? 16384 : 4096, prompt: plannerPrompt(context.project.kind) }] };
       await mutate(next => { const current = next.find(record => record.id === input.id); if (composed.contextVersion) { Object.assign(current, { contextVersion: composed.contextVersion, contextHash: composed.contextHash, sourcePlanHash: composed.sourcePlanHash }); current.fingerprint = hash({ requestFingerprint: fingerprint, contextVersion: composed.contextVersion, contextHash: composed.contextHash, sourcePlanHash: composed.sourcePlanHash }); current.dispatchKey = hash(['automation-plan', input.id, current.fingerprint]); } current.dispatchedAt = now(); });
       item = await scoped(input);
       if (item.cancelRequestedAt || closing) { await mutate(next => { const current = next.find(record => record.id === input.id); current.status = 'cancelled'; current.error = undefined; }); return publicRecord(await scoped(input)); }
@@ -160,4 +163,4 @@ function createAutomationPlanning({ directory, liveEngine, automationCenter, cre
     async shutdown() { closing = true; await Promise.allSettled([...pending.values()].map(item => item.task)); await writes; },
   };
 }
-module.exports = { createAutomationPlanning };
+module.exports = { createAutomationPlanning, plannerPrompt };

@@ -38,6 +38,16 @@ async function fixture({ response = JSON.stringify(plan), startOverride, control
 }
 
 describe('真实引擎内的自然语言规划', () => {
+  it('推理选择穿过规划服务、持久化、工作流与真实协议请求，读取不重复调用', async () => {
+    const f = await fixture(); f.connection.providerId = 'openai'; f.models[0].modelId = 'gpt-6.1-terra';
+    await f.center.syncContext({ workspaceId: 'workspace', workspaces: [{ id: 'workspace' }], projects: [f.project], workflows: [f.workflow], models: f.models, connections: [f.connection] });
+    const request = { ...input, reasoningEffort: 'high' }; await f.service.start(request);
+    const result = await until(() => f.service.read(request), value => value.status === 'complete');
+    expect(result.reasoningEffort).toBe('high'); expect(JSON.parse(f.calls[0].options.body).reasoning_effort).toBe('high');
+    const run = await f.engine.runDetail(result.runId); expect(run.snapshot.steps[0].reasoningEffort).toBe('high');
+    const reopened = createAutomationPlanning(f.options); services.push(reopened); expect((await reopened.read(request)).reasoningEffort).toBe('high'); expect(f.calls).toHaveLength(1);
+    await expect(f.service.start({ ...input, id: 'illegal-effort', reasoningEffort: 'unlimited' })).rejects.toThrow('推理'); expect(f.calls).toHaveLength(1);
+  });
   it('单次收费规划持久化原始结果，双击/重开/读取不重复请求，不创建规则或成品', async () => {
     const f = await fixture(); const [first, same] = await Promise.all([f.service.start(input), f.service.start(input)]); expect(first.id).toBe(same.id);
     const result = await until(() => f.service.read(input), value => value.status === 'complete');

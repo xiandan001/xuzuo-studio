@@ -79,6 +79,8 @@ jobs:
         run: node scripts/verify-bead-market-ui.mjs
       - name: Verify real animation studio interactions
         run: node scripts/verify-animation-studio.mjs
+      - name: Verify real chat UI with isolated offline streams
+        run: node scripts/verify-chat-studio.mjs
       - name: Run source tests with one worker
         id: source_tests
         if: ${{ !cancelled() }}
@@ -143,6 +145,8 @@ jobs:
             work/animation-studio-output/*.png
             work/animation-studio-output/*.gif
             work/animation-studio-output/*.zip
+            work/chat-studio-output/report.json
+            work/chat-studio-output/*.png
       - name: Build Windows drive helper
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
@@ -175,7 +179,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.5.2/full-install-lifecycle.json
+            outputs/release-v2.6.0/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -185,8 +189,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.5.2/Xuzuo-Studio-Setup-2.5.2.exe
-            outputs/release-v2.5.2/Xuzuo-Studio-Setup-2.5.2.exe.blockmap
-            outputs/release-v2.5.2/Xuzuo-Studio-Setup-2.5.2.manifest.json
-            outputs/release-v2.5.2/latest.yml
-            outputs/release-v2.5.2/package-verification.json
+            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe
+            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe.blockmap
+            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.manifest.json
+            outputs/release-v2.6.0/latest.yml
+            outputs/release-v2.6.0/package-verification.json

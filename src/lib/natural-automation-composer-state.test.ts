@@ -53,4 +53,9 @@ describe('自动化创建和运行准备分开', () => {
     const confirmed = naturalBoundWorkflow(workflow, configuration, { text: { modelConfigId: 'text', credentialId: 'text-key' } }, ['text']);
     expect(confirmed.steps.map(step => [step.id, step.modelConfigId, step.credentialId])).toEqual([['write', 'text', 'text-key'], ['review', 'text', 'text-key']]);
   });
+  it('只改资料保留每步推理，明确重选不支持模型后清除旧等级', () => {
+    const workflow = { id: 'custom', steps: [{ id: 'write', kind: 'text', enabled: true, modelConfigId: 'writer-a', credentialId: 'writer-key', reasoningEffort: 'max' }] } as WorkflowDefinition;
+    expect(naturalBoundWorkflow(workflow, configuration, {}, []).steps[0].reasoningEffort).toBe('max');
+    expect(naturalBoundWorkflow(workflow, configuration, { text: { modelConfigId: 'text', credentialId: 'text-key' } }, ['text']).steps[0].reasoningEffort).toBeUndefined();
+  });
 });
