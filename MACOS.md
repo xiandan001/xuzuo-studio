@@ -1,5 +1,17 @@
 # macOS 开发与验收
 
+## 2.6.3 首页边界修复（2026-11-09）
+
+去掉首页聊天区固定的视口高度，让输入卡、欢迎区与提示内容撑开所属区块；
+“最近作品”始终排在聊天区之后，页面正常纵向滚动。长聊天记录保留独立的有界滚动，
+不通过隐藏溢出来裁掉输入、附件或作品。短窗口下需要向下滚动查看输入区底部。
+
+31 项首页与聊天组件测试通过；真实 Overview 与最近作品组合 97 项、真实 App 页面 8 项，
+合计 105 项浏览器边界检查通过，包括附件、错误提示、历史展开、手动拉高输入框及等效缩放。
+新增原生验收脚本的真实首页夹具与 16 组边界检查；本轮只检查脚本语法并构建夹具，未启动 Electron。
+2.6.3 安装包源码、资源、签名及 DMG/ZIP 检查通过，未访问真实钥匙串或调用外部模型。
+报告位于 `outputs/home-bounds-validation-report.json`，复现与修复截图位于 `work/home-bounds/`。
+
 ## 2.6.2 聊天输入区布局（2026-11-09）
 
 聊天模式、模型配置、制作格式和使用场景按分组排列。格式与场景并排并保留 24px 间距，
@@ -97,7 +109,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.6.2/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.6.3/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -118,7 +130,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.6.2/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.6.3/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

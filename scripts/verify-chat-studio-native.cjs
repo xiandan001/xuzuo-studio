@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain, nativeTheme } = require('electron');
 const root = path.resolve(__dirname, '..'), sha = value => createHash('sha256').update(value).digest('hex'), began = Date.now();
 const workspaceId = 'chat-ui-workspace', channels = [], calls = [], held = new Set();
-const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 } };
+const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], homeBounds: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 } };
 let owner, temporary, window, service, finishing = false, slowCount = 0;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deadline = setTimeout(() => { void finish(Error('Chat studio native acceptance exceeded 120 seconds')); }, 120000);
@@ -90,8 +90,42 @@ async function layout(width, theme, index) {
   const button = await evaluate(`(()=>{const e=document.querySelector('[aria-label="发送聊天消息"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {top:r.top,bottom:r.bottom,reachable:!!hit&&(hit===e||e.contains(hit)),footer:document.querySelector('.statusbar').getBoundingClientRect().top}})()`); assert(button.reachable && button.top >= 0 && button.bottom <= button.footer + 1, JSON.stringify(button)); value.sendButton = button;
   value.passed = true; report.layouts.push(value); await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))'); window.webContents.invalidate(); await delay(100); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); const filename = `${index}-chat-${theme}-${width}.png`; await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) });
 }
+async function homeBounds(width, height, theme, state) {
+  window.setContentSize(width, height); nativeTheme.themeSource = theme;
+  if (await evaluate('document.documentElement.dataset.appTheme') !== theme) await click('button', theme === 'dark' ? '切到黑夜' : '切到白天');
+  await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(theme)}&&document.querySelectorAll('.conversation-recent-work').length===3`, 'real Overview with recent works');
+  await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+  const value = await evaluate(`(()=>{const chat=document.querySelector('.workspace-chat'),composer=document.querySelector('.workspace-chat-composer'),recent=document.querySelector('.conversation-recent'),overview=document.querySelector('.conversation-home'),content=document.querySelector('.app-content');content.scrollTop=0;const r=e=>{const b=e.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};return {width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.appTheme,chat:r(chat),composer:r(composer),recent:r(recent),overview:r(overview),content:r(content),gap:parseFloat(getComputedStyle(overview).rowGap),documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth}})()`);
+  value.state = state; const detail = JSON.stringify(value);
+  assert(value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Overview horizontal overflow: ' + detail);
+  assert(value.composer.left >= value.chat.left - 1 && value.composer.right <= value.chat.right + 1, 'Composer exceeds chat width: ' + detail);
+  assert(value.composer.bottom <= value.chat.bottom + 1, 'Composer spills below its chat section: ' + detail);
+  assert(value.recent.top >= value.chat.bottom + value.gap - 1, 'Composer/chat overlaps the recent works: ' + detail);
+  assert(value.recent.bottom <= value.overview.bottom + 1, 'Recent works spill below Overview: ' + detail);
+  value.recentHits = [];
+  for (let index = 0; index < 3; index++) {
+    await evaluate(`document.querySelectorAll('.conversation-recent-work')[${index}].scrollIntoView({block:'center'})`);
+    const hit = await evaluate(`(()=>{const e=document.querySelectorAll('.conversation-recent-work')[${index}],r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),content=document.querySelector('.app-content').getBoundingClientRect();return {reachable:!!hit&&(hit===e||e.contains(hit)),top:r.top,bottom:r.bottom,contentTop:content.top,contentBottom:content.bottom}})()`);
+    assert(hit.reachable && hit.top >= hit.contentTop - 1 && hit.bottom <= hit.contentBottom + 1, 'Recent work is covered or unreachable: ' + JSON.stringify(hit)); value.recentHits.push(hit);
+  }
+  await click('.conversation-recent-work');
+  assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.lastNavigation`), 'images:fixture-recent-1', 'Recent card must invoke the real Overview navigation');
+  await evaluate(`document.querySelector('[aria-label="发送聊天消息"]').scrollIntoView({block:'nearest'})`);
+  value.sendReachable = await evaluate(`(()=>{const e=document.querySelector('[aria-label="发送聊天消息"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return !!hit&&(hit===e||e.contains(hit))&&r.top>=document.querySelector('.app-content').getBoundingClientRect().top-1&&r.bottom<=document.querySelector('.statusbar').getBoundingClientRect().top+1})()`);
+  assert(value.sendReachable, 'Send action must remain reachable'); value.passed = true; report.homeBounds.push(value);
+}
+async function overviewBoundaries(state) {
+  const count = calls.length;
+  await click('[aria-label="切换最近作品测试数据"]'); await click('.workspace-chat-modes button', '制作');
+  await evaluate(`document.querySelector('[aria-label="聊天内容"]').style.height='220px'`);
+  for (const [width, height] of [[1440, 900], [1120, 760], [1280, 720], [960, 640]]) for (const theme of ['light', 'dark']) await homeBounds(width, height, theme, state);
+  await evaluate(`document.querySelector('[aria-label="聊天内容"]').style.height=''`);
+  await click('[aria-label="切换最近作品测试数据"]'); await dom(`!document.querySelector('.conversation-recent')`, 'return to no-project fixture');
+  await click('.workspace-chat-modes button', '聊天'); assert.equal(calls.length, count, 'Layout checks must not send model requests');
+}
 async function scenario() {
   await dom(`document.querySelector('[aria-label="聊天内容"]')&&!document.querySelector('.workspace-chat-working')`, 'empty usable chat');
+  await step('real-overview-empty-state-bounds-with-recent-works', () => overviewBoundaries('empty'));
   await step('no-project-normal-chat-and-reasoning-selection', async () => {
     assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0'); assert.equal(await evaluate(`!!document.querySelector('[aria-label="对话Key"]')`), false); assert.equal(await evaluate(`document.querySelector('.conversation-account-summary')?.textContent.trim()`), '独立测试账户');
     await select('推理强度', '轻度'); await fill('记住：这次讨论的主角是橘猫。'); await click('[aria-label="发送聊天消息"]'); await settled(1); assert.equal(calls.length, 1); assert.equal(calls[0].body.reasoning_effort, 'low'); assert.equal(calls[0].body.messages[0].role, 'system'); assert(calls[0].body.messages[0].content.includes('不把每条消息强行变成自动化方案'));
@@ -114,6 +148,7 @@ async function scenario() {
     await click('.workspace-chat-modes button', '聊天'); await fill('长内容：请提供一份包含表格与代码的完整说明。'); await click('[aria-label="发送聊天消息"]'); await settled(6); await dom(`document.querySelector('.workspace-chat-thread>div:last-child pre code')`, 'actual long code rendering');
     let index = 0; for (const width of [1440, 960]) for (const theme of ['light', 'dark']) await layout(width, theme, ++index); report.renderMetrics = app.getAppMetrics().map(item => ({ type: item.type, cpu: item.cpu, memory: item.memory }));
   });
+  await step('real-overview-history-bounds-with-recent-works', () => overviewBoundaries('history'));
   await step('reload-real-preload-and-history-without-resend', async () => {
     const before = await service.ledger(workspaceId), count = calls.length, value = await currentConversation(); await window.reload(); await dom(`document.querySelectorAll('.workspace-chat-turn').length===6&&!document.querySelector('[aria-label="停止回复"]')`, 'history restored through actual preload'); assert.equal(calls.length, count); assert.deepEqual(await service.ledger(workspaceId), before); assert.equal((await currentConversation()).id, value.id); assert.equal(await evaluate(`document.querySelector('[aria-label="推理强度"]')?.textContent.includes('深入')`), true); report.historyReloadKeepsLedger = true;
   });

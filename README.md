@@ -1,14 +1,16 @@
-# 序作工作台 2.6.2
+# 序作工作台 2.6.3
 
 ## macOS 版本
 
 `develop-macos` 分支提供 macOS 13 及以上版本适配，包括原生窗口按钮、Command 快捷键、文件与磁盘浏览、Office 导出、跨平台备份恢复和独立动画运行时。源码启动、DMG 打包及测试命令见 [macOS 开发与验收](MACOS.md)。
 
-Apple Silicon 安装包位于本地 `outputs/release-v2.6.2/`，使用 DMG 拖入 Applications 安装。macOS 更新采用新版 DMG 替换，卸载通过 Finder；Windows 安装与维护流程保留。当前本机验收针对 Apple Silicon；Intel 由独立 CI 构建与回归，未经运行的结果不计入本机验收。
+Apple Silicon 安装包位于本地 `outputs/release-v2.6.3/`，使用 DMG 拖入 Applications 安装。macOS 更新采用新版 DMG 替换，卸载通过 Finder；Windows 安装与维护流程保留。当前本机验收针对 Apple Silicon；Intel 由独立 CI 构建与回归，未经运行的结果不计入本机验收。
 
 外部模型调用需要自己的供应商配置与 Key，离线回归不代表所有供应商均已联网验收。外部 Office 转 PDF 需要安装 LibreOffice；本机未安装，因此该外部程序的实际转换不计入已完成验证。
 
 ## 当前版本
+
+- 首页聊天区按实际内容高度排列，输入卡不会覆盖“最近作品”；页面正常纵向滚动，长聊天记录保留独立滚动。
 
 - 聊天输入区采用分组布局：制作格式与使用场景并排，长模型名保持单行，窄窗口自动分行；浅深主题均保留清晰间距与键盘焦点。
 
