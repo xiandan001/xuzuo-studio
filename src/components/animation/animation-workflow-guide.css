@@ -1,0 +1,136 @@
+.animation-workflow-guide {
+  min-width: 0;
+  margin: 0 0 20px;
+  padding: 14px 17px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.animation-workflow-guide ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.animation-workflow-guide li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  color: var(--ui-fg-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.animation-workflow-guide-number {
+  display: grid;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  color: var(--ui-fg-secondary);
+  background: var(--ui-surface-subtle);
+  font-size: 12px;
+}
+
+.animation-workflow-guide .is-current {
+  color: var(--ui-fg);
+}
+
+.animation-workflow-guide .is-current .animation-workflow-guide-number {
+  border-color: var(--ui-accent);
+  color: var(--ui-on-accent);
+  background: var(--ui-accent);
+}
+
+.animation-workflow-guide .is-complete .animation-workflow-guide-number {
+  border-color: var(--ui-success-border);
+  color: var(--ui-success);
+  background: var(--ui-success-bg);
+}
+
+.animation-workflow-guide p {
+  margin: 10px 0 0;
+  color: var(--ui-fg-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.animation-empty-preview {
+  display: flex;
+  min-width: 0;
+  max-width: 400px;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  text-align: center;
+  color: var(--ui-fg);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.animation-empty-preview-icon {
+  display: grid;
+  width: 49px;
+  height: 49px;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 13px;
+  color: var(--ui-accent);
+  background: var(--ui-surface-subtle);
+}
+
+.animation-empty-preview h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.animation-empty-preview p {
+  margin: 0;
+  color: var(--ui-fg-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.animation-empty-preview small {
+  color: var(--ui-fg-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.animation-empty-preview-actions {
+  display: flex;
+  max-width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 3px;
+}
+
+.animation-studio .animation-empty-preview-actions .btn {
+  flex: 0 0 auto;
+  min-width: 0;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+@container (max-width: 560px) {
+  .animation-workflow-guide { padding: 12px; }
+  .animation-workflow-guide ol { gap: 10px; }
+  .animation-workflow-guide li { gap: 6px; font-size: 13px; }
+  .animation-workflow-guide-number { flex-basis: 22px; width: 22px; height: 22px; }
+  .animation-empty-preview { padding: 17px; }
+}

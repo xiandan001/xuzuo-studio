@@ -1,0 +1,12 @@
+.animation-preview{container-type:inline-size}
+.animation-preview-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:16px;margin-bottom:16px;min-width:0}
+.animation-preview-copy{min-width:0;overflow-wrap:anywhere}
+.animation-preview-title{display:block;font-size:16px;font-weight:700;line-height:1.5}
+.animation-preview-caption{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;margin:5px 0;color:var(--ui-fg);font-size:14px;line-height:1.5}
+.animation-preview-copy>small{display:block;margin-top:4px;color:var(--ui-fg-secondary);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.animation-preview-actions{display:flex;align-items:center;justify-content:flex-end;flex:0 0 auto;flex-wrap:wrap;gap:8px;min-width:0;max-width:100%}
+.animation-preview-heading .animation-preview-actions>.btn{flex:0 0 auto;white-space:nowrap;overflow-wrap:normal;word-break:normal}
+.animation-preview-actions>.btn>svg{flex-shrink:0}
+.animation-studio .animation-preview-requirements{margin:0 0 16px}
+.animation-preview-requirements>p{white-space:pre-wrap;overflow-wrap:anywhere}
+@container(max-width:480px){.animation-preview-heading{grid-template-columns:minmax(0,1fr);gap:12px}.animation-preview-actions{justify-content:flex-start;width:100%}}

@@ -136,7 +136,7 @@ function createAnimationService(options) {
     const document = await store.read(input), entries = selected(document, input.entryIds);
     if (input.format === 'project') return { artifact: await require('./animation-project.cjs').exportAnimationProject(document, entries, artifactStore) };
     if (input.format === 'frames') return { artifact: await composition.exportFrames(document, entries) };
-    const ids = input.format === 'atlas' ? [...new Set(entries.flatMap(entry => entry.frames.map(frame => frame.atlasArtifactId)))] : entries.map(entry => { if (!entry.outputArtifactId || entry.renderedHash !== core.animationRenderHash(document, [entry.id])) throw Error('当前设置尚未合成，请先点击本地重新合成。'); return entry.outputArtifactId; });
+    const ids = input.format === 'atlas' ? [...new Set(entries.flatMap(entry => entry.frames.map(frame => frame.atlasArtifactId)))] : entries.map(entry => { if (!entry.outputArtifactId || entry.renderedHash !== core.animationRenderHash(document, [entry.id])) throw Error('当前设置尚未合成，请先点击“更新预览”。'); return entry.outputArtifactId; });
     if (!ids.length) throw Error('当前没有可导出的实际图集或成品。');
     if (input.format === 'gif' && document.mode !== 'gif') throw Error('当前是静态图集，请切换 GIF 用途并合成后导出。');
     const files = []; for (const id of ids) { const file = await artifactStore.read(id); if (file.projectId !== input.projectId || file.trashedAt || file.unavailable) throw Error('有导出文件不可用，请先恢复或重新合成。'); files.push(file); }
