@@ -30,6 +30,60 @@ afterEach(async () => {
   for (const directory of owned.splice(0)) { if (!path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'xuzuo-chat-test-')) throw Error('Unowned cleanup'); await fs.rm(directory, { recursive: true, force: true }); }
 });
 describe('无需项目的普通聊天持久化与计费', () => {
+  it('无项目附件真实进入本轮和后续上下文，公开消息仅包含元数据', async () => {
+    const f = await setup(), selected = path.join(f.directory, '品牌.txt'); await fs.writeFile(selected, '蓝色小熊品牌资料');
+    const attachments = await f.service.importAttachments(base, [selected]), request = { ...base, attachmentIds: attachments.map(file => file.id) };
+    await f.service.start(request); let value = await settled(f.service);
+    expect(value.turns[0].attachments).toEqual(attachments); expect(JSON.stringify(value)).not.toContain('蓝色小熊品牌资料'); expect(JSON.stringify(value)).not.toContain(f.directory);
+    expect(f.calls[0].messages[0].attachments).toMatchObject([{ text: '蓝色小熊品牌资料' }]);
+    await f.service.start({ ...base, id: 'followup-with-file', text: '请再说明品牌资料' }); value = await settled(f.service);
+    expect(f.calls[1].messages[0].attachments).toMatchObject([{ text: '蓝色小熊品牌资料' }]); expect(value.turns).toHaveLength(2);
+    expect((await f.service.attachmentFiles(base, base.id))[0].buffer.toString()).toBe('蓝色小熊品牌资料');
+  });
+  it('带附件请求编号仍幂等，重新回答继承原附件且不依赖已删除的选择缓存', async () => {
+    const f = await setup(), selected = path.join(f.directory, '资料.txt'); await fs.writeFile(selected, '原始资料');
+    const [attachment] = await f.service.importAttachments(base, [selected]), request = { ...base, attachmentIds: [attachment.id] };
+    await f.service.start(request); await settled(f.service); await fs.rm(path.join(f.directory, 'chat-attachments-v1'), { recursive: true }); await fs.unlink(selected);
+    await f.service.start(request); expect(f.calls).toHaveLength(1);
+    await expect(f.service.start({ ...request, attachmentIds: ['another-file'] })).rejects.toThrow(/编号已用于不同内容/);
+    await f.service.start({ ...base, id: 'retry-with-file', sourceTurnId: base.id }); const value = await settled(f.service);
+    expect(value.turns[1].attachments).toEqual([attachment]); expect(f.calls[1].messages.at(-1).attachments[0].text).toBe('原始资料');
+    expect(await f.service.ledger()).toHaveLength(2);
+  });
+  it('跨对话附件和不支持视觉的模型在发送前阻止，不新增账本记录', async () => {
+    const f = await setup(), text = path.join(f.directory, '资料.txt'); await fs.writeFile(text, '正文');
+    const [attachment] = await f.service.importAttachments(base, [text]);
+    await expect(f.service.start({ ...base, conversationId: 'other-chat', attachmentIds: [attachment.id] })).rejects.toThrow(/不属于当前对话/);
+    const pdf = path.join(f.directory, '参考.pdf'); await fs.writeFile(pdf, '%PDF-1.4\n1 0 obj <<>> endobj\n%%EOF');
+    const [document] = await f.service.importAttachments(base, [pdf]);
+    await expect(f.service.start({ ...base, attachmentIds: [document.id] })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
+    expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toHaveLength(0);
+    await f.service.start({ ...base, attachmentIds: [document.id], model: { ...model, capabilities: ['text', 'vision'] } }); await settled(f.service);
+    await expect(f.service.start({ ...base, id: 'followup-text-model' })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
+    expect(f.calls).toHaveLength(1); expect(await f.service.ledger()).toHaveLength(1);
+  });
+  it('聊天备份自包含附件正文与原文件，恢复后可继续读取和制作引用', async () => {
+    const f = await setup(), selected = path.join(f.directory, '资料.txt'); await fs.writeFile(selected, '备份应保留的正文');
+    const attachments = await f.service.importAttachments(base, [selected]);
+    await f.service.start({ ...base, attachmentIds: attachments.map(file => file.id) }); await settled(f.service);
+    const snapshot = await f.service.exportWorkspace(base.workspaceId), restored = await setup();
+    await restored.service.restoreWorkspace(snapshot);
+    expect((await restored.service.attachmentFiles(base, base.id))[0].buffer.toString()).toBe('备份应保留的正文');
+    await restored.service.start({ ...base, id: 'after-restore', text: '继续讨论附件' }); await settled(restored.service);
+    expect(restored.calls[0].messages[0].attachments[0].text).toBe('备份应保留的正文');
+    const damaged = structuredClone(snapshot); damaged.conversations[0].turns[0]._attachments[0].data = 'AAAA';
+    await expect(f.service.validateWorkspaceSnapshot(damaged)).rejects.toThrow(/聊天备份/);
+  });
+  it('未发送附件可供专属制作工作台使用，只允许当前对话的有效编号', async () => {
+    const f = await setup(), selected = path.join(f.directory, '原始参考.txt'); await fs.writeFile(selected, '待制作资料');
+    const [attachment] = await f.service.importAttachments(base, [selected]);
+    const files = await f.service.attachmentFiles(base, undefined, [attachment.id]); expect(files[0].buffer.toString()).toBe('待制作资料');
+    await expect(f.service.attachmentFiles({ ...base, conversationId: 'other' }, undefined, [attachment.id])).rejects.toThrow(/不属于当前对话/);
+    await expect(f.service.attachmentFiles(base, undefined, ['../escape'])).rejects.toThrow(/选择无效/);
+    await expect(f.service.attachmentFiles(base, undefined, [])).rejects.toThrow(/请选择/);
+    await expect(f.service.attachmentFiles(base, 'turn-id', [attachment.id])).rejects.toThrow(/选择方式无效/);
+    expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toHaveLength(0);
+  });
   it('直接发送首条消息，不创建Project或工作区文件夹，仅写应用会话目录', async () => {
     const f = await setup(); const started = await f.service.start(base); expect(started.turns[0].status).toBe('running');
     const conversation = await settled(f.service); expect(conversation.turns[0]).toMatchObject({ userText: base.text, text: receipt.text, status: 'complete', costState: 'calculated', costCents: 5 });

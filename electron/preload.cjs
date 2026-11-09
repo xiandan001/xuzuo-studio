@@ -23,7 +23,7 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   chat: {
-    ...Object.fromEntries(['list', 'read', 'start', 'cancel', 'flush', 'ledger'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
+    ...Object.fromEntries(['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'importAttachments', 'transferAttachments'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('chat:changed', handler); return () => ipcRenderer.removeListener('chat:changed', handler); },
   },
   animation: {

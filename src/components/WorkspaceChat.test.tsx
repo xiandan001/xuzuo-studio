@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatChangedEvent, ChatConversation, ChatStartRequest, ChatTurn } from '../chat-types';
+import type { ChatAttachment, ChatChangedEvent, ChatConversation, ChatStartRequest, ChatTurn } from '../chat-types';
 import type { PageProps } from '../types';
 import { WorkspaceChat } from './WorkspaceChat';
 
@@ -24,22 +24,24 @@ async function fixture(modelId = 'gpt-6.1-terra') {
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
   const model = { id: 'model', connectionId: 'connection', name: '测试对话模型', modelId, capabilities: ['text'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '2' } };
   const createProject = vi.fn();
+  const importAttachments = vi.fn(async (): Promise<ChatAttachment[]> => []);
+  const transferAttachments = vi.fn();
   const read = vi.fn(async ({ conversationId }: { conversationId: string }) => record ||= { version: 1, id: conversationId, workspaceId, title: '新对话', createdAt: now(), updatedAt: now(), turnCount: 0, turns: [] });
   const start = vi.fn(async (request: ChatStartRequest) => {
-    const turn: ChatTurn = { id: request.id, userText: request.text, text: '', status: 'running', createdAt: now(), updatedAt: now(), modelName: request.model.name, modelId: request.model.modelId, modelConfigId: request.model.id, credentialId: request.credentialId, reasoningEffort: request.reasoningEffort, mode: request.mode, costCents: 0, costState: 'unknown' };
+    const turn: ChatTurn = { id: request.id, userText: request.text, text: '', status: 'running', createdAt: now(), updatedAt: now(), modelName: request.model.name, modelId: request.model.modelId, modelConfigId: request.model.id, credentialId: request.credentialId, reasoningEffort: request.reasoningEffort, mode: request.mode, attachments: (request.attachmentIds || []).map(id => ({ id, name: `${id}.txt`, mimeType: 'text/plain', bytes: 120, kind: 'text' as const })), costCents: 0, costState: 'unknown' };
     record = { ...record!, turns: [...record!.turns, turn], turnCount: record!.turns.length + 1, title: request.text.slice(0, 24) }; return structuredClone(record);
   });
   const cancel = vi.fn(async () => { record!.turns.at(-1)!.status = 'cancelled'; return structuredClone(record!); });
-  const bridge = { read, start, cancel, list: vi.fn(async () => []), ledger: vi.fn(async () => []), onChanged(listener: (event: ChatChangedEvent) => void) { listeners.add(listener); return () => listeners.delete(listener); } };
+  const bridge = { importAttachments, transferAttachments, read, start, cancel, list: vi.fn(async () => []), ledger: vi.fn(async () => []), onChanged(listener: (event: ChatChangedEvent) => void) { listeners.add(listener); return () => listeners.delete(listener); } };
   vi.stubGlobal('desktop', { chat: bridge }); Object.defineProperty(window, 'desktop', { configurable: true, value: { chat: bridge } });
-  const props = { workspaceId, workspace: { id: workspaceId, name: '无项目工作区' }, workspaces: [], projects: [], purgedProjects: [], activeProject: { id: '' }, configuration: { connections: [connection], models: [model], credentials: [{ id: 'key', connectionId: 'connection', name: '自己的账户', lastFour: '1234', enabled: true }], workflows: [], categories: [] }, workflowRunner: { runs: [] }, ledger: [], preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: createProject } as unknown as PageProps;
+  const props = { workspaceId, workspace: { id: workspaceId, name: '无项目工作区' }, workspaces: [], projects: [], purgedProjects: [], activeProject: { id: '' }, configuration: { connections: [connection], models: [model], credentials: [{ id: 'key', connectionId: 'connection', name: '自己的账户', lastFour: '1234', enabled: true }], workflows: [], categories: [] }, workflowRunner: { runs: [] }, ledger: [], preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: createProject, onUpdateProject: vi.fn(), onUsePrompt: vi.fn() } as unknown as PageProps;
   await act(async () => { root = createRoot(host); root.render(<WorkspaceChat props={props} onLegacy={vi.fn()} />); });
   async function update(text: string, status: ChatTurn['status'] = 'running') {
     const turn = { ...record!.turns.at(-1)!, text, status, updatedAt: `${now()}-${text.length}` };
     record = { ...record!, turns: [...record!.turns.slice(0, -1), turn] };
     await act(async () => { for (const listener of listeners) listener({ workspaceId, conversationId: record!.id, turn, updatedAt: turn.updatedAt, title: record!.title, ledgerChanged: status !== 'running' }); });
   }
-  return { start, read, cancel, createProject, update, props };
+  return { start, read, cancel, createProject, importAttachments, transferAttachments, update, props };
 }
 describe('普通聊天的真实组件交互', () => {
   it('发送确认较慢时，不会清掉用户已输入的下一条草稿', async () => {
@@ -79,4 +81,52 @@ describe('普通聊天的真实组件交互', () => {
     await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })); field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })); });
     expect(f.start).not.toHaveBeenCalled(); await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); expect(f.start).toHaveBeenCalledOnce();
   });
+  it('附件发送失败保留原输入和文件，接受后清理草稿，重新回答不混入下一条附件', async () => {
+    const f = await fixture();
+    f.importAttachments.mockResolvedValueOnce([{ id: 'brief', name: '产品资料.txt', mimeType: 'text/plain', bytes: 120, kind: 'text' }]);
+    await input('请结合附件写文案'); await click('添加附件');
+    f.start.mockRejectedValueOnce(Error('暂时未接收，未发送请求'));
+    await click('发送聊天消息');
+    expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain('产品资料.txt');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe('请结合附件写文案');
+    await click('发送聊天消息'); expect(f.start.mock.calls[1][0].attachmentIds).toEqual(['brief']);
+    expect(host.querySelector('[aria-label="待发送的附件"]')).toBeNull();
+    await f.update('已参考资料', 'complete');
+    f.importAttachments.mockResolvedValueOnce([{ id: 'next', name: '下一条.txt', mimeType: 'text/plain', bytes: 10, kind: 'text' }]);
+    await click('添加附件'); await input('下一条草稿'); await click('重新回答');
+    expect(f.start.mock.calls.at(-1)![0].attachmentIds).toEqual(['brief']);
+    expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain('下一条.txt');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe('下一条草稿');
+  });
+  it('取消添加不改草稿，仅附件也可明确发送且不创建项目', async () => {
+    const f = await fixture(); await input('正在写的内容'); await click('添加附件');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe('正在写的内容');
+    expect(f.start).not.toHaveBeenCalled();
+    f.importAttachments.mockResolvedValueOnce([{ id: 'image', name: '参考图.png', mimeType: 'image/png', bytes: 200, kind: 'image' }]);
+    await click('添加附件'); await input(''); await click('发送聊天消息');
+    expect(f.start.mock.calls[0][0]).toMatchObject({ text: '请查看并分析这些附件。', attachmentIds: ['image'] });
+    expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('新对话不会接收上一段对话迟到的附件选择结果', async () => {
+    const f = await fixture(); let complete!: (files: ChatAttachment[]) => void;
+    f.importAttachments.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    await click('添加附件'); await click('新对话');
+    await act(async () => complete([{ id: 'old-image', name: '旧对话.png', mimeType: 'image/png', bytes: 200, kind: 'image' }]));
+    expect(host.querySelector('[aria-label="待发送的附件"]')).toBeNull(); expect(f.start).not.toHaveBeenCalled();
+  });
+  it('拼豆专用入口先转移原附件，再打开工作台，不发送普通聊天请求', async () => {
+    const f = await fixture();
+    f.importAttachments.mockResolvedValueOnce([{ id: 'draft-image', name: '底图.png', mimeType: 'image/png', bytes: 200, kind: 'image' }]);
+    await click('添加附件'); await click('制作'); await input('制作拼豆图纸'); await click('打开拼豆工作台');
+    let complete!: (files: unknown[]) => void;
+    f.transferAttachments.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const created = { id: 'bead-project', workspaceId: f.props.workspaceId, kind: 'image' } as never;
+    await act(async () => f.createProject.mock.calls[0][1].onCreated(created));
+    expect(f.props.onUsePrompt).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled();
+    await act(async () => complete([{ id: 'project-image', name: '底图.png', mimeType: 'image/png', bytes: 200, kind: 'image' }]));
+    expect(f.transferAttachments).toHaveBeenCalledWith(expect.objectContaining({ attachmentIds: ['draft-image'], projectId: 'bead-project' }));
+    expect(f.props.onUpdateProject).toHaveBeenCalledWith('bead-project', expect.objectContaining({ referenceFiles: expect.arrayContaining([expect.objectContaining({ id: 'project-image' })]) }));
+    expect(f.props.onUsePrompt).toHaveBeenCalledWith(expect.objectContaining({ imagePreset: '拼豆' }), '制作拼豆图纸', 'bead-project');
+  });
+
 });

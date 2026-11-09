@@ -5,6 +5,15 @@ import type { CostCalculation } from './billing-types';
 import type { ReasoningEffort } from './lib/reasoning-options';
 import type { NaturalAutomationPlan } from './natural-automation-types';
 import type { ProjectKind } from './types';
+import type { ArtifactMetadata } from './live-types';
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+  kind: 'text' | 'image' | 'document';
+}
 
 export interface ChatTurn {
   id: string;
@@ -21,6 +30,7 @@ export interface ChatTurn {
   sourceTurnId?: string;
   mode?: 'chat' | 'plan';
   outputKind?: ProjectKind;
+  attachments?: ChatAttachment[];
   plan?: NaturalAutomationPlan;
   contextTruncated?: boolean;
   error?: string;
@@ -53,9 +63,12 @@ export interface ChatStartRequest {
   sourceTurnId?: string;
   mode?: 'chat' | 'plan';
   outputKind?: ProjectKind;
+  attachmentIds?: string[];
 }
 export interface ChatChangedEvent { workspaceId: string; conversationId: string; ledgerChanged: boolean; turn?: ChatTurn; title?: string; updatedAt?: string; }
 export interface ChatBridge {
+  importAttachments?: (input: { workspaceId: string; conversationId: string }) => Promise<ChatAttachment[]>;
+  transferAttachments?: (input: { workspaceId: string; conversationId: string; projectId: string } & ({ turnId: string; attachmentIds?: never } | { attachmentIds: string[]; turnId?: never })) => Promise<ArtifactMetadata[]>;
   list: (workspaceId: string) => Promise<ChatConversationSummary[]>;
   read: (input: { workspaceId: string; conversationId: string }) => Promise<ChatConversation>;
   start: (input: ChatStartRequest) => Promise<ChatConversation>;

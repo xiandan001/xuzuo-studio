@@ -2,12 +2,33 @@ const { createContext, endpoint, failure, request, readLimited, raceSignal, norm
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
 const { CredentialStoreError, credentialErrorMessage } = require('./credential-errors.cjs');
+const { attachmentMessage, validateAttachmentPayloads } = require('./chat-attachments.cjs');
 
 const LIMIT = 2 * 1024 * 1024;
-const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你没有在此对话中执行制作、访问文件或联网搜索的工具，不声称已经执行这些操作。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
+const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你可以阅读消息中已提供的附件资料；没有执行制作、访问其他本机文件或联网搜索的工具，不声称已经执行这些操作。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
+
+// Match the existing provider-text attachment blocks: text is extracted locally;
+// images and PDFs use each provider's native inline binary content schema.
+function chatMessageFor(input, message) {
+  const files = message.attachments || [];
+  validateAttachmentPayloads(files);
+  const text = attachmentMessage(message.content, files), binary = files.filter(file => file.kind !== 'text');
+  if (text.length > 200000) throw failure('INVALID_INPUT', '合并附件后的消息超过20万字符，请精简后发送。');
+  if (binary.length && !input.model.capabilities?.includes('vision')) throw failure('UNSUPPORTED_ATTACHMENT', '当前模型未配置看图能力，无法读取图片或PDF；请选择支持看图的模型，或移除附件。');
+  const protocol = input.connection.protocol;
+  if (!binary.length) return { role: message.role, content: text };
+  const dataUrl = file => `data:${file.mimeType};base64,${file.data}`;
+  let content;
+  if (protocol === 'openai-responses') content = [{ type: 'input_text', text }, ...binary.map(file => file.kind === 'image' ? { type: 'input_image', image_url: dataUrl(file) } : { type: 'input_file', filename: file.name, file_data: dataUrl(file) })];
+  else if (protocol === 'openai-chat') content = [{ type: 'text', text }, ...binary.map(file => file.kind === 'image' ? { type: 'image_url', image_url: { url: dataUrl(file) } } : { type: 'file', file: { filename: file.name, file_data: dataUrl(file) } })];
+  else if (protocol === 'anthropic') content = [...binary.map(file => ({ type: file.kind === 'image' ? 'image' : 'document', source: { type: 'base64', media_type: file.mimeType, data: file.data } })), { type: 'text', text }];
+  else content = [{ text }, ...binary.map(file => ({ inlineData: { mimeType: file.mimeType, data: file.data } }))];
+  return { role: message.role, content };
+}
 
 function prepareChat(input, messages) {
   const { connection, model, reasoningEffort } = input, protocol = connection.protocol;
+  messages = messages.map(message => chatMessageFor(input, message));
   const instructions = input.mode === 'plan' ? require('./automation-planning.cjs').plannerPrompt(input.outputKind || 'image') : INSTRUCTIONS;
   const fields = reasoningRequestFields(connection, model, reasoningEffort), headers = { 'content-type': 'application/json' };
   let body, url;
@@ -26,7 +47,7 @@ function prepareChat(input, messages) {
   } else if (protocol === 'gemini') {
     const target = new URL(endpoint(connection.baseUrl, `models/${encodeURIComponent(model.modelId.replace(/^models\//, ''))}:streamGenerateContent`));
     target.searchParams.set('alt', 'sse'); url = target.toString();
-    body = { systemInstruction: { parts: [{ text: instructions }] }, contents: messages.map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })), generationConfig: { maxOutputTokens: 8192, ...fields.generationConfig } };
+    body = { systemInstruction: { parts: [{ text: instructions }] }, contents: messages.map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: Array.isArray(message.content) ? message.content : [{ text: message.content }] })), generationConfig: { maxOutputTokens: 8192, ...fields.generationConfig } };
   } else throw failure('UNSUPPORTED_PROTOCOL', '这个模型接口暂不支持普通聊天，请选择文字模型。');
   return { url, headers, body, billingRequestSnapshot: createBillingRequestSnapshot({ connection, model, kind: 'text' }, body) };
 }

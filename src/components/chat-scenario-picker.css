@@ -1,0 +1,41 @@
+.chat-scenario-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 180px;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--ui-fg-secondary);
+}
+
+.chat-scenario-picker > svg {
+  flex: 0 0 auto;
+}
+
+.chat-scenario-picker > .custom-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-scenario-picker .select-trigger {
+  min-height: 36px;
+  height: auto;
+  border-radius: 9px;
+  padding: 7px 10px;
+  background: var(--ui-surface-subtle);
+  color: var(--ui-fg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-scenario-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

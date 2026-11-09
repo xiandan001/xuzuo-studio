@@ -19,6 +19,8 @@ function wiredRuntime() {
   const commerce = generic('commerce-images'); commerce.save = vi.fn(async () => 'saved');
   const marketBusy = new Set(), market = generic('bead-market'); market.isProjectBusy = id => marketBusy.has(id); market.isWorkspaceBusy = id => id === 'workspace' && marketBusy.size > 0; market.read = vi.fn(async input => ({ state: { projectId: input.projectId } })); market.save = vi.fn(async input => input); market.query = vi.fn(async () => ({ jobId: 'query' })); market.cancel = vi.fn(pending);
   const animation = generic('animation-service'); animation.isProjectBusy = () => false; animation.isWorkspaceBusy = () => false;
+  const chat = generic('chat-service'); chat.importAttachments = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text' }]); chat.attachmentFiles = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text', buffer: Buffer.from('资料') }]);
+  const artifacts = generic('artifact-store'); artifacts.listProject = vi.fn(async () => []); artifacts.write = vi.fn(async input => ({ id: 'project-file', name: input.name, mimeType: input.mimeType, bytes: input.buffer.length, kind: 'text' }));
   const marketSessions = generic('bead-market-sessions'); marketSessions.sessions = vi.fn(async () => [{ platform: 'taobao', status: 'not-opened' }]); marketSessions.login = vi.fn(async () => ({ opened: true })); marketSessions.confirmLogin = vi.fn(async () => [{ platform: 'taobao', status: 'confirmed' }]); marketSessions.markNeedsLogin = vi.fn(pending);
   const marketSources = generic('bead-market-sources'); marketSources.search = vi.fn(async () => ({ platform: 'taobao', status: 'needs-login', capturedAt: '2026-11-08T00:00:00.000Z', offers: [] }));
   const automation = generic('automation-center'); automation.getPlanningContext = vi.fn(async () => ({ project: { id: 'project', workspaceId: 'workspace', kind: 'image' }, models: ['model-meta'], connections: ['connection-meta'] })); automation.reserveProject = vi.fn(async () => pending);
@@ -29,7 +31,7 @@ function wiredRuntime() {
   const customRequire = name => {
     if (name === 'electron') return electron;
     if (name.startsWith('node:')) return require(name);
-    if (name === './production-handlers.cjs' || name === './project-creation.cjs') return require(path.join(root, 'electron', name));
+    if (['./production-handlers.cjs', './project-creation.cjs', './chat-attachment-handlers.cjs'].includes(name)) return require(path.join(root, 'electron', name));
     if (name === './credential-store.cjs') return { isTrustedCredentialSender: () => true, createCredentialStore: () => ({ list: async () => ['key-meta'] }) };
     if (name === './validation-lifecycle.cjs') return { readValidationOwner: () => null, startValidationLifecycle: () => () => {} };
     const short = path.basename(name, '.cjs'); return new Proxy({}, { get: (_target, method) => { if (typeof method === 'string' && (method.startsWith('create') || method === 'registerOfficePreviewHandlers')) return options => { captures[short] = options; return generic(short); }; return () => undefined; } });
@@ -38,9 +40,33 @@ function wiredRuntime() {
   vm.runInContext(fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8') + '\n;globalThis.testRuntime={registerRuntime,setClosing:value=>{runtimeClosing=value;},drain:()=>drainRuntime(),writeFailed:()=>closingWriteFailed};', context);
   context.testRuntime.registerRuntime({ list: async () => ['key-meta'] });
   const invoke = (name, input) => Promise.resolve().then(() => handlers.get('runtime:' + name)({}, input));
-  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions };
+  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions, chat, artifacts };
 }
 describe('真实main注册的业务IPC与生命周期接线（无Electron进程）', () => {
+  it('无项目聊天附件经真实main注册和主进程选文件后传给聊天服务', async () => {
+    const f = wiredRuntime(), scope = { workspaceId: 'workspace', conversationId: 'conversation' };
+    f.dialog.showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ['C:\\selected\\notes.txt'] }));
+    await expect(f.invoke('chat-importAttachments', scope)).resolves.toMatchObject([{ id: 'chat-file', name: 'notes.txt' }]);
+    expect(f.dialog.showOpenDialog).toHaveBeenCalledOnce();
+    expect(f.chat.importAttachments).toHaveBeenCalledWith(scope, ['C:\\selected\\notes.txt']);
+    expect(f.storage.assertNotPurged).not.toHaveBeenCalled();
+    expect(f.artifacts.write).not.toHaveBeenCalled();
+  });
+  it('聊天附件复制项目时通过延后初始化的项目校验并传递原始字节', async () => {
+    const f = wiredRuntime(), input = { workspaceId: 'workspace', conversationId: 'conversation', turnId: 'turn', projectId: 'project' };
+    await expect(f.invoke('chat-transferAttachments', input)).resolves.toMatchObject([{ id: 'project-file', name: 'notes.txt' }]);
+    expect(f.storage.assertNotPurged).toHaveBeenCalledWith('project');
+    expect(f.storage.assertProject).toHaveBeenCalledWith('project', 'workspace');
+    expect(f.chat.attachmentFiles).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation' }, 'turn', undefined);
+    expect(f.artifacts.write).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project', name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('资料'), preserveOriginalName: true }));
+  });
+  it('退出期间拒绝新附件选择和复制，不弹文件框也不读写附件', async () => {
+    const f = wiredRuntime(); f.dialog.showOpenDialog = vi.fn(); f.context.testRuntime.setClosing(true);
+    await expect(f.invoke('chat-importAttachments', { workspaceId: 'workspace', conversationId: 'conversation' })).rejects.toThrow('正在保存并退出');
+    await expect(f.invoke('chat-transferAttachments', { workspaceId: 'workspace', conversationId: 'conversation', attachmentIds: ['draft-file'], projectId: 'project' })).rejects.toThrow('正在保存并退出');
+    expect(f.dialog.showOpenDialog).not.toHaveBeenCalled(); expect(f.chat.importAttachments).not.toHaveBeenCalled(); expect(f.chat.attachmentFiles).not.toHaveBeenCalled(); expect(f.artifacts.write).not.toHaveBeenCalled();
+  });
+
   it('提前登录不依赖项目，查询受限更新登录状态，退出只允许读取而不追加确认', async () => {
     const f = wiredRuntime(); await expect(f.invoke('bead-market-sessions')).resolves.toEqual([{ platform: 'taobao', status: 'not-opened' }]); await expect(f.invoke('bead-market-login', { platform: 'taobao' })).resolves.toEqual({ opened: true }); expect(f.storage.assertNotPurged).not.toHaveBeenCalled();
     await f.captures['bead-market'].sources.search({ platform: 'taobao' }); expect(f.marketSessions.markNeedsLogin).toHaveBeenCalledWith('taobao', '2026-11-08T00:00:00.000Z'); await f.captures['bead-market-browser'].onLoginConfirmed({ platform: 'taobao' }); expect(f.marketSessions.confirmLogin).toHaveBeenCalledWith({ platform: 'taobao' });

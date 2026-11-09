@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const { executeChat, prepareChat } = require('../../electron/provider-chat.cjs');
 const { createCredentialStore } = require('../../electron/credential-store.cjs');
@@ -16,6 +17,14 @@ function sse(events, split = 7) {
   return new Response(new ReadableStream({ start(controller) { for (let offset = 0; offset < data.length; offset += split) controller.enqueue(data.slice(offset, offset + split)); controller.close(); } }), { headers: { 'content-type': 'text/event-stream', 'x-request-id': 'request-fixture' } });
 }
 const finalResponse = text => ({ type: 'response.completed', response: { id: 'resp-fixture', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }], usage: { input_tokens: 10, output_tokens: 12, output_tokens_details: { reasoning_tokens: 3 } } } });
+function attachment(id, name, mimeType, kind, buffer, text) {
+  return { id, name, mimeType, kind, bytes: buffer.length, data: buffer.toString('base64'), sha256: createHash('sha256').update(buffer).digest('hex'), ...(text ? { text } : {}) };
+}
+const attachmentFixtures = [
+  attachment('text-file', '品牌.txt', 'text/plain', 'text', Buffer.from('蓝色小熊'), '蓝色小熊'),
+  attachment('image-file', '参考.png', 'image/png', 'image', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP1sAAAAASUVORK5CYII=', 'base64')),
+  attachment('pdf-file', '图表.pdf', 'application/pdf', 'document', Buffer.from('%PDF-1.4\n1 0 obj <<>> endobj\n%%EOF')),
+];
 function macCredentials(decryptStringAsync) {
   return createCredentialStore({
     directory: '/mock-chat-credentials', platform: 'darwin', safeStorage: { decryptStringAsync },
@@ -23,6 +32,31 @@ function macCredentials(decryptStringAsync) {
   });
 }
 describe('普通聊天的真实供应商传输', () => {
+  it.each(['openai-responses', 'openai-chat', 'anthropic', 'gemini'])('%s实际发送附件正文、图片和PDF二进制，保留对话角色', protocol => {
+    const prepared = prepareChat({ ...input, connection: { ...connection, protocol }, model: { ...model, capabilities: ['text', 'vision'] } }, [{ role: 'assistant', content: '此前回复' }, { role: 'user', content: '请结合附件说明', attachments: attachmentFixtures }]);
+    const body = prepared.body, text = expect.stringContaining('蓝色小熊'), image = attachmentFixtures[1], pdf = attachmentFixtures[2];
+    if (protocol === 'openai-responses') {
+      expect(body.input[0]).toEqual({ role: 'assistant', content: '此前回复' });
+      expect(body.input[1].content).toEqual([{ type: 'input_text', text }, { type: 'input_image', image_url: `data:image/png;base64,${image.data}` }, { type: 'input_file', filename: pdf.name, file_data: `data:application/pdf;base64,${pdf.data}` }]);
+    } else if (protocol === 'openai-chat') {
+      expect(body.messages[1]).toEqual({ role: 'assistant', content: '此前回复' });
+      expect(body.messages[2].content).toEqual([{ type: 'text', text }, { type: 'image_url', image_url: { url: `data:image/png;base64,${image.data}` } }, { type: 'file', file: { filename: pdf.name, file_data: `data:application/pdf;base64,${pdf.data}` } }]);
+    } else if (protocol === 'anthropic') {
+      expect(body.messages[0]).toEqual({ role: 'assistant', content: '此前回复' });
+      expect(body.messages[1].content).toEqual([{ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }, { type: 'document', source: { type: 'base64', media_type: pdf.mimeType, data: pdf.data } }, { type: 'text', text }]);
+    } else {
+      expect(body.contents[0]).toEqual({ role: 'model', parts: [{ text: '此前回复' }] });
+      expect(body.contents[1].parts).toEqual([{ text }, { inlineData: { mimeType: image.mimeType, data: image.data } }, { inlineData: { mimeType: pdf.mimeType, data: pdf.data } }]);
+    }
+    expect(JSON.stringify(body)).not.toContain('attachments'); expect(JSON.stringify(body)).not.toContain('sha256');
+  });
+  it('文本模型可读取文档提取正文，图片/PDF不支持时在凭证及请求前明确阻止', async () => {
+    const prepared = prepareChat(input, [{ role: 'user', content: '总结', attachments: attachmentFixtures.slice(0, 1) }]);
+    expect(prepared.body.input[0].content).toContain('蓝色小熊');
+    let decrypts = 0, requests = 0;
+    await expect(executeChat(input, [{ role: 'user', content: '看图', attachments: attachmentFixtures.slice(1) }], { credentialStore: { withSecret: async () => { decrypts++; } }, fetchImpl: async () => { requests++; } })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
+    expect(decrypts).toBe(0); expect(requests).toBe(0);
+  });
   it('Responses保留原生多轮角色，发送强度并流式解码跨字节中文与用量', async () => {
     let sent; const chunks = [];
     const result = await executeChat({ ...input, reasoningEffort: 'low' }, messages, { credentialStore: credentials, onText: text => chunks.push(text), fetchImpl: async (_url, options) => { sent = options; return sse([{ type: 'response.output_text.delta', delta: '你好，' }, { type: 'response.output_text.delta', delta: '世界' }, finalResponse('你好，世界')], 1); } });

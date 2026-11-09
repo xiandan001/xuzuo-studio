@@ -1,5 +1,16 @@
 # macOS 开发与验收
 
+## 2.6.1 聊天附件与使用场景（2026-11-09）
+
+- 聊天与制作输入框恢复“添加附件”和“使用场景”，场景复用内置图片用途、本工作区启用的自定义用途及文档示例。选择场景会保留已有文字与附件，不自动调用模型。
+- 附件支持 TXT/MD/CSV/JSON、DOCX/PPTX/XLSX、PNG/JPEG/WebP 和 PDF；每条最多 5 份，单份最多 5 MB，合计最多 10 MB。Office 在本机提取正文，图片与 PDF 要求所选模型配置看图能力；本次附件导入不开放 GIF/XML。
+- 原始附件随消息持久化、重新回答、多轮上下文和完整工作区备份保留；发送失败保留草稿，普通聊天无需创建项目。
+- 制作前先将聊天原始附件加入同工作区的保存项目，再进行预检与派发。附件准备失败时不运行模型，重试准备附件不会自动制作。拼豆使用真实工作台入口，并支持转入尚未发送的附件。
+- 隔离浏览器验收通过 19 个功能场景与 20 组浅/深主题和窗口布局，原生文件选择与项目复制由主进程模拟测试覆盖；本轮未启动 Electron GUI、访问真实钥匙串或调用真实供应商 API。
+- 最终源码回归 3134 项通过、0 项失败，4 项 Windows 专用用例跳过；主进程初始化与接线 12 项、附件导入与四协议传输等后端定向回归 76 项、受控选文件与项目复制 34 项均通过。2.6.1 安装包的 501 个源码文件、50 个动画资源、完整签名及 DMG/ZIP 挂载解压检查通过。
+
+本轮原始报告位于 `outputs/chat-attachments-validation-report.json`，安装包位于 `outputs/release-v2.6.1/`。
+
 ## 2.6.0 合并回归（2026-11-09）
 
 `develop-macos` 合入 `develop-owner` 的 7 个新提交，截至 `4bd387f`。
@@ -74,7 +85,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.6.0/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.6.1/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -95,7 +106,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.5.0/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.6.1/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

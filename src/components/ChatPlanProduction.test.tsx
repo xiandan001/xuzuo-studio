@@ -33,8 +33,11 @@ const plan = { version: 1 as const, name: '产品合作说明书', objective: '�
 const turn: ChatTurn = { id: 'plan-turn', userText: '制作完整合作说明书', text: JSON.stringify(plan), mode: 'plan', plan, status: 'complete', modelName: '已选择的文字模型', modelId: 'gpt-6.1-terra', modelConfigId: 'text-model', credentialId: 'account-metadata', reasoningEffort: 'high', costCents: 3, costState: 'calculated', createdAt: timestamp, updatedAt: timestamp };
 const makeProject = (id = 'new-project'): Project => ({ id, workspaceId: 'workspace', name: plan.name, kind: 'word', description: plan.objective, costCents: 0, status: 'draft', version: 0, accent: 'blue', updatedAt: timestamp });
 
-async function fixture({ withProject = false, missing = '', staleRule = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean } = {}) {
+async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, copyFailure = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; copyFailure?: boolean } = {}) {
   const conversationId = 'conversation', workspaceId = 'workspace';
+  const planTurn = { ...turn, ...(attachments ? { attachments: [{ id: 'chat-original', name: '原始资料.txt', mimeType: 'text/plain', bytes: 30, kind: 'text' as const }] } : {}) };
+  const transferAttachments = vi.fn(async () => [{ id: 'project-original', name: '原始资料.txt', mimeType: 'text/plain', bytes: 30, kind: 'text' as const }]);
+  if (copyFailure) transferAttachments.mockRejectedValueOnce(Error('原始附件暂未复制，请重试。'));
   const planner = { modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: 'high' as const };
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
   const model = { id: 'text-model', name: '已选择的文字模型', modelId: turn.modelId, connectionId: connection.id, capabilities: ['text', 'vision'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '5' } };
@@ -54,7 +57,7 @@ async function fixture({ withProject = false, missing = '', staleRule = false }:
     jobs = [...jobs, value]; return structuredClone(value);
   });
   const planningStart = vi.fn(async () => { throw Error('A saved chat plan must not be planned or billed again'); });
-  const desktop = { automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
+  const desktop = { chat: { transferAttachments }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
   Object.defineProperty(window, 'desktop', { configurable: true, value: desktop });
   const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn(async () => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
   const ledger = Object.freeze([{ id: 'prior-cost', projectId: 'trashed-project', projectName: '旧项目', action: '初次生成', model: '已调用的模型', costCents: 27, costState: 'calculated', billingMode: 'live', time: timestamp, status: 'complete' }]) as unknown as LedgerEntry[];
@@ -63,6 +66,7 @@ async function fixture({ withProject = false, missing = '', staleRule = false }:
     const saved: NaturalAutomationDraft = { version: 1, workspaceId, projectId: oldRule.projectId, input: turn.userText, acceptedInput: turn.userText, planner, bindings: { text: planner }, plan, ruleId: oldRule.id, workflowId: oldWorkflow.id, workflowSaved: true, creationKey: 'original-creation', preparationAnswers: {} };
     localStorage.setItem(key, JSON.stringify(saved));
   }
+  let currentProjects: Project[] = [];
   let updateProjects!: (projects: Project[]) => void, savedWorkflows: WorkflowDefinition[] = staleRule ? [structuredClone(oldWorkflow)] : [];
   const saveWorkflow = vi.fn((draft: WorkflowDraft, id?: string) => {
     const value = { ...structuredClone(draft), id: id!, workspaceId, updatedAt: new Date().toISOString() };
@@ -71,16 +75,16 @@ async function fixture({ withProject = false, missing = '', staleRule = false }:
   let updateWorkflows!: (updater: (current: WorkflowDefinition[]) => WorkflowDefinition[]) => void;
   function Harness() {
     const [projects, setProjects] = useState<Project[]>(withProject ? [makeProject()] : []), [workflows, setWorkflows] = useState<WorkflowDefinition[]>(savedWorkflows);
-    updateProjects = setProjects; updateWorkflows = setWorkflows; savedWorkflows = workflows;
-    const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model], credentials: missing === 'key' ? [] : [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }], workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests } as unknown as PageProps;
-    return <ChatPlanProduction props={props} turn={turn} conversationId={conversationId} planner={planner} />;
+    updateProjects = setProjects; updateWorkflows = setWorkflows; savedWorkflows = workflows; currentProjects = projects;
+    const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model], credentials: missing === 'key' ? [] : [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }], workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests, onUpdateProject: (id: string, changes: Partial<Project>) => setProjects(items => items.map(project => project.id === id ? { ...project, ...changes } : project)) } as unknown as PageProps;
+    return <ChatPlanProduction props={props} turn={planTurn} conversationId={conversationId} planner={planner} />;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
   async function created(project = makeProject()) {
     const options = directoryRequests.mock.calls.at(-1)?.[1]; expect(options?.onCreated).toBeTypeOf('function');
     await act(async () => { updateProjects([project]); options!.onCreated!(project); });
   }
-  return { key, directoryRequests, preflight, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, readRules: () => rules, readJobs: () => jobs, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
+  return { key, transferAttachments, readProjects: () => currentProjects, directoryRequests, preflight, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, readRules: () => rules, readJobs: () => jobs, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
@@ -111,4 +115,23 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     expect(JSON.stringify(f.readRules().find(rule => rule.id === 'old-rule'))).toBe(oldRule); expect(JSON.stringify(f.readWorkflows().find(workflow => workflow.id === 'old-workflow'))).toBe(oldWorkflow); expect(f.readWorkflows()).toHaveLength(2); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
     const draft = JSON.parse(localStorage.getItem(f.key)!); expect(draft.projectId).toBe('replacement-project'); expect(draft.ruleId).toBe(requested); expect(draft.creationKey).not.toBe('original-creation');
   });
+  it('原始聊天附件加入新项目后才预检制作，实际预检收到新项目附件编号', async () => {
+    const f = await fixture({ attachments: true });
+    expect(f.transferAttachments).not.toHaveBeenCalled();
+    await click('按这个方案制作'); await f.created(); await until(() => f.trigger.mock.calls.length === 1, 'attached project dispatch');
+    expect(f.transferAttachments).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation', turnId: 'plan-turn', projectId: 'new-project' });
+    expect(f.readProjects()[0].referenceFiles?.map(file => file.id)).toEqual(['project-original']);
+    expect(f.preflight).toHaveBeenCalledWith(expect.anything(), 'new-project', expect.anything(), expect.anything(), ['project-original']);
+    expect(f.trigger).toHaveBeenCalledOnce(); f.verifyLedger();
+  });
+  it('附件准备失败不会运行，单独重试附件也不调用模型，确认制作才派发', async () => {
+    const f = await fixture({ attachments: true, copyFailure: true });
+    await click('按这个方案制作'); await f.created(); await until(() => host.textContent!.includes('重试准备附件'), 'copy failure visible');
+    expect(f.trigger).not.toHaveBeenCalled(); expect(f.preflight).not.toHaveBeenCalled();
+    await click('重试准备附件'); await until(() => f.readProjects()[0].referenceFiles?.length === 1, 'copy retried');
+    expect(f.transferAttachments).toHaveBeenCalledTimes(2); expect(f.trigger).not.toHaveBeenCalled();
+    await click('按这个方案制作'); await until(() => f.trigger.mock.calls.length === 1, 'explicit dispatch after copy retry');
+    expect(f.trigger).toHaveBeenCalledOnce(); f.verifyLedger();
+  });
+
 });
