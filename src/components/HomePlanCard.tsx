@@ -13,7 +13,7 @@ import { HomeProductionResult } from './HomeProductionResult';
 import { automationProjectAvailability } from '../lib/automation-project-availability';
 import './home-plan-card.css';
 
-export function HomePlanCard({ props, session, onOpenModels, continuation, deferProject, onChooseProject }: { props: PageProps; session: NaturalAutomationSession; onOpenModels?: (capability?: string) => void; continuation?: AutomationContinuation; deferProject?: boolean; onChooseProject?: () => void }) {
+export function HomePlanCard({ props, session, onOpenModels, continuation, deferProject, onChooseProject, beforeRun, externalBusy = false }: { props: PageProps; session: NaturalAutomationSession; onOpenModels?: (capability?: string) => void; continuation?: AutomationContinuation; deferProject?: boolean; onChooseProject?: () => void; beforeRun?: () => Promise<boolean>; externalBusy?: boolean }) {
   const { draft, readiness, result } = session, plan = draft.plan!;
   const failedFollowup = draft.acceptedRequestId && draft.requestId !== draft.acceptedRequestId && session.planning.record?.id === draft.requestId && session.planning.record?.status === 'failed';
   const planError = result.error || (!failedFollowup ? session.error : undefined);
@@ -22,7 +22,7 @@ export function HomePlanCard({ props, session, onOpenModels, continuation, defer
   const panel = useRef<HTMLDivElement>(null), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { if (session.preparationRequest) setPreparing(true); }, [session.preparationRequest]);
-  const created = !!draft.ruleId, blocked = session.locked || session.planning.active || importing;
+  const created = !!draft.ruleId, blocked = externalBusy || session.locked || session.planning.active || importing;
   const answers = created ? readiness.answers : draft.preparationAnswers || {}, bindings = created ? readiness.bindings : session.bindings;
   const capabilities = created ? readiness.capabilities : [...new Set(result.compiled?.workflow.steps.filter(step => ['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind)).map(step => step.kind as keyof typeof bindings) || plan.steps.map(step => step.kind))];
   const missingModels = capabilities.filter(capability => { const selected = naturalModelSelection(props.configuration, capability, bindings[capability]); return !selected.model || !selected.credentialId; });
@@ -47,6 +47,7 @@ export function HomePlanCard({ props, session, onOpenModels, continuation, defer
     if (unknown) { await readiness.readDispatch(); return; }
     if (job) { props.navigate(hasWork ? plan.outputKind === 'image' ? 'images' : 'documents' : 'activity', draft.projectId); return; }
     if (projectMissing) { if (onChooseProject) onChooseProject(); else setPreparing(true); return; }
+    if (beforeRun && !await beforeRun()) return;
     if (missingModels.length) { onOpenModels?.(missingModels[0]); }
     const outcome = await session.createAndRun({ continuation });
     if (mounted.current) { if (outcome.status === 'needs-input') setPreparing(true); else if (['started', 'existing', 'unknown'].includes(outcome.status)) setPreparing(false); }
@@ -80,6 +81,6 @@ export function HomePlanCard({ props, session, onOpenModels, continuation, defer
       {!!readiness.errors.length && <ul className="home-plan-error">{readiness.errors.map((error, index) => <li key={index}>{error}</li>)}</ul>}
       <small>填好后，再点击上方“{primaryLabel}”。不会因填写资料或选择模型自动开始。</small>
     </div>}
-    <RememberedDetails className="home-plan-details" rememberKey={`workspace:${props.workspaceId}:home-plan-details`}><summary>步骤与高级设置<ChevronDown size={14} /></summary><NaturalAutomationPlanCard hideModels props={props} plan={plan} onChange={plan => session.setDraft(value => ({ ...value, plan }))} bindings={session.bindings} explicitBindings={draft.bindings} onBindings={bindings => session.setDraft(value => ({ ...value, bindings }))} compiled={result.compiled} error={result.error} disabled={session.frozen || session.planning.active} calendarResolved={draft.calendarResolved} onResolveCalendar={() => session.setDraft(value => ({ ...value, calendarResolved: true, plan: value.plan && { ...value.plan, trigger: { type: 'manual' } } }))} />{created && !session.savedRule?.enabled && <button type="button" className="btn btn-secondary" disabled={blocked} onClick={() => { void session.createAndRun({ repeat: true }); }}>明确再运行一次</button>}</RememberedDetails>
+    <RememberedDetails className="home-plan-details" rememberKey={`workspace:${props.workspaceId}:home-plan-details`}><summary>步骤与高级设置<ChevronDown size={14} /></summary><NaturalAutomationPlanCard hideModels props={props} plan={plan} onChange={plan => session.setDraft(value => ({ ...value, plan }))} bindings={session.bindings} explicitBindings={draft.bindings} onBindings={bindings => session.setDraft(value => ({ ...value, bindings }))} compiled={result.compiled} error={result.error} disabled={externalBusy || session.frozen || session.planning.active} calendarResolved={draft.calendarResolved} onResolveCalendar={() => session.setDraft(value => ({ ...value, calendarResolved: true, plan: value.plan && { ...value.plan, trigger: { type: 'manual' } } }))} />{created && !session.savedRule?.enabled && <button type="button" className="btn btn-secondary" disabled={blocked} onClick={() => { void session.createAndRun({ repeat: true }); }}>明确再运行一次</button>}</RememberedDetails>
   </section>{run && !unknown && <HomeProductionResult key={run.id} props={props} run={run} kind={plan.outputKind} />}</>;
 }

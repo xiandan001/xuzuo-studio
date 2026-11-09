@@ -46,6 +46,7 @@ export interface PromptTemplate extends PromptDraft {
 }
 export interface AssetApplication { token: string; workspaceId: string; projectId: string; file: ArtifactMetadata; }
 export interface PromptApplication {
+  referenceFiles?: import('./asset-types').ProjectReference[];
   token: string;
   projectId: string;
   category: PromptCategory;
@@ -141,7 +142,7 @@ export interface PageProps {
   onPromptApplied: (token: string) => void;
   onSavePrompt: (draft: PromptDraft, id?: string) => void;
   onManagePrompt?: (id: string, action: 'archive' | 'restore' | 'trash' | 'favorite' | 'unfavorite') => void;
-  onUsePrompt: (template: PromptTemplate, resolvedContent: string, targetProjectId?: string) => void;
+  onUsePrompt: (template: PromptTemplate, resolvedContent: string, targetProjectId?: string, options?: { referenceFiles?: import('./asset-types').ProjectReference[] }) => void;
   onMoveProject: (projectId: string, workspaceId: string, changes?: import('./lib/project-move').ProjectMoveChanges) => Promise<boolean>;
   taskProgress?: Record<string, number>;
   projects: Project[];

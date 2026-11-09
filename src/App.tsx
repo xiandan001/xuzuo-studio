@@ -93,7 +93,7 @@ function documentDraft(projectId: string) {
   try { return JSON.parse(localStorage.getItem(`xuzuo.document.${projectId}`) || 'null') as unknown; }
   catch { return null; }
 }
-type PromptIntent = { template: PromptTemplate; content: string };
+type PromptIntent = { template: PromptTemplate; content: string; referenceFiles?: import('./asset-types').ProjectReference[] };
 type ProjectStartOptions = NonNullable<Parameters<PageProps['onCreateProject']>[1]>;
 type ProjectConnectionRecovery = { workspaceId: string; directory: string; message: string; connected: boolean; action: 'new' | 'change' | 'commit'; kind: ProjectKind; promptIntent?: PromptIntent; selectionId?: string; draft?: RecoveryProjectFields };
 const projectCreationError = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : fallback;
@@ -630,15 +630,15 @@ export default function App() {
   const applyPrompt = (project: Project, intent: PromptIntent) => {
     setAssetToApply(undefined); assetApplicationRequest.current++;
     setActiveId(project.id); setView(project.kind === 'image' ? 'images' : 'documents');
-    setPromptToApply({ token: crypto.randomUUID(), projectId: project.id, category: intent.template.category, content: intent.content, mode: intent.template.mode, imagePreset: intent.template.imagePreset });
+    setPromptToApply({ token: crypto.randomUUID(), projectId: project.id, category: intent.template.category, content: intent.content, mode: intent.template.mode, imagePreset: intent.template.imagePreset, ...(intent.referenceFiles ? { referenceFiles: intent.referenceFiles } : {}) });
   };
-  const onUsePrompt: PageProps['onUsePrompt'] = (template, content, targetProjectId) => {
+  const onUsePrompt: PageProps['onUsePrompt'] = (template, content, targetProjectId, options) => {
     if (!template.builtin) setCustomPrompts(items => items.map(item => item.id === template.id && item.workspaceId === workspaceId ? { ...item, lastUsedAt: new Date().toISOString() } : item));
     const kind = template.category === 'general' ? projects.find(item => item.id === activeId)?.kind || 'ppt' : template.category;
     const project = targetProjectId ? projectsRef.current.find(item => item.id === targetProjectId && item.workspaceId === workspaceIdRef.current && item.kind === kind && !item.trashedAt) : projects.find(item => item.id === activeId && item.kind === kind) || projects.find(item => item.kind === kind);
     if (targetProjectId && !project) { notify('目标项目已不可用，请重新选择当前工作区中的项目。', 'error'); return; }
-    if (project) { applyPrompt(project, { template, content }); notify('提示词已填入工作台，可继续修改；尚未生成或计费。'); }
-    else { void beginProject(kind, { template, content }); }
+    if (project) { applyPrompt(project, { template, content, ...options }); notify('用途和参考资料已带入工作台，可继续修改；尚未生成或计费。'); }
+    else { void beginProject(kind, { template, content, ...options }); }
   };
   const onUseAsset = async (projectId: string, file: ArtifactMetadata) => {
     const sourceWorkspaceId = workspaceIdRef.current, request = ++assetApplicationRequest.current;

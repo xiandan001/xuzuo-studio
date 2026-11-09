@@ -5,7 +5,8 @@ const { atomicJson, checkedDirectory, checkedFile } = require('./workspace-paths
 const { calculateCost } = require('./live-cost.cjs');
 const { resolveOfficialBillingRule } = require('./official-billing.cjs');
 const { completeBillingUsage } = require('./billing-request-shape.cjs');
-const { executeChat, prepareChat } = require('./provider-chat.cjs');
+const { executeChat, prepareChat, prepareChatMessages, compactChatRequest } = require('./provider-chat.cjs');
+const { createChatAttachments, validPublicMetadata, backupBytes, MAX_COUNT, MAX_TOTAL } = require('./chat-attachments.cjs');
 const { parseNaturalAutomationPlan } = require('./natural-automation-plan.runtime.cjs');
 
 const idValid = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
@@ -34,7 +35,9 @@ function recordValid(value, input) {
   const ids = new Set();
   return value.turns.every(turn => {
     if (!turn || !idValid(turn.id) || ids.has(turn.id) || typeof turn.userText !== 'string' || turn.userText.length > 10000 || typeof turn.text !== 'string' || turn.text.length > 2 * 1024 * 1024 || !['running', 'complete', 'cancelled', 'failed', 'interrupted'].includes(turn.status) || !dateValid(turn.createdAt) || !dateValid(turn.updatedAt) || !Number.isSafeInteger(turn.costCents) || turn.costCents < 0 || !COST_STATES.has(turn.costState) || typeof turn.modelName !== 'string' || typeof turn.modelId !== 'string' || !turn._billing || turn._billing.modelId !== turn.modelId || !turn._billing.connection || !/^[a-f0-9]{64}$/.test(turn._fingerprint || '')) return false;
+    if (turn.requestText !== undefined && (typeof turn.requestText !== 'string' || !turn.requestText.trim() || turn.requestText.length > 20000)) return false;
     if (turn.plan !== undefined) { try { if (turn.mode !== 'plan' || turn.status !== 'complete') return false; parseNaturalAutomationPlan(JSON.stringify(turn.plan)); } catch { return false; } }
+    if ([turn.attachments, turn.contextAttachments].some(items => items !== undefined && (!Array.isArray(items) || items.length > MAX_COUNT || items.some(item => !validPublicMetadata(item)) || new Set(items.map(item => item.id)).size !== items.length || items.reduce((sum, item) => sum + item.bytes, 0) > MAX_TOTAL))) return false;
     ids.add(turn.id); return true;
   });
 }
@@ -50,7 +53,15 @@ function validateWorkspaceSnapshot(value) {
     ids.add(record.id);
     if (Buffer.byteLength(JSON.stringify(record)) > STORE_LIMIT) throw Error('备份中的单段聊天超过32MB，尚未恢复任何聊天。');
   }
-  return clone({ version: 1, workspaceId: value.workspaceId, conversations: value.conversations });
+  const files = value.attachmentFiles || []; if (!Array.isArray(files) || files.length > 2400) throw Error('聊天附件备份数量无效。');
+  const known = new Map(); let total = 0;
+  for (const file of files) {
+    const key = `${file.conversationId}/${file.attachment?.id}`;
+    if (!ids.has(file.conversationId) || !validPublicMetadata(file.attachment) || known.has(key) || Object.keys(file).some(key => !['conversationId', 'attachment', 'buffer', 'data'].includes(key))) throw Error('聊天附件备份格式或归属无效。');
+    const bytes = backupBytes(file); if ((total += bytes.length) > 512 * 1024 * 1024) throw Error('聊天附件备份合计超过512MB。'); known.set(key, file.attachment);
+  }
+  for (const record of value.conversations) for (const turn of record.turns) for (const item of [...(turn.attachments || []), ...(turn.contextAttachments || [])]) { const actual = known.get(`${record.id}/${item.id}`); if (!actual || ['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].some(key => actual[key] !== item[key])) throw Error('聊天备份缺少实际附件或引用信息不一致，尚未恢复。'); }
+  return { ...clone({ version: 1, workspaceId: value.workspaceId, conversations: value.conversations }), ...(files.length ? { attachmentFiles: files.map(file => ({ conversationId: file.conversationId, attachment: clone(file.attachment), buffer: backupBytes(file) })) } : {}) };
 }
 
 function summary(record) {
@@ -65,15 +76,18 @@ function checkedScope(input) {
 }
 function checkedStart(input) {
   checkedScope(input);
-  if (!idValid(input.id) || !idValid(input.credentialId) || typeof input.text !== 'string' || !input.text.trim() || input.text.length > 10000 || input.sourceTurnId !== undefined && !idValid(input.sourceTurnId)) throw Error('请输入不超过10000字的消息，并选择可用账户。');
+  if (!idValid(input.id) || !idValid(input.credentialId) || typeof input.text !== 'string' || !input.text.trim() && !input.attachmentIds?.length || input.text.length > 10000 || input.sourceTurnId !== undefined && !idValid(input.sourceTurnId)) throw Error('请输入不超过10000字的消息或添加附件，并选择可用账户。');
+  if (input.attachmentIds !== undefined && (!Array.isArray(input.attachmentIds) || input.attachmentIds.length > MAX_COUNT || input.attachmentIds.some(id => !idValid(id)) || new Set(input.attachmentIds).size !== input.attachmentIds.length)) throw Error('一次最多发送8份有效且不重复的本对话附件。');
+  if (input.requestText !== undefined && (typeof input.requestText !== 'string' || !input.requestText.trim() || input.requestText.length > 20000)) throw Error('场景要求需为不超过20000字的有效文字。');
   if (input.mode !== undefined && !['chat', 'plan'].includes(input.mode) || input.outputKind !== undefined && !['image', 'word', 'ppt', 'excel'].includes(input.outputKind)) throw Error('对话模式或制作类型无效。');
   const { connection, model } = input;
   if (!connection || !model || connection.demo || model.demo || connection.enabled !== true || model.enabled !== true || model.connectionId !== connection.id || !idValid(connection.id) || !idValid(model.id) || !['openai-chat', 'openai-responses', 'anthropic', 'gemini'].includes(connection.protocol) || !Array.isArray(model.capabilities) || !model.capabilities.includes('text')) throw Error('请选择已启用的文字模型与对应服务。');
   if (typeof model.modelId !== 'string' || !model.modelId.trim() || model.modelId.length > 240 || typeof model.name !== 'string' || model.name.length > 240) throw Error('模型名称或真实模型ID无效。');
   const safeConnection = Object.fromEntries(['id', 'name', 'providerId', 'protocol', 'baseUrl', 'enabled', 'status'].filter(key => connection[key] !== undefined).map(key => [key, connection[key]]));
   const safeModel = { id: model.id, name: model.name, modelId: model.modelId, connectionId: model.connectionId, capabilities: [...model.capabilities], enabled: true, ...(model.pricing ? { pricing: clone(model.pricing) } : {}) };
-  const result = { id: input.id, workspaceId: input.workspaceId, conversationId: input.conversationId, text: input.text.trim(), connection: safeConnection, model: safeModel, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort || 'auto', mode: input.mode || 'chat', ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}) };
-  prepareChat(result, [{ role: 'user', content: result.text }]);
+  const result = { id: input.id, workspaceId: input.workspaceId, conversationId: input.conversationId, text: input.text.trim() || '请查看附件并说明其中的内容。', connection: safeConnection, model: safeModel, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort || 'auto', mode: input.mode || 'chat', ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}), ...(input.attachmentIds?.length ? { attachmentIds: [...input.attachmentIds] } : {}) };
+  if (input.requestText !== undefined) result.requestText = input.requestText;
+  prepareChat(result, [{ role: 'user', content: result.requestText || result.text }]);
   return result;
 }
 function contextMessages(record, input) {
@@ -82,11 +96,12 @@ function contextMessages(record, input) {
   const turns = history.filter(turn => turn.status === 'complete' && (input.mode === 'plan' || (turn.mode || 'chat') === 'chat'));
   const kept = []; let size = input.text.length;
   for (const turn of turns.slice(-24).reverse()) {
-    const addition = turn.userText.length + turn.text.length;
+    const addition = (turn.requestText || turn.userText).length + turn.text.length;
     if (size + addition > 80000) break;
-    kept.unshift({ role: 'user', content: turn.userText }, { role: 'assistant', content: turn.text }); size += addition;
+    const attachments = turn.contextAttachments?.length ? turn.contextAttachments : turn.attachments;
+    kept.unshift({ role: 'user', content: turn.requestText || turn.userText, ...(attachments?.length ? { attachments } : {}) }, { role: 'assistant', content: turn.text }); size += addition;
   }
-  return { messages: [...kept, { role: 'user', content: input.text }], truncated: kept.length < turns.length * 2 };
+  return { messages: [...kept, { role: 'user', content: input.requestText || input.text }], truncated: kept.length < turns.length * 2 };
 }
 function entriesFor(record) {
   return record.turns.map(turn => ({ id: `chat-${signature([record.workspaceId, record.id, turn.id]).slice(0, 40)}`, workspaceId: record.workspaceId, scope: 'chat', conversationId: record.id,
@@ -96,10 +111,41 @@ function entriesFor(record) {
     time: turn.createdAt, status: turn.status === 'running' ? 'processing' : turn.status === 'complete' ? 'complete' : turn.status === 'cancelled' ? 'cancelled' : 'failed', billingMode: 'live', quantity: 1 }));
 }
 
-function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRates, onChanged = () => undefined, fileSystem = fs, execute = executeChat, cacheBudgetBytes = STORE_LIMIT } = {}) {
+function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRates, onChanged = () => undefined, fileSystem = fs, execute = executeChat, cacheBudgetBytes = STORE_LIMIT, attachFiles, extractText, verifyProjectAttachment, previewImage } = {}) {
   if (typeof credentialStore?.withSecret !== 'function' || typeof directory !== 'string' || !path.isAbsolute(directory)) throw TypeError('普通聊天缺少本地存储目录或凭证库。');
   const root = path.join(directory, 'chat-v1'), workspaces = new Map(), records = new Map(), workspaceLoads = new Map(), queues = new Map(), active = new Map(), dirty = new Map(), weights = new Map();
   let closing = false;
+  const attachments = createChatAttachments({ directory, fileSystem, extractText });
+  async function attachmentContext(input, context, currentIds) {
+    const byteLimit = input.connection.protocol === 'gemini' ? 14 * 1024 * 1024 : MAX_TOTAL;
+    const indexed = currentIds.length ? await attachments.list(input) : [], selected = currentIds.map(id => indexed.find(item => item.id === id));
+    if (selected.some(item => !item)) throw Error('附件不属于这段对话，请重新添加。');
+    if (selected.reduce((sum, file) => sum + file.bytes, 0) > byteLimit) throw Error(input.connection.protocol === 'gemini' ? '本应用当前Gemini内联附件需为完整请求预留编码空间，请将附件合计缩小到14MB内。' : '本轮附件总大小超过80MB，请减少附件。');
+    const current = []; for (const id of currentIds) current.push(await attachments.read(input, id));
+    const messages = context.messages.map((message, index) => index === context.messages.length - 1 ? { ...message, ...(current.length ? { attachments: current } : {}) } : { ...message });
+    const textSize = file => (file.extractedText?.length || (file.kind === 'text' ? file.buffer.toString('utf8').length : 0)) + (file.kind === 'text' || file.extractedText ? 300 : 0);
+    const currentText = current.reduce((sum, file) => sum + textSize(file), 0);
+    let trimmed = false;
+    while (messages.length > 1 && messages.reduce((sum, message) => sum + message.content.length, 0) + currentText > 199000) { messages.splice(0, 2); trimmed = true; }
+    const included = new Map(), skipped = []; let bytes = 0, pdfBytes = 0, textBytes = messages.reduce((sum, message) => sum + message.content.length, 0);
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]; if (!message.attachments?.length) continue;
+      const kept = [];
+      for (const item of message.attachments) {
+        if (included.has(item.id)) continue;
+        if (index !== messages.length - 1 && (included.size >= MAX_COUNT || bytes + item.bytes > byteLimit || item.mimeType === 'application/pdf' && pdfBytes + item.bytes >= 50 * 1024 * 1024 || (item.kind === 'image' || item.mimeType === 'application/pdf') && !input.model.capabilities.includes('vision'))) { skipped.push(item.name); continue; }
+        let file;
+        try { file = item.buffer ? item : await attachments.read(input, item.id); if (file.sha256 !== item.sha256 || file.bytes !== item.bytes) throw Error('changed'); }
+        catch (cause) { if (index === messages.length - 1) throw cause; skipped.push(item.name); continue; }
+        if (index !== messages.length - 1 && textBytes + textSize(file) > 199000) { skipped.push(item.name); continue; }
+        included.set(file.id, file); bytes += file.bytes; textBytes += textSize(file); if (file.mimeType === 'application/pdf') pdfBytes += file.bytes; kept.push(file);
+      }
+      if (kept.length) message.attachments = kept; else delete message.attachments;
+    }
+    const prepared = await prepareChatMessages(input, messages), preparedRequest = compactChatRequest(prepareChat(input, prepared));
+    const metadata = file => Object.fromEntries(['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].map(key => [key, file[key]]));
+    return { messages: execute === executeChat ? [] : prepared, preparedRequest, current: current.map(metadata), context: [...included.values()].map(metadata), trimmed, ...(skipped.length ? { notice: `本轮未带入部分较早的附件（超出数量/大小限制、当前模型不支持或原文件不可用）：${[...new Set(skipped)].slice(0, 4).join('、')}。可重新添加并选择支持看图的模型。` } : {}) };
+  }
   const recordWeight = record => 1024 + record.turns.reduce((sum, turn) => sum + 4096 + 2 * (turn.userText.length + turn.text.length), 0);
   const cachedBytes = () => [...weights.values()].reduce((sum, weight) => sum + weight, 0);
   const emit = (record, ledgerChanged = false, changedTurn = record.turns.at(-1)) => { const key = `${record.workspaceId}/${record.id}`; if (records.has(key)) weights.set(key, recordWeight(record)); try { onChanged({ workspaceId: record.workspaceId, conversationId: record.id, ledgerChanged, ...(changedTurn ? { turn: clone(publicTurn(changedTurn)) } : {}), title: record.title, updatedAt: record.updatedAt }); } catch { /* A renderer cannot interrupt persistence. */ } };
@@ -209,7 +255,8 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
   async function pump(input, operation, messages) {
     const key = keyOf(input); let terminal;
     try {
-      const result = await execute(input, messages, { credentialStore, fetchImpl, signal: operation.controller.signal, onText: text => {
+      const preparedRequest = operation.preparedRequest; delete operation.preparedRequest;
+      const result = await execute(input, messages, { credentialStore, fetchImpl, preparedRequest, signal: operation.controller.signal, onText: text => {
         const record = records.get(key), turn = record?.turns.find(item => item.id === input.id); if (!turn || !isActive(turn)) return;
         turn.text = text; turn.updatedAt = now(); record.updatedAt = turn.updatedAt;
         if (Date.now() - operation.emittedAt >= 100) { operation.emittedAt = Date.now(); emit(record); }
@@ -260,14 +307,21 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       if (active.has(key) || record.turns.some(isActive)) throw Error('这段对话正在回答，可以停止后再发送；输入已保留。');
       if (active.size >= 2) throw Error('已有两段对话正在回答，请稍候或先停止其中一段；输入已保留。');
       if (input.sourceTurnId && !record.turns.some(turn => turn.id === input.sourceTurnId && !isActive(turn))) throw Error('找不到要重试的原消息，请重新编辑后发送。');
-      const context = contextMessages(record, input), createdAt = now(), fx = await fxRates?.get(createdAt);
+      const original = input.sourceTurnId && record.turns.find(turn => turn.id === input.sourceTurnId);
+      const currentIds = input.attachmentIds || original?.attachments?.map(item => item.id) || [];
+      const context = contextMessages(record, input), material = await attachmentContext(input, context, currentIds), createdAt = now(), fx = await fxRates?.get(createdAt);
       const billing = { modelId: input.model.modelId, connection: input.connection, operation: 'text', startedAt: createdAt, pricing: input.model.pricing, fx };
       billing.ruleSnapshot = resolveOfficialBillingRule(billing, billing.pricing);
       const turn = { id: input.id, userText: input.text, text: '', status: 'running', createdAt, updatedAt: createdAt, modelName: input.model.name, modelId: input.model.modelId, modelConfigId: input.model.id, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort, mode: input.mode, ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}), ...(context.truncated ? { contextTruncated: true } : {}), costCents: 0, costState: 'unknown', _fingerprint: fingerprint, _requestStarted: true, _billing: billing };
+      if (input.requestText) turn.requestText = input.requestText;
+      if (material.current.length) turn.attachments = material.current;
+      if (material.context.length) turn.contextAttachments = material.context;
+      if (material.notice) { turn.attachmentNotice = material.notice; turn.contextTruncated = true; }
+      if (material.trimmed) turn.contextTruncated = true;
       if (!record.turns.length) record.title = input.text.replace(/\s+/g, ' ').slice(0, 36);
       record.turns.push(turn); record.updatedAt = createdAt;
       if (closing || active.size >= 2) throw Error('对话服务正在忙，请稍候再发送；输入已保留。');
-      const operation = { turnId: input.id, controller: new AbortController(), emittedAt: 0, checkpointAt: Date.now(), checkpoint: undefined, task: undefined }; active.set(key, operation);
+      const operation = { turnId: input.id, controller: new AbortController(), emittedAt: 0, checkpointAt: Date.now(), checkpoint: undefined, task: undefined, preparedRequest: material.preparedRequest }; active.set(key, operation);
       try { await persist(record); }
       catch (error) {
         if (error.chatRecordWritten) {
@@ -284,7 +338,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
         return publicConversation(record);
       }
       emit(record, true);
-      operation.task = pump(input, operation, context.messages).catch(() => { const saved = records.get(key); if (saved) emit(saved, true); }).finally(() => { if (active.get(key) === operation) active.delete(key); });
+      operation.task = pump(input, operation, material.messages).catch(() => { const saved = records.get(key); if (saved) emit(saved, true); }).finally(() => { if (active.get(key) === operation) active.delete(key); });
       return publicConversation(record);
     });
   }
@@ -345,6 +399,20 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
   }
   return {
     start,
+    async importAttachments(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有导入新附件。'); return serial(input.workspaceId, () => attachments.importPaths(input, input.paths)); },
+    async previewAttachment(input) {
+      checkedScope(input); const file = await attachments.read(input, input.attachmentId);
+      if (file.kind === 'image') {
+        if (previewImage) { const value = await previewImage(file); if (!value || !/^data:image\/(?:png|jpeg|webp);base64,/.test(value.dataUrl || '') || value.dataUrl.length > 4 * 1024 * 1024 || !Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) || value.width < 1 || value.height < 1 || value.width > 1024 || value.height > 1024) throw Error('图片缩略预览未能准备完成，原图和发送设置保留。'); return value; }
+        const dimensions = require('./image-output-formats.cjs').rasterDimensions(file.buffer);
+        if (file.bytes > 2 * 1024 * 1024 || dimensions.width * dimensions.height > 8000000) throw Error('这张图较大，需要桌面应用的缩略预览；原图仍可正常发送和用于制作。');
+        return { mimeType: file.mimeType, dataUrl: `data:${file.mimeType};base64,${file.buffer.toString('base64')}`, width: dimensions.width, height: dimensions.height };
+      }
+      if (file.kind === 'text') return { mimeType: file.mimeType, text: new TextDecoder('utf-8', { fatal: true }).decode(file.buffer).slice(0, 100000) };
+      if (file.extractedText) return { mimeType: file.mimeType, text: file.extractedText };
+      return { mimeType: file.mimeType };
+    },
+    async attachToProject(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有复制新附件。'); return serial(input.workspaceId, () => attachments.copyToProject(input, input.attachmentIds, input.projectId, attachFiles, verifyProjectAttachment)); },
     async list(workspaceId) { await recover(workspaceId); return [...(await loadWorkspace(workspaceId)).items.values()].map(({ ledger: _ledger, ...info }) => clone(info)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
     async read(input) { checkedScope(input); await recover(input.workspaceId); return publicConversation(await loadRecord(input)); },
     async cancel(input) {
@@ -367,15 +435,20 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       await recover(workspaceId);
       return serial(workspaceId, async () => {
         if ([...active.keys()].some(key => key.startsWith(`${workspaceId}/`)) || [...dirty.keys()].some(key => key.startsWith(`${workspaceId}/`))) throw Error('请先结束本工作区的回答并保存记录，再导出聊天备份。');
-        const conversations = []; for (const info of (await loadWorkspace(workspaceId)).items.values()) conversations.push(clone(await loadRecord({ workspaceId, conversationId: info.id })));
-        return { version: 1, workspaceId, conversations };
+        const conversations = [], attachmentFiles = [];
+        for (const info of (await loadWorkspace(workspaceId)).items.values()) {
+          const record = clone(await loadRecord({ workspaceId, conversationId: info.id })); conversations.push(record);
+          const refs = new Set(record.turns.flatMap(turn => [...(turn.attachments || []), ...(turn.contextAttachments || [])]).map(item => item.id));
+          for (const id of refs) { const file = await attachments.read({ workspaceId, conversationId: info.id }, id); attachmentFiles.push({ conversationId: info.id, attachment: Object.fromEntries(['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].map(key => [key, file[key]])), buffer: file.buffer }); }
+        }
+        return { version: 1, workspaceId, conversations, ...(attachmentFiles.length ? { attachmentFiles } : {}) };
       });
     },
     async restoreWorkspace(value) {
       const snapshot = await validateRestore(value);
       return serial(snapshot.workspaceId, async () => {
         await validateRestore(snapshot); const state = await loadWorkspace(snapshot.workspaceId); let restored = 0, skipped = 0;
-        for (const record of snapshot.conversations) { if (state.items.has(record.id)) { skipped++; continue; } for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.error = '从备份恢复了未结束的回答，不会自动继续或重发。'; turn.costState = 'unknown'; } await persist(record); restored++; emit(record, true); }
+        for (const record of snapshot.conversations) { const files = (snapshot.attachmentFiles || []).filter(file => file.conversationId === record.id); if (files.length) await attachments.restore({ workspaceId: snapshot.workspaceId, conversationId: record.id }, files); if (state.items.has(record.id)) { skipped++; continue; } for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.error = '从备份恢复了未结束的回答，不会自动继续或重发。'; turn.costState = 'unknown'; } await persist(record); restored++; emit(record, true); }
         return { restored, skipped };
       });
     },

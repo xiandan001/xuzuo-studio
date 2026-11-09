@@ -388,4 +388,4 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
   return { ...Object.fromEntries(Object.entries(api).map(([name, action]) => [name, (...args) => operations.track(() => action(...args))])), drain: operations.drain, flush: operations.flush };
 }
 
-module.exports = { createArtifactStore, MAX_FILE_BYTES };
+module.exports = { createArtifactStore, MAX_FILE_BYTES, safeName };

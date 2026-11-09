@@ -1,33 +1,49 @@
 const { createContext, endpoint, failure, request, readLimited, raceSignal, normalizedUsage, safeId, ModelRuntimeError } = require('./provider-http.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
+const { prepareChatMessages, chatMessageContent } = require('./chat-message-content.cjs');
 
 const LIMIT = 2 * 1024 * 1024;
-const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你没有在此对话中执行制作、访问文件或联网搜索的工具，不声称已经执行这些操作。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
+const preparedRequests = new WeakMap();
+const requestBinding = input => JSON.stringify([input.workspaceId || '', input.conversationId || '', input.id || '', input.connection.id, input.connection.providerId, input.connection.protocol, input.connection.baseUrl, input.model.modelId, input.credentialId, input.reasoningEffort || 'auto', input.mode || 'chat', input.outputKind || 'image', input.text || '', input.attachmentIds || []]);
+const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你可以读取用户随消息提供的附件内容，但没有访问其他本机文件、联网搜索或执行制作的工具，不声称已经执行这些操作。Office附件如果标记为正文纯文字，不能声称已经检查原稿图片、排版或重算公式。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
 
 function prepareChat(input, messages) {
   const { connection, model, reasoningEffort } = input, protocol = connection.protocol;
   const instructions = input.mode === 'plan' ? require('./automation-planning.cjs').plannerPrompt(input.outputKind || 'image') : INSTRUCTIONS;
   const fields = reasoningRequestFields(connection, model, reasoningEffort), headers = { 'content-type': 'application/json' };
+  const content = chatMessageContent(input, messages);
   let body, url;
   if (protocol === 'openai-responses') {
     url = endpoint(connection.baseUrl, 'responses');
-    body = { model: model.modelId, instructions, input: messages, max_output_tokens: 8192, store: false, stream: true, ...fields };
+    body = { model: model.modelId, instructions, input: content, max_output_tokens: 8192, store: false, stream: true, ...fields };
   } else if (protocol === 'openai-chat') {
     url = endpoint(connection.baseUrl, 'chat/completions');
-    body = { model: model.modelId, messages: [{ role: 'system', content: instructions }, ...messages], stream: true, stream_options: { include_usage: true }, [connection.providerId === 'openai' ? 'max_completion_tokens' : 'max_tokens']: 8192, ...fields };
+    body = { model: model.modelId, messages: [{ role: 'system', content: instructions }, ...content], stream: true, stream_options: { include_usage: true }, [connection.providerId === 'openai' ? 'max_completion_tokens' : 'max_tokens']: 8192, ...fields };
     if (connection.providerId === 'openai') body.store = false;
     if (connection.providerId === 'minimax') body.reasoning_split = true;
   } else if (protocol === 'anthropic') {
     url = endpoint(connection.baseUrl, /\/v1\/?$/.test(connection.baseUrl) ? 'messages' : 'v1/messages');
     headers['anthropic-version'] = '2023-06-01';
-    body = { model: model.modelId, system: instructions, messages, max_tokens: 8192, stream: true, ...fields };
+    body = { model: model.modelId, system: instructions, messages: content, max_tokens: 8192, stream: true, ...fields };
   } else if (protocol === 'gemini') {
     const target = new URL(endpoint(connection.baseUrl, `models/${encodeURIComponent(model.modelId.replace(/^models\//, ''))}:streamGenerateContent`));
     target.searchParams.set('alt', 'sse'); url = target.toString();
-    body = { systemInstruction: { parts: [{ text: instructions }] }, contents: messages.map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })), generationConfig: { maxOutputTokens: 8192, ...fields.generationConfig } };
+    body = { systemInstruction: { parts: [{ text: instructions }] }, contents: content, generationConfig: { maxOutputTokens: 8192, ...fields.generationConfig } };
   } else throw failure('UNSUPPORTED_PROTOCOL', '这个模型接口暂不支持普通聊天，请选择文字模型。');
-  return { url, headers, body, billingRequestSnapshot: createBillingRequestSnapshot({ connection, model, kind: 'text' }, body) };
+  const serializedBody = JSON.stringify(body);
+  if (Buffer.byteLength(serializedBody, 'utf8') > 112 * 1024 * 1024) throw failure('ATTACHMENT_TOO_LARGE', '编码后的附件请求过大，请减少文件后再发送。');
+  const prepared = { url, headers, body, serializedBody, billingRequestSnapshot: createBillingRequestSnapshot({ connection, model, kind: 'text' }, body) };
+  preparedRequests.set(prepared, requestBinding(input));
+  return prepared;
+}
+
+function compactChatRequest(prepared) {
+  const binding = preparedRequests.get(prepared);
+  if (!binding) throw failure('INVALID_REQUEST', '聊天请求尚未完成有效预检。');
+  const compact = { url: prepared.url, headers: prepared.headers, serializedBody: prepared.serializedBody, billingRequestSnapshot: prepared.billingRequestSnapshot };
+  preparedRequests.set(compact, binding);
+  return compact;
 }
 
 function createChatDecoder(protocol, context, onText) {
@@ -132,8 +148,14 @@ async function consumeEvents(response, decoder, context) {
   finally { reader.releaseLock(); }
 }
 
-async function executeChat(input, messages, { credentialStore, fetchImpl = fetch, signal, onText } = {}) {
-  const prepared = prepareChat(input, messages), context = createContext(signal), decoder = createChatDecoder(input.connection.protocol, context, onText);
+async function executeChat(input, messages, { credentialStore, fetchImpl = fetch, signal, onText, loadModule, extractText, preparedRequest } = {}) {
+  let prepared;
+  if (preparedRequest) {
+    if (Object.hasOwn(preparedRequest, 'body') || preparedRequests.get(preparedRequest) !== requestBinding(input)) throw failure('INVALID_REQUEST', '已预检的聊天内容或模型设置已变化，请重新读取附件后发送。');
+    prepared = preparedRequest;
+  } else prepared = compactChatRequest(prepareChat(input, await prepareChatMessages(input, messages, { loadModule, extractText, signal })));
+  preparedRequests.delete(prepared);
+  const context = createContext(signal), decoder = createChatDecoder(input.connection.protocol, context, onText);
   try {
     return await credentialStore.withSecret(input.credentialId, input.connection.id, async secret => {
       if (typeof secret !== 'string' || !secret.trim()) throw failure('INVALID_CREDENTIAL', '所选账户没有可用 Key，请在模型设置中重新录入。', context);
@@ -143,7 +165,7 @@ async function executeChat(input, messages, { credentialStore, fetchImpl = fetch
       else if (input.connection.protocol === 'gemini') headers['x-goog-api-key'] = secret;
       else headers.authorization = `Bearer ${secret}`;
       try {
-        const response = await request(fetchImpl, prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body) }, context);
+        const response = await request(fetchImpl, prepared.url, { method: 'POST', headers, body: prepared.serializedBody }, context);
         if (/text\/event-stream/i.test(response.headers?.get('content-type') || '')) await consumeEvents(response, decoder, context);
         else { let data; try { data = JSON.parse((await readLimited(response, LIMIT, context)).toString('utf8')); } catch (error) { if (error instanceof ModelRuntimeError) throw error; throw failure('INVALID_RESPONSE', '模型没有返回有效的回答数据。', context); } decoder.json(data); }
         return { ...decoder.result(), billingRequestSnapshot: prepared.billingRequestSnapshot, requestStarted: context.requestStarted };
@@ -160,4 +182,4 @@ async function executeChat(input, messages, { credentialStore, fetchImpl = fetch
   } finally { context.cleanup(); }
 }
 
-module.exports = { executeChat, prepareChat, createChatDecoder, consumeEvents };
+module.exports = { executeChat, prepareChat, prepareChatMessages, compactChatRequest, createChatDecoder, consumeEvents };

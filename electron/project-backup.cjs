@@ -3,7 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson, inside, key } = require('./workspace-paths.cjs');
 const { hash, MAX_FILE, MAX_TOTAL, MAX_FILES, safePath, inspectZip, withoutSecrets, validateManifest, createIdMap, remap, mappedName, validId } = require('./backup-format.cjs');
-const { chatPath, readChatBackups, safeChatBackup, remapChatBackups } = require('./chat-backup.cjs');
+const { readChatBackups, safeChatBackup, remapChatBackups, chatBackupFiles, cacheChatReceipt, loadChatReceipt } = require('./chat-backup.cjs');
 const { validateQuoteBackups } = require('./quote-backup.cjs');
 const { validateRecords } = require('./run-history-store.cjs');
 const { validateAssetCategoryState, remapAssetCategoryState } = require('./asset-categories.cjs');
@@ -157,7 +157,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (manifest.files.some(item => item.path.toLowerCase() === relative.toLowerCase())) throw Error('备份包含重复文件位置，未生成不完整备份。');
       manifest.files.push({ path: relative, bytes: buffer.length, sha256: hash(buffer) }); zip.file(relative, buffer, { createFolders: false });
     }
-    for (const snapshot of chats) addBytes(Buffer.from(JSON.stringify(snapshot) + '\n'), chatPath(snapshot.workspaceId));
+    for (const snapshot of chats) for (const file of chatBackupFiles(snapshot)) addBytes(file.buffer, file.name);
     async function add(source, relative) {
       safePath(relative); const stat = await checkedFile(fs, source), original = await fs.readFile(source), after = await checkedFile(fs, source);
       let buffer = original;
@@ -211,9 +211,10 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
     return { saved: true, path: filePath, backupId: manifest.backupId, files: manifest.files.length, bytes: total, projects: projects.length, workspaces: workspaces.length };
   }
   async function completeReceipt(receipt) {
+    const chatSnapshots = await loadChatReceipt(fs, receipts, receipt.backupId, receipt.chats || []);
     if (receipt.chats?.length) {
       if (!chatManager()?.restoreWorkspace || !chatManager()?.validateWorkspaceSnapshot) throw Error('聊天恢复模块尚未就绪，恢复凭据和原数据保留。');
-      for (const snapshot of receipt.chats) await chatManager().validateWorkspaceSnapshot(snapshot);
+      for (const snapshot of chatSnapshots) await chatManager().validateWorkspaceSnapshot(snapshot);
     }
     await artifactStore.importEntries(receipt.artifacts);
     await workspaceStorage.importLocations(receipt.locations);
@@ -236,7 +237,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       if (!automationManager()?.importEntries) throw new Error('自动化恢复模块尚未就绪，恢复凭据和文件已保留。');
       await automationManager().importEntries({ records: receipt.automations, idMap: receipt.idMap, backupId: receipt.backupId });
     }
-    for (const snapshot of receipt.chats || []) await chatManager().restoreWorkspace(snapshot);
+    for (const snapshot of chatSnapshots) await chatManager().restoreWorkspace(snapshot);
     receipt.phase = 'native-ready'; await atomicJson(fs, path.join(receipts, `${receipt.backupId}.json`), receipt);
     return { meta: receipt.meta, locations: receipt.locations, idMap: receipt.idMap, backupId: receipt.backupId, receiptPath: path.join(receipts, `${receipt.backupId}.json`) };
   }
@@ -342,6 +343,7 @@ function createProjectBackup({ directory, workspaceStorage, artifactStore, liveE
       for (const entry of record.ledger) if (entry.status === 'processing') { entry.status = 'cancelled'; entry.costState = 'unknown'; }
     }
     const receipt = { version: 1, backupId: manifest.backupId, sourcePath: filePath, createdAt: new Date().toISOString(), phase: 'prepared', importRoot, idMap, meta, locations, artifacts, records, batches: remap(manifest.batches || [], idMap, pathMap, renamedNames), ...(manifest.automations ? { automations: manifest.automations } : {}), ...(manifest.modelReceipts ? { modelReceipts: manifest.modelReceipts } : {}), ...(restoredChats.length ? { chats: restoredChats } : {}) };
+    if (receipt.chats?.length) receipt.chats = await cacheChatReceipt(fs, receipts, receipt.backupId, receipt.chats);
     await atomicJson(fs, receiptFile, receipt); return completeReceipt(receipt);
   }
   return {

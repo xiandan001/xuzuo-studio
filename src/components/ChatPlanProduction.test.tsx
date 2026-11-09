@@ -33,7 +33,7 @@ const plan = { version: 1 as const, name: '产品合作说明书', objective: '�
 const turn: ChatTurn = { id: 'plan-turn', userText: '制作完整合作说明书', text: JSON.stringify(plan), mode: 'plan', plan, status: 'complete', modelName: '已选择的文字模型', modelId: 'gpt-6.1-terra', modelConfigId: 'text-model', credentialId: 'account-metadata', reasoningEffort: 'high', costCents: 3, costState: 'calculated', createdAt: timestamp, updatedAt: timestamp };
 const makeProject = (id = 'new-project'): Project => ({ id, workspaceId: 'workspace', name: plan.name, kind: 'word', description: plan.objective, costCents: 0, status: 'draft', version: 0, accent: 'blue', updatedAt: timestamp });
 
-async function fixture({ withProject = false, missing = '', staleRule = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean } = {}) {
+async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean } = {}) {
   const conversationId = 'conversation', workspaceId = 'workspace';
   const planner = { modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: 'high' as const };
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
@@ -54,16 +54,22 @@ async function fixture({ withProject = false, missing = '', staleRule = false }:
     jobs = [...jobs, value]; return structuredClone(value);
   });
   const planningStart = vi.fn(async () => { throw Error('A saved chat plan must not be planned or billed again'); });
-  const desktop = { automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
+  const source = { id: 'prior-chat-image', name: '上轮参考图.png', mimeType: 'image/png', kind: 'image' as const, bytes: 123, sha256: 'a'.repeat(64), createdAt: timestamp };
+  const activeTurn = attachments ? { ...turn, attachments: [], contextAttachments: [source] } : turn;
+  const copiedFile = { id: 'copied-reference', name: source.name, mimeType: source.mimeType, bytes: source.bytes, kind: source.kind, createdAt: timestamp, path: '', projectId: 'new-project' };
+  let failCopy = copyFails;
+  const attachToProject = vi.fn(async (input: { projectId: string; attachmentIds: string[] }) => { if (failCopy) { failCopy = false; throw Error('参考材料复制失败，原文件保留'); } return [{ ...copiedFile, projectId: input.projectId }]; });
+  const desktop = { chat: { attachToProject }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
   Object.defineProperty(window, 'desktop', { configurable: true, value: desktop });
-  const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn(async () => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
+  const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn(async (..._args: unknown[]) => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
   const ledger = Object.freeze([{ id: 'prior-cost', projectId: 'trashed-project', projectName: '旧项目', action: '初次生成', model: '已调用的模型', costCents: 27, costState: 'calculated', billingMode: 'live', time: timestamp, status: 'complete' }]) as unknown as LedgerEntry[];
   const savedLedger = JSON.stringify(ledger), key = naturalAutomationDraftStorageKey(workspaceId, { keyPrefix: `xuzuo-chat-production-v1:${conversationId}:${turn.id}` });
   if (staleRule) {
     const saved: NaturalAutomationDraft = { version: 1, workspaceId, projectId: oldRule.projectId, input: turn.userText, acceptedInput: turn.userText, planner, bindings: { text: planner }, plan, ruleId: oldRule.id, workflowId: oldWorkflow.id, workflowSaved: true, creationKey: 'original-creation', preparationAnswers: {} };
     localStorage.setItem(key, JSON.stringify(saved));
   }
-  let updateProjects!: (projects: Project[]) => void, savedWorkflows: WorkflowDefinition[] = staleRule ? [structuredClone(oldWorkflow)] : [];
+  let updateProjects!: (projects: Project[]) => void, applyProjectChanges!: (id: string, changes: Partial<Project>) => void, pendingReferences: { id: string; changes: Partial<Project> } | undefined, savedWorkflows: WorkflowDefinition[] = staleRule ? [structuredClone(oldWorkflow)] : [];
+  const updateProject = vi.fn((id: string, changes: Partial<Project>) => { if (delayReferences) pendingReferences = { id, changes }; else applyProjectChanges(id, changes); });
   const saveWorkflow = vi.fn((draft: WorkflowDraft, id?: string) => {
     const value = { ...structuredClone(draft), id: id!, workspaceId, updatedAt: new Date().toISOString() };
     updateWorkflows(current => [...current.filter(flow => flow.id !== id), value]); return true;
@@ -72,18 +78,41 @@ async function fixture({ withProject = false, missing = '', staleRule = false }:
   function Harness() {
     const [projects, setProjects] = useState<Project[]>(withProject ? [makeProject()] : []), [workflows, setWorkflows] = useState<WorkflowDefinition[]>(savedWorkflows);
     updateProjects = setProjects; updateWorkflows = setWorkflows; savedWorkflows = workflows;
+    applyProjectChanges = (id, changes) => setProjects(current => current.map(project => project.id === id ? { ...project, ...changes } : project));
     const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model], credentials: missing === 'key' ? [] : [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }], workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests } as unknown as PageProps;
-    return <ChatPlanProduction props={props} turn={turn} conversationId={conversationId} planner={planner} />;
+    props.onUpdateProject = updateProject;
+    return <ChatPlanProduction props={props} turn={activeTurn} conversationId={conversationId} planner={planner} />;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
   async function created(project = makeProject()) {
     const options = directoryRequests.mock.calls.at(-1)?.[1]; expect(options?.onCreated).toBeTypeOf('function');
     await act(async () => { updateProjects([project]); options!.onCreated!(project); });
   }
-  return { key, directoryRequests, preflight, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, readRules: () => rules, readJobs: () => jobs, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
+  async function releaseReferences() { expect(pendingReferences).toBeTruthy(); const value = pendingReferences!; pendingReferences = undefined; await act(async () => applyProjectChanges(value.id, value.changes)); }
+  return { key, directoryRequests, preflight, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, attachToProject, updateProject, releaseReferences, readRules: () => rules, readJobs: () => jobs, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
+  it('上轮聊天材料先复制成真实项目引用，等props回显后才预检派发', async () => {
+    const f = await fixture({ attachments: true, delayReferences: true }); await click('按这个方案制作'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
+    await until(() => f.updateProject.mock.calls.length === 1, 'copied references waiting for parent echo');
+    expect(f.attachToProject).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation', projectId: 'new-project', attachmentIds: ['prior-chat-image'] });
+    expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
+    await f.releaseReferences(); await until(() => f.trigger.mock.calls.length === 1, 'dispatch after material adoption');
+    expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); expect(f.attachToProject).toHaveBeenCalledOnce(); f.verifyLedger();
+    await click('查看制作进度'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.trigger).toHaveBeenCalledOnce();
+  });
+  it('材料复制失败不触发付费流程，重试成功后只派发一次且旧费用保留', async () => {
+    const f = await fixture({ withProject: true, attachments: true, copyFails: true }); await click('按这个方案制作');
+    await until(() => host.textContent!.includes('参考材料复制失败'), 'copy failure shown'); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
+    await click('按这个方案制作'); await until(() => f.trigger.mock.calls.length === 1, 'retry material preparation'); expect(f.attachToProject).toHaveBeenCalledTimes(2); expect(f.preflight).toHaveBeenCalledOnce(); f.verifyLedger();
+    await click('查看制作进度'); expect(f.attachToProject).toHaveBeenCalledTimes(2);
+  });
+  it('仅保存带附件的方案不复制、不付费，实际开始时再带入材料', async () => {
+    const f = await fixture({ withProject: true, attachments: true }); await click('以后再做'); await until(() => f.readRules().length === 1, 'saved material plan');
+    expect(f.attachToProject).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
+    await click('继续制作'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
+  });
   it('无项目先保留完整方案，明确制作并完成项目回调后才预检和派发一次', async () => {
     const f = await fixture(); expect(host.textContent).toContain(plan.name); expect(host.textContent).toContain('开始制作时选择'); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
     await click('按这个方案制作'); expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();

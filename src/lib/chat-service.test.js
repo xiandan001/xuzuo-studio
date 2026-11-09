@@ -83,7 +83,23 @@ describe('无需项目的普通聊天持久化与计费', () => {
   it('流式通知节流，不能每个token触发费用总览刷新', async () => {
     const f = await setup({ execute: async (_input, _messages, control) => { for (let n = 0; n < 1000; n++) control.onText(`片段${n}`); return receipt; } });
     await f.service.start(base); await settled(f.service);
+    await vi.waitFor(() => expect(f.events.some(event => event.ledgerChanged && event.turn?.status === 'complete')).toBe(true), { timeout: 1000, interval: 10 });
     expect(f.events.filter(event => !event.ledgerChanged).length).toBeLessThanOrEqual(2); expect(f.events.filter(event => event.ledgerChanged)).toHaveLength(2);
+    expect(f.events.filter(event => event.ledgerChanged).map(event => event.turn.status)).toEqual(['running', 'complete']);
+    expect(f.events.at(-1).turn).toMatchObject({ status: 'complete', costState: 'calculated', costCents: 5 });
+  });
+  it('终态缓存可先于事务清理可见，清理完成后仍准确发布一次费用终态通知', async () => {
+    let removals = 0, entered, release;
+    const reached = new Promise(resolve => { entered = resolve; }), paused = new Promise(resolve => { release = resolve; });
+    const f = await setup({ fileSystem: { ...fs, unlink: async filename => { if (filename.endsWith('pending.json') && ++removals === 2) { entered(); await paused; } return fs.unlink(filename); } } });
+    await f.service.start(base);
+    try {
+      await reached;
+      expect((await settled(f.service)).turns[0]).toMatchObject({ status: 'complete', costState: 'calculated', costCents: 5 });
+      expect(f.events.filter(event => event.ledgerChanged)).toHaveLength(1);
+    } finally { release(); }
+    await vi.waitFor(() => expect(f.events.filter(event => event.ledgerChanged).map(event => event.turn.status)).toEqual(['running', 'complete']), { timeout: 1000, interval: 10 });
+    expect(f.calls).toHaveLength(1); expect((await f.service.ledger())[0]).toMatchObject({ costState: 'calculated', costCents: 5 });
   });
   it('关闭服务取消请求并等保存完成，重新打开能继续读且不会重新收费请求', async () => {
     const f = await setup({ execute: async (_input, _messages, control) => new Promise((_resolve, reject) => control.signal.addEventListener('abort', () => reject(new ModelRuntimeError('CANCELLED', '关闭', { requestStarted: true, partialText: '保留回答', usage: receipt.usage })), { once: true })) });

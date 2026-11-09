@@ -7,6 +7,7 @@ const { readEngineeringSource } = require('./engineering-export.cjs');
 const { stepReferenceIssue, explicitStepReferences } = require('./workflow-references.cjs');
 const { checkedAnimationWorkflowSettings } = require('./animation-document.runtime.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
+const { PDF, pdfInputIssue } = require('./production-pdf.cjs');
 
 async function markupPreflightError(step, projectId, inputs, artifactStore, dynamicSource) {
   let markup;
@@ -37,7 +38,7 @@ function validateUrl(value) {
     return '';
   } catch { return '连接地址无效。'; }
 }
-async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, localAnimationStatus, completedImageStepIds = new Set(), completedStepIds = new Set() }) {
+async function preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, localAnimationStatus, completedImageStepIds = new Set(), completedStepIds = new Set(), readReferenceText = extractReferenceText }) {
   const errors = [], issues = [], warnings = [], steps = [];
   const addError = (message, field, stepId) => { errors.push(message); issues.push({ message, ...(stepId ? { stepId } : {}), ...(field ? { field } : {}) }); };
   const failure = (message, field) => ({ ok: false, errors: [message], issues: [{ message, ...(field ? { field } : {}) }], warnings, steps, unknownCost: true });
@@ -63,13 +64,12 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
   for (const id of enabled.some(step => step.referenceArtifactIds === undefined) ? request.attachmentIds : []) {
     try {
       const file = await artifactStore.read(id); inputFiles.push(file);
-      if (file.kind === 'text' || file.kind === 'office') { try { await extractReferenceText(file); } catch (error) { addError(error.message, 'attachments'); } }
-      if (file.mimeType === 'application/pdf') addError('当前 PDF 参考文件不执行 OCR 或正文提取，请先转换成文字或受支持的 Office 文件。', 'attachments');
+      if ((file.kind === 'text' || file.kind === 'office') && file.mimeType !== PDF) { try { await readReferenceText(file); } catch (error) { addError(error.message, 'attachments'); } }
     } catch { addError('有参考文件已不可用，请重新添加。', 'attachments'); }
   }
   if (!enabled.length) addError('请启用至少一个步骤。');
   if (enabled[0]?.inputSource === 'previous') addError('第一个启用步骤必须使用项目需求。', 'inputSource', enabled[0].id);
-  const ids = new Set();
+  const ids = new Set(), readPdfIds = new Set();
   let estimatedCents = 0, unknownCost = false, previousKind, previousModelStep;
   for (const step of enabled) {
     const previousInputKind = previousKind;
@@ -81,6 +81,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
       catch (error) { stepInputFiles = []; addError(`“${step.name}”：${error.message}`, 'attachments', step.id); }
     }
     const stepInputKinds = new Set(stepInputFiles.map(file => file.kind));
+    const pdfs = stepInputFiles.filter(file => file.mimeType === PDF);
     const inheritsAttachments = step.referenceArtifactIds === undefined && step.inputSource === 'previous';
     const detail = { id: step.id, name: step.name, kind: step.kind };
     steps.push(detail);
@@ -154,7 +155,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (!modelStep(step)) continue;
     if (inheritsAttachments && ['vision','image-editing'].includes(step.kind) && previousModelStep?.kind === 'animation-compose' && previousModelStep.animation?.mode === 'gif') addError(`“${step.name}”：GIF动画不能直接作为当前图片模型的参考，请在PNG图集合成前检查/精修，或明确选择静态参考图。`, 'inputSource', step.id);
     const hasInput = kind => stepInputKinds.has(kind) || (inheritsAttachments && previousKind === kind) || kind === 'image' && step.kind === 'image-editing' && !!step.imageSourceStepId;
-    if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image')) addError(`“${step.name}”需要参考图片，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
+    if (['vision', 'image-editing'].includes(step.kind) && !hasInput('image') && !(step.kind === 'vision' && pdfs.length)) addError(`“${step.name}”需要${step.kind === 'vision' ? '参考图片或PDF资料' : '参考图片'}，或前一步实际生成的图片。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'transcription' && !hasInput('audio') && !hasInput('video')) addError(`“${step.name}”需要添加音频参考文件。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'video-understanding' && !hasInput('video')) addError(`“${step.name}”需要添加视频文件，或前一步生成的视频。`, step.inputSource === 'previous' ? 'inputSource' : 'attachments', step.id);
     if (step.kind === 'image-generation' && stepInputKinds.has('image')) warnings.push(`“${step.name}”采用纯文字生图，不使用附图；需要保留人物或商品参考时请选择图片编辑步骤。`);
@@ -187,10 +188,16 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (!credential) addError(`“${step.name}”需要选择该连接下启用的 API Key。`, 'credentialId', step.id);
     else detail.credentialName = credential.name;
     if (!model.capabilities?.includes(step.kind) || !modelRuntime.supports(connection, step.kind)) addError(`“${step.name}”的模型能力或接口协议尚未适配。`, !model.capabilities?.includes(step.kind) ? 'modelConfigId' : 'connection', step.id);
+    if (pdfs.length && ['text', 'vision'].includes(step.kind)) {
+      const issue = pdfInputIssue(connection, model, pdfs);
+      if (issue) addError(`“${step.name}”：${issue}`, 'modelConfigId', step.id);
+      else for (const file of pdfs) readPdfIds.add(file.id);
+    }
+    if (pdfs.length && ['image-generation', 'image-editing'].includes(step.kind) && (step.inputSource !== 'previous' || pdfs.some(file => !readPdfIds.has(file.id)))) addError(`“${step.name}”：PDF不能直接作为绘图参考。请先用支持PDF的文字/看图步骤解读资料，再让图片步骤使用前一步结果；PNG原图仍可用于精修。`, 'inputSource', step.id);
     if (!Number.isInteger(step.maxOutputTokens ?? 2048) || (step.maxOutputTokens ?? 2048) < 16 || (step.maxOutputTokens ?? 2048) > 16384) addError(`“${step.name}”的最大输出需要在 16 到 16384 Token 之间。`, 'maxOutputTokens', step.id);
     if (!Number.isInteger(step.count ?? 1) || (step.count ?? 1) < 1 || (step.count ?? 1) > 4) addError(`“${step.name}”的生成数量应为 1 到 4。`, 'count', step.id);
     if (step.id === queryOnlyStepId) { detail.estimatedCents = 0; warnings.push(`“${step.name}”仅查询已提交任务，不新建生成请求；原请求费用仍需按历史流水核对。`); continue; }
-    const estimate = estimateCost(model, step, `${resolved.content}\n${request.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: new Date().toISOString(), fx: await fxRates?.get() });
+    const estimate = pdfs.length && ['text', 'vision'].includes(step.kind) ? { costCents: 0, costState: 'unknown', reason: 'PDF文字与页面图像的真实用量在生成后由模型返回，再自动核算费用。' } : estimateCost(model, step, `${resolved.content}\n${request.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: new Date().toISOString(), fx: await fxRates?.get() });
     detail.costNote = estimate.reason;
     if (estimate.costState === 'unknown' || estimate.calculation && estimate.calculation.cnyAmount === undefined) { unknownCost = true; if (step.budgetCents === 0) addError(`“${step.name}”设置了零元上限，但费用尚不确定，请补全价格或清除此上限。`, 'budgetCents', step.id); }
     else { detail.estimatedCents = estimate.costCents; estimatedCents += estimate.costCents; if (step.budgetCents != null && estimate.costCents > step.budgetCents) addError(`“${step.name}”的估算费用超过单步预算。`, 'budgetCents', step.id); }

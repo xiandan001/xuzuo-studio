@@ -4,11 +4,13 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, nativeImage } = require('electron');
+const { Worker } = require('node:worker_threads');
 const root = path.resolve(__dirname, '..'), sha = value => createHash('sha256').update(value).digest('hex'), began = Date.now();
 const workspaceId = 'chat-ui-workspace', channels = [], calls = [], held = new Set();
-const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 } };
-let owner, temporary, window, service, finishing = false, slowCount = 0;
+const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 }, attachmentChecks: {} };
+let owner, temporary, window, service, cpuTasks, inputFiles, finishing = false, slowCount = 0, importCount = 0;
+const workerTasks = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deadline = setTimeout(() => { void finish(Error('Chat studio native acceptance exceeded 120 seconds')); }, 120000);
 app.on('window-all-closed', () => {});
@@ -17,6 +19,11 @@ function prepare() {
   assert.equal(process.platform, 'win32'); assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true'); assert.match(report.commit || '', /^[a-f0-9]{40}$/); assert(path.isAbsolute(process.argv[2] || ''));
   temporary = fs.realpathSync(process.argv[2]); assert.equal(path.dirname(temporary).toLowerCase(), fs.realpathSync(process.env.RUNNER_TEMP).toLowerCase()); assert.match(path.basename(temporary), /^xuzuo-chat-studio-[A-Za-z0-9-]+$/);
   owner = JSON.parse(fs.readFileSync(path.join(temporary, 'owner.json'), 'utf8')); assert.equal(owner.kind, 'xuzuo-chat-studio'); assert.equal(owner.commit, report.commit); assert.match(owner.nonce, /^[a-f0-9-]{36}$/); report.nonce = owner.nonce;
+  assert.equal(typeof owner.localRuntime, 'boolean');
+  const dependencyRoot = path.join(root, ...(owner.localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
+  assert.equal(owner.dependencyRoot, dependencyRoot); ordinary(dependencyRoot, true);
+  process.env.NODE_PATH = dependencyRoot; require('node:module').Module._initPaths();
+  report.dependencyMode = owner.localRuntime ? 'owned-local-build-runtime' : 'locked-ci-root';
   assert.equal(owner.dist, path.join(root, 'work/chat-studio-dist')); assert.equal(owner.output, path.join(root, 'work/chat-studio-output')); ordinary(owner.output, true); ordinary(owner.dist, true);
   for (const [name, hash] of Object.entries(owner.files)) { assert(!name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(owner.dist, name))), hash); }
   for (const [name, hash] of Object.entries(owner.sources)) { assert(/^(?:src|electron|scripts)\//.test(name) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
@@ -24,12 +31,18 @@ function prepare() {
 }
 async function finish(error) {
   if (finishing) return; finishing = true; clearTimeout(deadline); if (error) { report.errors.push(String(error.stack || error)); process.stderr.write(String(error.stack || error) + '\n'); }
+  if (error && window && !window.isDestroyed()) {
+    try { report.rendererDiagnostic = await evaluate(`(()=>({alerts:[...document.querySelectorAll('[role="alert"]')].slice(0,12).map(e=>e.textContent.slice(0,4096)),attachmentChips:[...document.querySelectorAll('.workspace-chat-composer .chat-attachment strong')].map(e=>e.textContent),addButton:document.querySelector('[aria-label="添加聊天附件"]')?{disabled:document.querySelector('[aria-label="添加聊天附件"]').disabled,label:document.querySelector('[aria-label="添加聊天附件"]').textContent}:null,inputLength:document.querySelector('[aria-label="聊天内容"]')?.value.length,turnCount:document.querySelectorAll('.workspace-chat-turn').length,pending:[...document.querySelectorAll('[role="status"]')].slice(0,8).map(e=>e.textContent.slice(0,500))}))()`); }
+    catch (cause) { report.rendererDiagnosticError = String(cause.message || cause); }
+  }
   for (const release of [...held]) release();
   try { await service?.shutdown(); } catch (cause) { report.errors.push(String(cause)); }
+  try { await cpuTasks?.drain(); await until(() => workerTasks.every(task => task.exited), 'attachment worker exit', 2500); } catch (cause) { report.errors.push(String(cause)); }
   if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)].filter(Number.isInteger))];
   for (const current of BrowserWindow.getAllWindows()) current.destroy(); for (const channel of channels) ipcMain.removeHandler(channel);
-  report.windows.remaining = BrowserWindow.getAllWindows().length; if (report.windows.created !== 1 || report.windows.shown !== 0 || report.windows.remaining) report.errors.push('Expected one hidden isolated window and no residual windows');
-  report.syntheticCalls = calls; report.elapsedMs = Date.now() - began; report.passed = !report.errors.length;
+  report.windows.remaining = BrowserWindow.getAllWindows().length;
+  if (report.windows.created > 1 || report.windows.shown !== 0 || report.windows.remaining || !report.errors.length && report.windows.created !== 1) report.errors.push('Expected one hidden isolated window and no residual windows');
+  report.syntheticCalls = calls; report.attachmentWorkers = workerTasks; report.elapsedMs = Date.now() - began; report.passed = !report.errors.length;
   if (owner) fs.writeFileSync(path.join(temporary, 'native-report.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' }); process.stdout.write(JSON.stringify({ passed: report.passed, phase: report.phase, errors: report.errors }) + '\n'); app.exit(report.passed ? 0 : 1);
 }
 async function evaluate(value) { let timer; try { return await Promise.race([window.webContents.executeJavaScript(value, true), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Chat DOM call timed out')), 4000); })]); } finally { clearTimeout(timer); } }
@@ -45,9 +58,11 @@ async function step(name, action) { report.phase = name; process.stdout.write('C
 async function currentConversation() { let items; await until(async () => { items = await service.list(workspaceId); return items.length > 0; }, 'conversation index created'); return service.read({ workspaceId, conversationId: items[0].id }); }
 async function settled(count, status = 'complete') { await until(async () => { const value = await currentConversation(); return value.turns.length === count && value.turns.at(-1).status === status; }, `turn ${count} ${status}`); await dom(`document.querySelectorAll('.workspace-chat-turn').length===${count}&&!document.querySelector('[aria-label="停止回复"]')`, 'renderer adopted final turn'); }
 function syntheticStream(body, signal) {
-  const last = body.messages.at(-1).content, plan = body.messages[0].content.includes('自动化方案规划员');
+  const contentText = value => typeof value === 'string' ? value : (value || []).filter(part => part.type === 'text').map(part => part.text || '').join('\n');
+  const last = contentText(body.messages.at(-1).content), plan = contentText(body.messages[0].content).includes('自动化方案规划员');
+  const imagePlan = plan && last.includes('附件验收');
   const isSlow = last.startsWith('慢慢说明') && ++slowCount === 1;
-  const full = plan ? JSON.stringify({ version: 1, name: '橘猫产品合作说明书', objective: '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: 'word', trigger: { type: 'manual' }, steps: [{ kind: 'text', name: '撰写完整说明正文', instruction: '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['正文完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? `# 完整说明\n\n这是用于布局验收的长内容。\n\n${'橘猫创作需要清楚目标、动作、受众和交付尺寸。'.repeat(70)}\n\n| 类别 | 内容 |\n| --- | --- |\n| 角色 | 橘猫 |\n\n\`\`\`text\n${'LONG_UNBROKEN_TOKEN_'.repeat(40)}\n\`\`\`` : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
+  const full = plan ? JSON.stringify({ version: 1, name: imagePlan ? '橘猫参考图宣传方案' : '橘猫产品合作说明书', objective: imagePlan ? '依据本轮已提供的参考图规划完整宣传图片。' : '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: imagePlan ? 'image' : 'word', trigger: { type: 'manual' }, steps: [{ kind: imagePlan ? 'image-generation' : 'text', name: imagePlan ? '按原图制作宣传图' : '撰写完整说明正文', instruction: imagePlan ? '以本轮原图为依据，保留产品主体和可见细节，不添加未经确认的价格。' : '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['内容完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? `# 完整说明\n\n这是用于布局验收的长内容。\n\n${'橘猫创作需要清楚目标、动作、受众和交付尺寸。'.repeat(70)}\n\n| 类别 | 内容 |\n| --- | --- |\n| 角色 | 橘猫 |\n\n\`\`\`text\n${'LONG_UNBROKEN_TOKEN_'.repeat(40)}\n\`\`\`` : calls.length > 6 ? '已收到本轮实际附图或资料，附件内容已进入这次请求。' : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
   let controller, stopped = false, timer, release; const encoder = new TextEncoder();
   const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (release) held.delete(release); };
   const push = value => { if (!stopped) controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`)); };
@@ -67,13 +82,28 @@ function syntheticStream(body, signal) {
   return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream', 'x-request-id': `synthetic-chat-${calls.length}` } });
 }
 async function initialize() {
+  const inputDirectory = path.join(temporary, 'input-files'); await fsp.mkdir(inputDirectory);
+  const png = nativeImage.createFromBitmap(Buffer.alloc(80 * 64 * 4, 190), { width: 80, height: 64 }).toPNG(); assert(png.length > 50);
+  const text = 'TXT事实：产品名称为橘猫咖啡，售价以客户确认信息为准。\n';
+  const { Document, Paragraph, Packer } = require('docx');
+  const docx = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('DOCX事实：本次上新主题是秋日手作；出图需保留品牌留白。')] }] }));
+  inputFiles = { png: path.join(inputDirectory, 'reference-cat.png'), text: path.join(inputDirectory, 'product-facts.txt'), docx: path.join(inputDirectory, 'product-brief.docx'), pngSha256: sha(png) };
+  await fsp.writeFile(inputFiles.png, png, { flag: 'wx' }); await fsp.writeFile(inputFiles.text, text, { flag: 'wx' }); await fsp.writeFile(inputFiles.docx, docx, { flag: 'wx' });
+  cpuTasks = require('../electron/cpu-tasks.cjs').createCpuTasks({ createWorker: (file, options) => {
+    assert.equal(file, path.join(root, 'electron/cpu-worker.cjs'));
+    const worker = new Worker(path.join(root, 'scripts/fixtures/chat-cpu-worker.cjs'), { ...options, workerData: { ...options.workerData, testOwnerFile: path.join(temporary, 'owner.json'), testOwnerNonce: owner.nonce } }), task = { task: options.workerData.task, threadId: worker.threadId, exited: false, dependencyBootstrapVerified: false };
+    workerTasks.push(task); worker.once('message', message => { task.dependencyBootstrapVerified = message.fixtureDependencyBootstrapVerified === true; }); worker.once('exit', code => { task.exited = true; task.exitCode = code; }); return worker;
+  } });
   const connection = { id: 'chat-connection', name: '离线合成服务', providerId: 'openai', protocol: 'openai-chat', baseUrl: 'https://chat-offline.invalid/v1', enabled: true, status: 'configured' };
   const model = { id: 'chat-model', name: 'GPT-6.1 Terra · 离线夹具', modelId: 'gpt-6.1-terra', connectionId: connection.id, enabled: true, capabilities: ['text', 'vision'], pricing: { unit: 'million-tokens', currency: 'CNY', input: '1000', output: '1000' } };
   const credential = { id: 'chat-metadata-key', connectionId: connection.id, name: '独立测试账户', lastFour: 'test', enabled: true, updatedAt: '' };
-  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
+  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), extractText: file => cpuTasks.run('reference-text', { name: file.name, mimeType: file.mimeType, buffer: file.buffer }), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
   const fixtureUrl = pathToFileURL(path.join(owner.dist, 'chat-studio.html')).href;
   const handle = (name, action) => { const channel = 'runtime:' + name; channels.push(channel); ipcMain.handle(channel, (event, input) => { assert.equal(event.sender, window.webContents); assert.equal(event.senderFrame, window.webContents.mainFrame); assert.equal(event.senderFrame.url, fixtureUrl); return action(input); }); };
-  for (const method of ['list', 'read', 'start', 'cancel', 'ledger']) handle('chat-' + method, input => service[method](input));
+  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger']) handle('chat-' + method, input => service[method](input));
+  handle('chat-import-attachments', input => { assert.equal(input.workspaceId, workspaceId); importCount++; return service.importAttachments({ ...input, paths: importCount === 1 ? [inputFiles.png, inputFiles.text, inputFiles.docx] : [inputFiles.text, inputFiles.docx] }); });
+  handle('chat-preview-attachment', input => service.previewAttachment(input));
+  handle('chat-attach-to-project', () => { throw Error('This fixture must not create a project or transfer references without a real project.'); });
   handle('status', () => ({ workspaceId, configuration: { models: [model], connections: [connection], credentials: [credential], vaultStatus: { available: true } } }));
   handle('automation-planning-list', () => []);
 }
@@ -114,10 +144,61 @@ async function scenario() {
     await click('.workspace-chat-modes button', '聊天'); await fill('长内容：请提供一份包含表格与代码的完整说明。'); await click('[aria-label="发送聊天消息"]'); await settled(6); await dom(`document.querySelector('.workspace-chat-thread>div:last-child pre code')`, 'actual long code rendering');
     let index = 0; for (const width of [1440, 960]) for (const theme of ['light', 'dark']) await layout(width, theme, ++index); report.renderMetrics = app.getAppMetrics().map(item => ({ type: item.type, cpu: item.cpu, memory: item.memory }));
   });
-  await step('reload-real-preload-and-history-without-resend', async () => {
-    const before = await service.ledger(workspaceId), count = calls.length, value = await currentConversation(); await window.reload(); await dom(`document.querySelectorAll('.workspace-chat-turn').length===6&&!document.querySelector('[aria-label="停止回复"]')`, 'history restored through actual preload'); assert.equal(calls.length, count); assert.deepEqual(await service.ledger(workspaceId), before); assert.equal((await currentConversation()).id, value.id); assert.equal(await evaluate(`document.querySelector('[aria-label="推理强度"]')?.textContent.includes('深入')`), true); report.historyReloadKeepsLedger = true;
+  report.originalSyntheticPostCount = calls.length; assert.equal(report.originalSyntheticPostCount, 6);
+  await step('scenario-choice-does-not-send-or-create-projects', async () => {
+    const posts = calls.length, folders = await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`);
+    await click('[aria-label="选择使用场景"]'); await dom(`document.querySelector('[aria-label="搜索使用场景"]')`, 'custom scenario search');
+    await evaluate(`(()=>{const e=document.querySelector('[aria-label="搜索使用场景"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'看图');e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await dom(`document.querySelectorAll('[aria-label="可用场景"]>button').length===1`, 'scenario search filters choices');
+    await click('[aria-label="使用场景 看图问答"]'); await dom(`!document.querySelector('[aria-label="搜索使用场景"]')&&document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('看图问答')`, 'selected scenario visible');
+    assert.equal(calls.length, posts); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), folders); report.attachmentChecks.scenarioChoiceIsLocal = true;
   });
-  assert.equal(Object.keys(require.cache).some(file => file === path.join(root, 'electron/main.cjs')), false); report.fakePostCount = calls.length;
+  await step('import-real-files-preview-remove-and-send-image-only', async () => {
+    const posts = calls.length; await fill(''); await click('[aria-label="添加聊天附件"]');
+    await dom(`document.querySelector('[aria-label="本轮附件"]')?.children.length===3`, 'three genuine files imported'); assert.equal(importCount, 1); assert.equal(calls.length, posts);
+    for (const [filename, expected] of [['reference-cat.png', 'image'], ['product-facts.txt', 'TXT事实'], ['product-brief.docx', '秋日手作']]) {
+      await click(`.workspace-chat-composer [title="预览 ${filename}"]`);
+      await dom(`document.querySelector('[aria-label=${JSON.stringify('附件预览 ' + filename)}]')`, 'attachment preview dialog');
+      if (expected === 'image') await dom(`document.querySelector('.chat-attachment-preview img')?.naturalWidth===80`, 'actual PNG preview decoded');
+      else await dom(`document.querySelector('.chat-attachment-preview pre')?.textContent.includes(${JSON.stringify(expected)})`, 'actual attachment text preview');
+      await click('[aria-label="关闭附件预览"]');
+    }
+    assert.equal(calls.length, posts); await click('[aria-label="移除附件 product-facts.txt"]'); await click('[aria-label="移除附件 product-brief.docx"]');
+    await dom(`document.querySelector('[aria-label="本轮附件"]')?.children.length===1`, 'non-image attachments removed'); assert.equal(calls.length, posts);
+    assert.equal(await evaluate(`document.querySelector('[aria-label="聊天内容"]').value`), '');
+    await click('[aria-label="发送聊天消息"]'); await settled(7); assert.equal(calls.length, posts + 1);
+    const current = await currentConversation(), image = current.turns.at(-1).attachments?.[0]; assert.equal(current.turns.at(-1).attachments.length, 1); assert.equal(image.name, 'reference-cat.png'); assert.equal(image.sha256, inputFiles.pngSha256);
+    const parts = calls.at(-1).body.messages.at(-1).content; assert(Array.isArray(parts)); const payload = parts.find(part => part.type === 'image_url')?.image_url?.url;
+    assert(payload?.startsWith('data:image/png;base64,')); assert.equal(sha(Buffer.from(payload.split(',')[1], 'base64')), inputFiles.pngSha256);
+    assert.equal(await evaluate(`document.querySelectorAll('.workspace-chat-composer .chat-attachment').length`), 0);
+    assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '1');
+    assert(workerTasks.some(task => task.task === 'reference-text' && task.dependencyBootstrapVerified)); Object.assign(report.attachmentChecks, { localImportUsesRealFiles: true, previewReadsRealBytes: true, removeDoesNotSend: true, attachmentOnlySend: true, imageBytesReachProvider: true, officeReadUsesWorker: true });
+    report.imageAttachment = { id: image.id, name: image.name, sha256: image.sha256, bytes: image.bytes };
+  });
+  await step('image-chat-to-plan-retains-actual-reference', async () => {
+    const posts = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await click('.workspace-chat-formats button', '图片');
+    await fill('附件验收：请按刚才的参考图规划一张产品宣传图，保留原图产品细节。'); await click('[aria-label="发送聊天消息"]'); await until(() => held.size > 0 && calls.length === posts + 1, 'held image plan response');
+    const content = calls.at(-1).body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []), imageParts = content.filter(part => part.type === 'image_url');
+    assert(imageParts.some(part => sha(Buffer.from(part.image_url.url.split(',')[1], 'base64')) === inputFiles.pngSha256));
+    for (const release of [...held]) release(); await settled(8); const current = await currentConversation(); assert.equal(current.turns.at(-1).plan.outputKind, 'image'); assert(current.turns.at(-1).contextAttachments.some(file => file.id === report.imageAttachment.id));
+    await dom(`document.querySelector('.home-plan h3')?.textContent==='橘猫参考图宣传方案'`, 'image plan visible with retained reference');
+    assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '1'); report.attachmentChecks.chatToPlanKeepsImage = true;
+  });
+  await step('office-and-text-attachments-reach-provider-as-real-body-text', async () => {
+    await click('[aria-label="选择使用场景"]'); await click('[aria-label="使用场景 资料解读"]'); await fill(''); await click('[aria-label="添加聊天附件"]');
+    await dom(`document.querySelector('[aria-label="本轮附件"]')?.children.length===2`, 'text and office references selected'); assert.equal(importCount, 2);
+    const before = calls.length; await click('[aria-label="发送聊天消息"]'); await settled(9); assert.equal(calls.length, before + 1);
+    const parts = calls.at(-1).body.messages.at(-1).content, text = typeof parts === 'string' ? parts : parts.filter(part => part.type === 'text').map(part => part.text).join('\n');
+    assert(text.includes('TXT事实：产品名称为橘猫咖啡')); assert(text.includes('DOCX事实：本次上新主题是秋日手作')); assert(text.includes('product-facts.txt') && text.includes('product-brief.docx'));
+    const current = await currentConversation(); assert.deepEqual(current.turns.at(-1).attachments.map(file => file.name).sort(), ['product-brief.docx', 'product-facts.txt']); report.attachmentChecks.officeAndTextReachProvider = true;
+  });
+  await step('reload-real-preload-and-history-without-resend', async () => {
+    const before = await service.ledger(workspaceId), count = calls.length, value = await currentConversation(); await window.reload(); await dom(`document.querySelectorAll('.workspace-chat-turn').length===9&&!document.querySelector('[aria-label="停止回复"]')`, 'history restored through actual preload'); assert.equal(calls.length, count); assert.deepEqual(await service.ledger(workspaceId), before); const restored = await currentConversation(); assert.equal(restored.id, value.id); assert.deepEqual(restored.turns[6].attachments, value.turns[6].attachments); assert.deepEqual(restored.turns[7].contextAttachments, value.turns[7].contextAttachments); assert.deepEqual(restored.turns[8].attachments, value.turns[8].attachments);
+    assert.equal(await evaluate(`document.querySelector('[aria-label="推理强度"]')?.textContent.includes('深入')`), true); assert.equal(await evaluate(`document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('资料解读')`), true);
+    await click('.workspace-chat-thread>div:last-child [title="预览 product-brief.docx"]'); await dom(`document.querySelector('.chat-attachment-preview pre')?.textContent.includes('秋日手作')`, 'sent office reference still readable after reload'); await click('[aria-label="关闭附件预览"]');
+    assert.equal(calls.length, count); report.historyReloadKeepsLedger = true; report.attachmentChecks.historyReloadKeepsReferences = true;
+  });
+  assert.equal(Object.keys(require.cache).some(file => file === path.join(root, 'electron/main.cjs')), false); report.fakePostCount = calls.length; report.attachmentSyntheticPostCount = calls.length - report.originalSyntheticPostCount; assert.equal(report.fakePostCount, 9); assert.equal(report.attachmentSyntheticPostCount, 3);
   report.dataDirectories = await fsp.readdir(path.join(temporary, 'data')); assert.deepEqual(report.dataDirectories, ['chat-v1']);
 }
 async function run() {

@@ -179,7 +179,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.6.0/full-install-lifecycle.json
+            outputs/release-v2.6.1/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -189,8 +189,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe.blockmap
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.manifest.json
-            outputs/release-v2.6.0/latest.yml
-            outputs/release-v2.6.0/package-verification.json
+            outputs/release-v2.6.1/Xuzuo-Studio-Setup-2.6.1.exe
+            outputs/release-v2.6.1/Xuzuo-Studio-Setup-2.6.1.exe.blockmap
+            outputs/release-v2.6.1/Xuzuo-Studio-Setup-2.6.1.manifest.json
+            outputs/release-v2.6.1/latest.yml
+            outputs/release-v2.6.1/package-verification.json

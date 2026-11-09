@@ -35,7 +35,7 @@ function latestBefore(run, index) {
 function validResults(run) {
   return run.snapshot.steps.filter(step => step.enabled && (modelStep(step) || step.kind === 'animation-compose')).map(step => run.attempts.filter(attempt => attempt.stepId === step.id && attempt.status === 'complete').at(-1)).filter(Boolean);
 }
-function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, readBeadDocument, readAnimationDocument, localAnimationStep, localAnimationStatus, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined }) {
+function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, readBeadDocument, readAnimationDocument, localAnimationStep, localAnimationStatus, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined, readReferenceText = extractReferenceText }) {
   const historyStore = createRunHistoryStore({ directory, fileSystem });
   const records = new Map();
   const controllers = new Map();
@@ -81,7 +81,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     await recalculateStored();
     await persist();
   })();
-  const validation = async (request, queryOnlyStepId, completedImageStepIds, completedStepIds) => { await ready; await assertProjectAdmission(request?.project?.id); return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds, completedStepIds, localAnimationStatus }); };
+  const validation = async (request, queryOnlyStepId, completedImageStepIds, completedStepIds) => { await ready; await assertProjectAdmission(request?.project?.id); return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds, completedStepIds, localAnimationStatus, readReferenceText }); };
   const projectLedgerCost = projectId => [...records.values()].filter(record => record.run.projectId === projectId).flatMap(record => record.ledger).reduce((sum, entry) => sum + entry.costCents, 0);
   const projectCost = record => Math.max(0, ...[...records.values()].filter(item => item.run.projectId === record.run.projectId).map(item => item.legacyBaseCostCents || 0)) + projectLedgerCost(record.run.projectId);
   const update = (record, changes) => { mark(record); return Object.assign(record.run, changes, { updatedAt: now() }); };
@@ -156,10 +156,10 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     const illustrations = illustrationAssets(record, step, latestBefore(record.run, index), attachments);
     if (step.inputSource === 'project') {
       let referenceLength = 0;
-      for (const attachment of attachments.filter(item => ['text', 'office'].includes(item.kind))) {
+      for (const attachment of attachments.filter(item => ['text', 'office'].includes(item.kind) && item.mimeType !== 'application/pdf')) {
         const file = await artifactStore.read(attachment.id);
         let content;
-        try { content = await extractReferenceText(file); }
+        try { content = await readReferenceText(file); }
         catch (error) { throw Object.assign(new Error('参考文字无法提取'), { publicMessage: error.message, requestStarted: false }); }
         referenceLength += content.length;
         if (referenceLength > 100000) throw Object.assign(new Error('参考文本过长'), { publicMessage: '参考文本超过 10 万字，请拆分文件后运行。', requestStarted: false });
@@ -170,7 +170,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     if (illustrations.length && record.request.project.kind === 'ppt') input += `\n若用户未指定总页数，请至少安排 ${illustrations.length} 页，以每页一张图承载本次插图。用户指定了页数时保留其要求，不擅自追加页面；配图多于页面时本地排版会保留原图并提示调整。`;
     if (step.role === 'reviewer') input = `【本次目标和验收要求】\n${record.run.input}\n\n【待检查的实际结果】\n${input}`;
     input = repairInput(record.run, step, input);
-    return { input, illustrations, attachments: attachments.filter(item => !['text', 'office'].includes(item.kind)) };
+    return { input, illustrations, attachments: attachments.filter(item => !['text', 'office'].includes(item.kind) || item.mimeType === 'application/pdf' && ['text', 'vision'].includes(step.kind)) };
   }
   async function finishFailure(record, attempt, error) {
     const cancelled = record.run.status === 'cancelled' || shuttingDown;

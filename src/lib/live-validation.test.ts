@@ -56,7 +56,7 @@ describe('预检错误定位', () => {
       { message: '“相同步骤名”请选择启用的真实模型和连接。', stepId: 'step-1', field: 'modelConfigId' },
       { message: '“相同步骤名”需要提示词，最多 2 万字。', stepId: 'step-2', field: 'prompt' },
       { message: '“相同步骤名”的生成数量应为 1 到 4。', stepId: 'step-2', field: 'count' },
-      { message: '“相同步骤名”需要参考图片，或前一步实际生成的图片。', stepId: 'step-3', field: 'inputSource' },
+      { message: '“相同步骤名”需要参考图片或PDF资料，或前一步实际生成的图片。', stepId: 'step-3', field: 'inputSource' },
     ]);
     expect(result.issues?.map(issue => issue.message)).toEqual(result.errors);
   });

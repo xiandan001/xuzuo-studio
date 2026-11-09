@@ -10,6 +10,7 @@ async function run() {
   if (workerData.task === 'bead-bundle') return require('./bead-exports.cjs').createBeadBundle(workerData.input);
   if (workerData.task === 'wallpaper') return require('./wallpaper-worker.cjs').fitWallpaperPng(workerData.input);
   if (workerData.task === 'engineering') return require('./wallpaper-worker.cjs').fitEngineeringPng(workerData.input);
+  if (workerData.task === 'reference-text') return require('./reference-text.cjs').extractReferenceText(workerData.input);
   if (workerData.task === 'office') return require('./office-render.cjs').renderOffice(workerData.input);
   if (workerData.task === 'image-alpha') {
     const { bitmap, width, height } = workerData.input;

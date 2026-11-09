@@ -17,6 +17,9 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 
 contextBridge.exposeInMainWorld('desktop', {
   chat: {
+    importAttachments: input => ipcRenderer.invoke('runtime:chat-import-attachments', input),
+    previewAttachment: input => ipcRenderer.invoke('runtime:chat-preview-attachment', input),
+    attachToProject: input => ipcRenderer.invoke('runtime:chat-attach-to-project', input),
     ...Object.fromEntries(['list', 'read', 'start', 'cancel', 'flush', 'ledger'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('chat:changed', handler); return () => ipcRenderer.removeListener('chat:changed', handler); },
   },
