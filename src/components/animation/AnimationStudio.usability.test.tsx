@@ -263,4 +263,74 @@ describe('角色与GIF工坊首次使用和本地操作', () => {
     expect(host.textContent).toContain('先做一份 GIF 样片');
     noAi(backend);
   });
+
+  it('参考图导入未结束时阻止同一事件批次的旧制作按钮，完成后带参考开始', async () => {
+    const backend = animationBackend({ revision: 0 });
+    let resolveImport!: (files: typeof backend.artifacts) => void;
+    vi.mocked(backend.props.workflowRunner.importFiles).mockImplementation(() => new Promise(resolve => { resolveImport = resolve; }));
+    const generate = backend.bridge.generate;
+    let referencesAtDispatch: string[] = [];
+    backend.bridge.generate = vi.fn(async input => { referencesAtDispatch = [...backend.document.referenceArtifactIds]; return generate(input); });
+    attach(backend);
+    const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />);
+    await fill(host, '动画创作需求', '使用我的橘猫参考图制作挥手动画');
+    const staleStart = primary(host), upload = button(host, '上传参考图');
+    expect(staleStart.disabled).toBe(false);
+    await act(async () => {
+      upload.click();
+      expect(staleStart.disabled).toBe(false);
+      staleStart.click();
+    });
+    expect(backend.props.notify).toHaveBeenCalledWith('参考图正在导入，准备好后再开始制作。');
+    expect(primary(host).disabled).toBe(true);
+    expect(host.querySelector('.animation-primary-actions [role="status"]')?.textContent).toContain('正在导入参考图');
+    expect(backend.bridge.save).not.toHaveBeenCalled();
+    noAi(backend);
+    await act(async () => resolveImport([backend.artifacts[0]]));
+    expect(primary(host).disabled).toBe(false);
+    expect(host.querySelector('.animation-primary-actions [role="status"]')).toBeNull();
+    expect(host.querySelectorAll('.animation-reference-list article')).toHaveLength(1);
+    await click(primary(host));
+    expect(backend.bridge.generate).toHaveBeenCalledTimes(1);
+    expect(referencesAtDispatch).toEqual(['reference-one']);
+    expect(backend.document.referenceArtifactIds).toEqual(['reference-one']);
+    expect(backend.bridge.refine).not.toHaveBeenCalled();
+  });
+
+  it('取消未完成的参考图选择后解除制作锁定，不显示错误或调用模型', async () => {
+    const backend = animationBackend({ revision: 0 });
+    let resolveImport!: (files: typeof backend.artifacts) => void;
+    vi.mocked(backend.props.workflowRunner.importFiles).mockImplementation(() => new Promise(resolve => { resolveImport = resolve; }));
+    attach(backend);
+    const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="atlas" />);
+    await fill(host, '动画创作需求', '保留这个角色图片需求');
+    await click(button(host, '上传参考图'));
+    expect(primary(host).disabled).toBe(true);
+    await act(async () => resolveImport([]));
+    expect(primary(host).disabled).toBe(false);
+    expect(button(host, '上传参考图').disabled).toBe(false);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('.animation-primary-actions [role="status"]')).toBeNull();
+    expect(host.querySelectorAll('.animation-reference-list article')).toHaveLength(0);
+    expect((host.querySelector('[aria-label="动画创作需求"]') as HTMLTextAreaElement).value).toBe('保留这个角色图片需求');
+    noAi(backend);
+  });
+
+  it('参考图读取失败后解除锁定并保留输入，错误不会启动制图', async () => {
+    const backend = animationBackend({ revision: 0 });
+    let rejectImport!: (reason: Error) => void;
+    vi.mocked(backend.props.workflowRunner.importFiles).mockImplementation(() => new Promise((_resolve, reject) => { rejectImport = reject; }));
+    attach(backend);
+    const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />);
+    await fill(host, '动画创作需求', '失败后仍应保留的动作要求');
+    await click(button(host, '上传参考图'));
+    expect(primary(host).disabled).toBe(true);
+    await act(async () => rejectImport(Error('参考文件暂时无法读取')));
+    expect(primary(host).disabled).toBe(false);
+    expect(button(host, '上传参考图').disabled).toBe(false);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('参考文件暂时无法读取');
+    expect(host.querySelector('.animation-primary-actions [role="status"]')).toBeNull();
+    expect((host.querySelector('[aria-label="动画创作需求"]') as HTMLTextAreaElement).value).toBe('失败后仍应保留的动作要求');
+    noAi(backend);
+  });
 });

@@ -32,10 +32,12 @@ function AnimationWorkspace({ props, project, initialMode, initialReferenceIds, 
   const bridge = typeof window === 'undefined' ? undefined : (window.desktop as (typeof window.desktop & { animation?: AnimationBridge }))?.animation;
   const editor = useAnimationDocument(project.id, initialMode, props.configuration, bridge, { referenceIds: initialReferenceIds, prompt: initialPrompt, title: project.name }), document = editor.document;
   const modelSettings = useRef<HTMLDetailsElement>(null);
+  const referencePending = useRef(false);
+  const [referenceBusy, setReferenceBusy] = useState(false);
   const [selectedId, setSelectedId] = useState(''), [selectedFrameId, setSelectedFrameId] = useState<string>(), [quantity, setQuantity] = useState(1), [playing, setPlaying] = useState(false), [instruction, setInstruction] = useState(''), [versionId, setVersionId] = useState(''), [pendingAi, setPendingAi] = useState<AnimationAiRequest>();
   const models = animationModels(props.configuration);
   const selected = document?.entries.find(entry => entry.id === selectedId) || document?.entries[0], job = editor.snapshot?.job, ownRunning = job?.status === 'running';
-  const externalRun = (props.workflowRunner.runs || []).find(run => run.projectId === project.id && run.mode === 'live' && run.status === 'running' && !job?.runIds.includes(run.id)), running = ownRunning || !!externalRun, locked = !!editor.busy || running;
+  const externalRun = (props.workflowRunner.runs || []).find(run => run.projectId === project.id && run.mode === 'live' && run.status === 'running' && !job?.runIds.includes(run.id)), running = ownRunning || !!externalRun, locked = !!editor.busy || running || referenceBusy;
   const model = models.find(item => item.id === document?.modelConfigId), needsEditing = !!document && (!!document.referenceArtifactIds.length || !!document.acceptedSampleId), modelReady = !!model?.capabilities.includes(needsEditing ? 'image-editing' : 'image-generation'), credentials = props.configuration.credentials.filter(item => item.enabled && item.connectionId === model?.connectionId), credentialReady = credentials.some(item => item.id === document?.credentialId);
   const quantityValid = Number.isInteger(quantity) && quantity >= 1 && quantity <= 100, ready = !!bridge && !!document && !!editor.snapshot, hasFrames = !!selected?.frames.length, hasAnyFrames = !!document?.entries.some(entry => entry.frames.length);
   const hasDescription = !!document?.prompt.trim() || !!document?.referenceArtifactIds.length || !!selected?.description.trim();
@@ -57,7 +59,7 @@ function AnimationWorkspace({ props, project, initialMode, initialReferenceIds, 
     else if (request.kind === 'refine') void editor.run('正在局部修复', () => bridge.refine({ projectId: project.id, entryId: request.entryId, frameId: request.frameId, instruction: request.instruction }));
     else void editor.run(request.action === 'continue' ? '正在继续' : '正在重试', () => bridge.control({ projectId: project.id, action: request.action }));
   }
-  function requestAi(request: AnimationAiRequest) { const paid = request.kind !== 'control' || job?.stage === 'generating'; if (paid && (!modelReady || !credentialReady)) { editor.setIssue('这次修改需要图片模型和对应 Key，请在制图设置中补齐；未开始模型调用。'); return; } if (props.preferences?.confirmGeneration && paid) setPendingAi(request); else performAi(request); }
+  function requestAi(request: AnimationAiRequest) { if (referencePending.current) { props.notify('参考图正在导入，准备好后再开始制作。'); return; } const paid = request.kind !== 'control' || job?.stage === 'generating'; if (paid && (!modelReady || !credentialReady)) { editor.setIssue('这次修改需要图片模型和对应 Key，请在制图设置中补齐；未开始模型调用。'); return; } if (props.preferences?.confirmGeneration && paid) setPendingAi(request); else performAi(request); }
   function generate(sampleOnly: boolean, retry = false) {
     if (!selected || !bridge) return;
     requestAi({ kind: 'generate', entryId: selected.id, sampleOnly, retry });
@@ -110,6 +112,7 @@ function AnimationWorkspace({ props, project, initialMode, initialReferenceIds, 
     });
   }
   function adoptSources(value: AnimationDocument, entryIds: string[]) { if (!bridge) return; setPlaying(false); editor.edit(value); void editor.run('正在本地合成已有素材', () => bridge.compose({ projectId: project.id, entryIds })); }
+  function referenceWork(busy: boolean) { referencePending.current = busy; setReferenceBusy(busy); }
   function showModelSettings() { const panel = modelSettings.current; if (!panel) return; panel.open = true; panel.scrollIntoView({ block: 'nearest' }); panel.querySelector<HTMLElement>('[role="combobox"]')?.focus(); }
   function fillExample() {
     if (!document || document.prompt.trim() || document.referenceArtifactIds.length || hasAnyFrames) return;
@@ -134,7 +137,7 @@ function AnimationWorkspace({ props, project, initialMode, initialReferenceIds, 
               <ImageQuantityField value={quantity} max={100} label={document.mode === 'gif' ? 'GIF 份数' : '角色图片张数'} unit={document.mode === 'gif' ? '份' : '张'} ariaLabel="角色作品数量" onChange={count} disabled={locked} />
             </div>
             <p className="animation-hint">{document.mode === 'gif' ? `${style?.description || ''}份数是独立 GIF 的数量，不是动画帧数。` : '每份是一张独立角色图片；先制作一张查看效果，再扩展其余图片。'}</p>
-            <AnimationReferences props={props} projectId={project.id} ids={document.referenceArtifactIds} artifacts={editor.snapshot!.artifacts} disabled={locked} onChange={referenceArtifactIds => change({ referenceArtifactIds })} onIssue={editor.setIssue} />
+            <AnimationReferences props={props} projectId={project.id} ids={document.referenceArtifactIds} artifacts={editor.snapshot!.artifacts} disabled={locked} onChange={referenceArtifactIds => change({ referenceArtifactIds })} onIssue={editor.setIssue} onBusyChange={referenceWork} />
             <div className="animation-primary-actions">
               <button type="button" className="btn btn-primary" disabled={!canUpdate} onClick={() => hasFrames ? selected?.status === 'ready' && !editor.dirty ? exportFile(document.mode === 'gif' ? 'gif' : 'png') : compose() : generate(true)}>
                 {hasFrames ? selected?.status === 'ready' && !editor.dirty ? <Download size={16} /> : <RefreshCw size={16} /> : <Sparkles size={16} />}{hasFrames ? selected?.status === 'ready' && !editor.dirty ? document.mode === 'gif' ? '导出此 GIF' : '导出当前 PNG' : '更新预览' : '制作第一份'}
@@ -144,6 +147,7 @@ function AnimationWorkspace({ props, project, initialMode, initialReferenceIds, 
               {document.entries.length > 1 && !pending && <span className="animation-complete-label"><Check size={15} />全部 {document.entries.length} 份已就绪</span>}
               <small>{hasFrames ? '更新预览、改字、改速和导出免费。更改角色外观或动作，请用“AI 重新制作”，会新增模型费用。' : '先制作一份看看效果；AI 制图按实际调用计费。已有图片或工程也可直接导入。'}</small>
               {!hasFrames && !hasDescription && <small>先写一句描述，或上传一张参考图；也可以点击右侧“填入示例”。</small>}
+              {referenceBusy && <small role="status">正在导入参考图，准备好后即可开始制作。</small>}
               {(!modelReady || !credentialReady) && <button type="button" className="text-button" onClick={showModelSettings}>选择制图模型和账号</button>}
               {!hasFrames && bridge?.importProject && <button type="button" className="text-button" disabled={locked || !quantityValid} onClick={importProject}><FolderOpen size={14} />导入已有工程</button>}
             </div>
