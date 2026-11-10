@@ -6,6 +6,7 @@ import type { ChatAttachment, ChatConversation, ChatStartRequest } from '../chat
 import type { ImageUseTemplate } from '../configuration-types';
 import type { PageProps, Project } from '../types';
 import { WorkspaceChat } from './WorkspaceChat';
+import { readDisclosure } from '../lib/disclosure-state';
 
 let root: Root | undefined, host: HTMLDivElement;
 beforeEach(() => {
@@ -33,7 +34,7 @@ async function openScenarios() { const picker = host.querySelector<HTMLButtonEle
 async function findScenario(text: string) {
   const search = document.querySelector<HTMLInputElement>('[aria-label="搜索使用场景"]')!; expect(search).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, text); search.dispatchEvent(new Event('input', { bubbles: true })); });
-  return [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.querySelector('strong')?.textContent === text);
+  return [...document.querySelectorAll<HTMLButtonElement>('[aria-label^="使用场景 "]')].find(item => item.querySelector('strong')?.textContent === text);
 }
 async function chooseScenario(text: string) { await openScenarios(); const option = await findScenario(text); expect(option, text).toBeTruthy(); await act(async () => { option!.click(); }); await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); }); }
 async function fixture(templates: ImageUseTemplate[] = [custom]) {
@@ -107,4 +108,23 @@ describe('首页聊天使用场景的集成', () => {
     expect(f.usePrompt).toHaveBeenCalledWith(expect.objectContaining({ imagePreset: '拼豆' }), draft, 'bead-project');
     expect(f.start).not.toHaveBeenCalled();
   });
+  it('顶部场景显示选中名称，自由聊天不清除原稿或附件且不自动发送', async () => {
+    const f = await fixture(); await input('保留客户已经确认的要求。'); await click('添加附件'); await chooseScenario(custom.name);
+    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain(custom.name);
+    expect(readDisclosure('workspace:workspace-one:chat-scenario', '')).toBe(`image:${custom.id}`);
+    const draft = content().value;
+    await chooseScenario('自由聊天');
+    expect(content().value).toBe(draft); expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain(reference.name);
+    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
+    expect(host.querySelector('[aria-label="制作格式"]')).toBeNull(); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('聊天和制作格式切换保持场景标签一致并保留输入，不发生模型调用', async () => {
+    const f = await fixture(); await input('这是我自己的需求。');
+    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
+    await click('制作'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('宣传图');
+    await click('Word'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('正式文档');
+    await click('聊天'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
+    expect(content().value).toBe('这是我自己的需求。'); expect(f.start).not.toHaveBeenCalled();
+  });
+
 });

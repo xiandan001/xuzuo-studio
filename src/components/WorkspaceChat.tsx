@@ -17,7 +17,7 @@ import { normalizeNaturalBinding } from '../lib/natural-model-bindings';
 import { normalizeReasoningEffort } from '../lib/reasoning-options';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { ChatAttachmentList } from './ChatAttachmentList';
-import { ChatScenarioPicker, type ChatScenarioSelection } from './ChatScenarioPicker';
+import { ChatScenarioPicker, chatScenarios, type ChatScenarioSelection } from './ChatScenarioPicker';
 import { HomeBeadEntry } from './HomeBeadEntry';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from '../lib/bead-intent';
 import './workspace-chat.css';
@@ -78,6 +78,12 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const [binding, setBinding] = useState(() => readBinding(props.workspaceId));
   const [mode, setMode] = useRememberedString(`workspace:${props.workspaceId}:chat-mode`, 'chat');
   const [kind, setKind] = useRememberedString(`workspace:${props.workspaceId}:chat-format`, 'image');
+  const [scenarioId, setScenarioId] = useRememberedString(`workspace:${props.workspaceId}:chat-scenario`, '');
+  const scenarios = useMemo(() => chatScenarios(props.configuration.useTemplates || [], props.workspaceId), [props.configuration.useTemplates, props.workspaceId]);
+  const defaultScenario = (nextMode: string, nextKind = kind) => nextMode !== 'plan' ? 'chat-default' : nextKind === 'image' ? 'image:宣传图' : `format:${nextKind}`;
+  const scenario = scenarios.find(item => item.id === scenarioId && (item.mode || 'plan') === (mode === 'plan' ? 'plan' : 'chat') && (mode !== 'plan' || item.outputKind === kind)) || scenarios.find(item => item.id === defaultScenario(mode))!;
+  function switchMode(next: string) { setMode(next); setScenarioId(defaultScenario(next)); }
+  function switchFormat(next: ProjectKind) { setKind(next); setScenarioId(defaultScenario('plan', next)); }
   const [historyOpen, setHistoryOpen] = useState(false), [visible, setVisible] = useState(20), [activePlan, setActivePlan] = useState('');
   const [beadNotice, setBeadNotice] = useState('');
   const textarea = useRef<HTMLTextAreaElement>(null), thread = useRef<HTMLDivElement>(null), pinned = useRef(true), sending = useRef(false);
@@ -111,12 +117,13 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   }
   function make(text: string, files: ChatAttachment[] = []) {
     if (!attachments.useReferences(files)) return;
-    input.setText(text.slice(0, 10000)); setMode('plan'); textarea.current?.focus();
+    input.setText(text.slice(0, 10000)); switchMode('plan'); textarea.current?.focus();
   }
   function chooseScenario(scenario: ChatScenarioSelection) {
+    if (scenario.mode === 'chat') { switchMode('chat'); requestAnimationFrame(() => textarea.current?.focus()); return; }
     const text = input.text.trim() ? `${input.text.trim()}\n\n使用场景：${scenario.name}\n${scenario.text}` : scenario.text;
     if (text.length > 10000) { chat.setError('场景内容与已有草稿合计超过 10000 字，请先精简输入；原草稿和附件已保留。'); return; }
-    input.setText(text); setMode('plan'); setKind(scenario.outputKind); setBeadNotice(''); requestAnimationFrame(() => textarea.current?.focus());
+    input.setText(text); setMode('plan'); setKind(scenario.outputKind); setScenarioId(scenario.id); setBeadNotice(''); requestAnimationFrame(() => textarea.current?.focus());
   }
   async function prepareBeadProject(project: Project) {
     if (!attachments.items.length) return;
@@ -135,7 +142,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     <header className="workspace-chat-header"><div><small>序作 · 你的创作伙伴</small><h2>{turns.length ? chat.conversation?.title : mode === 'plan' ? '说出想法，一起做成作品' : '先聊聊你的想法'}</h2></div><nav><button className="btn-icon" type="button" aria-label="聊天历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={18} /></button><button className="btn btn-secondary" type="button" disabled={chat.pending} onClick={() => onSelect(crypto.randomUUID())}><Plus size={15} />新对话</button></nav></header>
     {historyOpen && <div className="workspace-chat-history"><Select aria-label="选择聊天历史" value={conversationId} options={[...(!chat.history.some(item => item.id === conversationId) ? [{ value: conversationId, label: '当前新对话' }] : []), ...chat.history.map(item => ({ value: item.id, label: item.title, description: `${item.turnCount} 轮沟通${item.activeTurnId ? ' · 正在回复' : ''}` }))]} onValueChange={onSelect} /><button type="button" className="btn btn-secondary" disabled={!turns.length} onClick={() => { void downloadFile(`序作-对话-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, JSON.stringify(chat.conversation, null, 2)); }}><Download size={14} />导出</button><button type="button" className="text-button" onClick={onLegacy}>以往创作对话</button></div>}
     {chat.loading && <p className="workspace-chat-working" role="status"><LoaderCircle size={16} className="spin" />正在读取已保存的对话…</p>}
-    {!chat.loading && !turns.length && <div className="workspace-chat-welcome"><div className="workspace-chat-welcome-icon"><MessageCircle size={26} /></div><p>问问题、讨论需求，或者把想法变成图片与文档。</p><span>聊天直接开始，只有制作作品时才需要选择保存项目。</span><div>{['帮我把一句产品介绍写得更吸引人', '帮我制作一张产品宣传图，自动检查并精修一轮'].map((text, index) => <button type="button" key={text} onClick={() => { input.setText(text); setMode(index ? 'plan' : 'chat'); textarea.current?.focus(); }}>{text}</button>)}</div></div>}
+    {!chat.loading && !turns.length && <div className="workspace-chat-welcome"><div className="workspace-chat-welcome-icon"><MessageCircle size={26} /></div><p>问问题、讨论需求，或者把想法变成图片与文档。</p><span>聊天直接开始，只有制作作品时才需要选择保存项目。</span><div>{['帮我把一句产品介绍写得更吸引人', '帮我制作一张产品宣传图，自动检查并精修一轮'].map((text, index) => <button type="button" key={text} onClick={() => { input.setText(text); switchMode(index ? 'plan' : 'chat'); textarea.current?.focus(); }}>{text}</button>)}</div></div>}
     {!!turns.length && <div ref={thread} className="workspace-chat-thread" role="log" aria-label="聊天消息" onScroll={() => { const element = thread.current; if (element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 90; }}>
       {turns.length > visible && <button type="button" className="text-button" onClick={() => setVisible(value => value + 20)}>查看更早的沟通</button>}
       {turns.slice(-visible).map(turn => <div key={turn.id}><ChatMessagePair turn={turn} canRetry={!chat.running && !chat.pending && turn.id === latest?.id} onRetry={retryTurn} onMake={makeTurn} onCopy={copyTurn} />{turn.plan && <div className="workspace-chat-plan-action">{activePlan === turn.id ? <Suspense fallback={<p role="status">正在打开已保存的制作方案…</p>}><ChatPlanProduction props={props} turn={turn} conversationId={conversationId} planner={{ modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: turn.reasoningEffort }} /></Suspense> : <button type="button" className="btn btn-secondary" onClick={() => setActivePlan(turn.id)}>查看这份方案与作品</button>}</div>}</div>)}
@@ -143,20 +150,15 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     {(chat.error || input.error || attachments.error) && <div className="workspace-chat-error" role="alert">{chat.error || input.error || attachments.error}<button type="button" className="text-button" disabled={chat.pending} onClick={chat.reload}>重新读取 · 不调用 AI</button></div>}
     {turns.some(turn => turn.saveIssue) && <button type="button" className="btn btn-secondary" disabled={chat.pending || chat.running} onClick={() => { void chat.flush(); }}>重试保存 · 不调用 AI</button>}
     <form className="workspace-chat-composer" aria-label="聊天输入" onSubmit={event => { event.preventDefault(); void send(); }}>
-      <div className="workspace-chat-composer-toolbar"><div className="workspace-chat-modes" role="group" aria-label="对话用途"><button type="button" aria-pressed={mode !== 'plan'} onClick={() => setMode('chat')}><MessageCircle size={15} />聊天</button><button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}><WandSparkles size={15} />制作</button></div><ConversationModelPicker configuration={props.configuration} value={binding} disabled={chat.pending || chat.running} onChange={chooseBinding} /></div>
-      <div className={`workspace-chat-context${mode === 'plan' ? ' is-production' : ''}`}>
-        {mode === 'plan' && <div className="workspace-chat-format-field">
-          <div className="workspace-chat-field-heading"><span>制作格式</span><small>先看方案，再决定制作</small></div>
-          <div className="workspace-chat-formats" role="group" aria-label="制作格式">{HOME_CREATION_KINDS.map(item => <button type="button" key={item.kind} aria-pressed={kind === item.kind} onClick={() => setKind(item.kind)}>{item.label}</button>)}</div>
-        </div>}
-        <div className="workspace-chat-scenario-field">
-          <div className="workspace-chat-field-heading"><span>使用场景</span><small>可选</small></div>
-          <ChatScenarioPicker workspaceId={props.workspaceId} templates={props.configuration.useTemplates} disabled={chat.pending || chat.running || attachments.busy} onSelect={chooseScenario} />
-        </div>
+      <div className="workspace-chat-composer-toolbar">
+        <div className="workspace-chat-modes" role="group" aria-label="对话用途"><button type="button" aria-pressed={mode !== 'plan'} onClick={() => switchMode('chat')}><MessageCircle size={15} />聊天</button><button type="button" aria-pressed={mode === 'plan'} onClick={() => switchMode('plan')}><WandSparkles size={15} />制作</button></div>
+        <ChatScenarioPicker workspaceId={props.workspaceId} templates={props.configuration.useTemplates} value={scenario?.id} mode={mode === 'plan' ? 'plan' : 'chat'} disabled={chat.pending || chat.running || attachments.busy} onSelect={chooseScenario} />
+        <ConversationModelPicker configuration={props.configuration} value={binding} disabled={chat.pending || chat.running} onChange={chooseBinding} />
       </div>
+      {mode === 'plan' && <div className="workspace-chat-formats" role="group" aria-label="制作格式">{HOME_CREATION_KINDS.map(item => <button type="button" key={item.kind} aria-pressed={kind === item.kind} onClick={() => switchFormat(item.kind)}>{item.label}</button>)}<span>先看方案，再决定制作</span></div>}
       <ChatAttachmentList files={attachments.items} onRemove={attachments.remove} disabled={chat.pending || attachments.busy} />
       <textarea ref={textarea} rows={3} maxLength={10000} aria-label="聊天内容" placeholder={mode === 'plan' ? '描述你想制作的图片、文档或表格…' : '直接提问，也可以接着讨论上一条回复…'} value={input.text} onChange={event => input.setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} />
-      <div className="workspace-chat-composer-footer"><div className="workspace-chat-composer-tools"><button className="workspace-chat-attach" type="button" aria-label="添加附件" title="添加图片、PDF、文字或 Office 文档" disabled={chat.pending || chat.running || chat.loading || attachments.busy} onClick={() => { void attachments.add(); }}>{attachments.busy ? <LoaderCircle size={17} className="spin" /> : <Paperclip size={17} />}<span>{attachments.busy ? '正在读取…' : '添加附件'}</span></button><span>{!selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span></div>{chat.running ? <button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button> : <button className="workspace-chat-send" type="submit" disabled={(!input.text.trim() && !attachments.items.length) || attachments.busy || chat.pending || chat.loading || !chat.available} aria-label="发送聊天消息">{chat.pending ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={21} />}</button>}</div>
+      <div className="workspace-chat-composer-footer"><div className="workspace-chat-composer-tools"><button className="workspace-chat-attach" type="button" aria-label="添加附件" title="添加图片、PDF、文字或 Office 文档" disabled={chat.pending || chat.running || chat.loading || attachments.busy} onClick={() => { void attachments.add(); }}>{attachments.busy ? <LoaderCircle size={17} className="spin" /> : <Paperclip size={17} />}<span>{attachments.busy ? '正在读取…' : '附件'}</span></button><span>{!selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span></div>{chat.running ? <button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button> : <button className="workspace-chat-send" type="submit" disabled={(!input.text.trim() && !attachments.items.length) || attachments.busy || chat.pending || chat.loading || !chat.available} aria-label="发送聊天消息">{chat.pending ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={21} />}</button>}</div>
       {!!attachments.items.length && <p className="workspace-chat-note">每条消息最多 5 个附件，单个不超过 5 MB；图片与 PDF 需要模型支持看图。</p>}
       {!chat.available && <p className="workspace-chat-note">真实聊天请使用最新版桌面应用，Key 保存在本机。</p>}
     </form>

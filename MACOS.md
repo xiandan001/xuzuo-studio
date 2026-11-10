@@ -1,5 +1,19 @@
 # macOS 开发与验收
 
+## 2.6.4 参考 develop-owner 的对话框（2026-11-10）
+
+参考 `develop-owner` 的 `842d76a` 及对应截图调整前端布局：顶部工具栏依次排列聊天/制作、
+当前场景、模型、思考强度与账户，制作模式下方保留紧凑格式行，附件位于输入区底部。
+场景使用分类、搜索卡片弹窗，并持久显示选中名称；选择自由聊天保留草稿与附件。
+继续使用 Mac 分支现有的附件导入、原文件转制作、凭证授权和专用拼豆入口。
+
+大窗口采用最小高度和可伸展欢迎区，输入框靠下；短窗口缩减欢迎区装饰，
+内容较多时仍由自然高度撑开聊天区，最近作品不会被覆盖，长聊天保留独立滚动。
+35 项组件测试、19 个功能场景和 128 组真实首页/App 布局检查通过；1120×760 的聊天与制作
+首屏均可看到发送按钮。安装包 501 个源码文件、50 个动画资源、完整签名及 DMG/ZIP 校验通过。
+本轮使用隔离浏览器与模拟桥接，未启动 Electron GUI、访问真实钥匙串或调用供应商 API。
+验收报告位于 `outputs/owner-layout-validation-report.json`，截图位于 `work/owner-layout/`。
+
 ## 2.6.3 首页边界修复（2026-11-09）
 
 去掉首页聊天区固定的视口高度，让输入卡、欢迎区与提示内容撑开所属区块；
@@ -109,7 +123,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.6.3/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.6.4/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -130,7 +144,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.6.3/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.6.4/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。
