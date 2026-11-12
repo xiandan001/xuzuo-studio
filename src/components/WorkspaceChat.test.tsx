@@ -55,6 +55,17 @@ async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = f
   return { start, read, cancel, createProject, update, props, bridge, preflight, startLive };
 }
 describe('普通聊天的真实组件交互', () => {
+  it('copies readable reply content while preserving code and the original stored source', async () => {
+    const copied = vi.fn(async (_text: string) => undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copied } });
+    const f = await fixture(); await input('整理提示词'); await click('发送聊天消息');
+    const original = '> **主体：** 手机保持居中。\n>\n> 背景保留海边。\n\n```js\nif (x > 0) power = 2 ** 3;\n```';
+    await f.update(original, 'complete'); await click('复制这条回复');
+    expect(copied).toHaveBeenCalledOnce(); const value = copied.mock.calls[0][0];
+    expect(value).toContain('主体： 手机保持居中。'); expect(value).not.toContain('**主体'); expect(value).not.toMatch(/^>/m); expect(value).not.toContain('```');
+    expect(value).toContain('if (x > 0) power = 2 ** 3;');
+    expect((await f.read({ conversationId: f.read.mock.calls[0][0].conversationId })).turns.at(-1)?.text).toBe(original);
+    expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+  });
   it.each(['image/svg+xml', 'image/gif'])('讨论 %s 前先免费准备静态参考，成功后才允许带图发送', async mime => {
     const prepared = { sourceSha256: 'a'.repeat(64), reference: { id: 'prepared-reference', projectId: 'source-project', mimeType: 'image/png' } };
     const prepare = mime === 'image/gif' ? staticReferences.gif : staticReferences.svg; prepare.mockResolvedValue(prepared);

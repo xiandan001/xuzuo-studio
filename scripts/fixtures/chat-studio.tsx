@@ -20,6 +20,11 @@ function Fixture() {
   const [context, setContext] = useState<Context>(), [dark, setDark] = useState(false), [notice, setNotice] = useState(''), [folderRequests, setFolderRequests] = useState(0);
   const [projectVisible, setProjectVisible] = useState(false), [intent, setIntent] = useState<PageProps['chatIntent']>(), [runs, setRuns] = useState<WorkflowRun[]>([]), [toolPreset, setToolPreset] = useState(''), [toolReferences, setToolReferences] = useState(0), [discussedArtifact, setDiscussedArtifact] = useState('');
   const [starts] = useState(() => createLiveStartCoordinator({ storage: () => localStorage, bridge: () => window.desktop?.runtime, onRun: run => setRuns(current => [run, ...current.filter(item => item.id !== run.id)]) }));
+  useEffect(() => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { document.documentElement.dataset.chatCopiedText = text; document.documentElement.dataset.chatCopyCount = String(Number(document.documentElement.dataset.chatCopyCount || '0') + 1); } } });
+    return () => { if (original) Object.defineProperty(navigator, 'clipboard', original); else Reflect.deleteProperty(navigator, 'clipboard'); };
+  }, []);
   useLayoutEffect(() => { setAppearanceMode(dark ? 'dark' : 'light'); setAppearancePalette('violet'); }, [dark]);
   useEffect(() => { let current = true; void window.desktop!.runtime.status().then(value => { if (current) setContext(value as unknown as Context); }); return () => { current = false; }; }, []);
   useEffect(() => { if (!runs.some(run => run.status === 'running')) return; let current = true; const timer = setInterval(() => { void window.desktop!.runtime.snapshot().then(value => { if (current) setRuns(value.runs); }); }, 300); return () => { current = false; clearInterval(timer); }; }, [runs.some(run => run.status === 'running')]);

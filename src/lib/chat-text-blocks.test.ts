@@ -13,3 +13,10 @@ it('does not split blank lines inside fenced code and resets on a replacement re
   expect(next.blocks).toHaveLength(2); expect(next.blocks[1]).toContain('first();\n\nsecond();');
   expect(appendChatTextBlocks(next, '更正后的回复')).toMatchObject({ blocks: [], tail: '更正后的回复', boundary: 0 });
 });
+it.each(['~~~python\n> literal\n\n**literal**\n~~~', '  ````text\n```\n\n> **literal**\n  ````', '    x > 0\n\n    value = 2 ** 3'])('never commits the inside of a code block while characters stream in: %s', code => {
+  let state;
+  for (let end = 1; end <= code.length; end++) {
+    state = appendChatTextBlocks(state, code.slice(0, end));
+    expect(state.blocks).toEqual([]); expect(state.blocks.join('') + state.tail).toBe(code.slice(0, end));
+  }
+});

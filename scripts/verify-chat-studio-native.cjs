@@ -26,7 +26,7 @@ function prepare() {
   report.dependencyMode = owner.localRuntime ? 'owned-local-build-runtime' : 'locked-ci-root';
   assert.equal(owner.dist, path.join(root, 'work/chat-studio-dist')); assert.equal(owner.output, path.join(root, 'work/chat-studio-output')); ordinary(owner.output, true); ordinary(owner.dist, true);
   for (const [name, hash] of Object.entries(owner.files)) { assert(!name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(owner.dist, name))), hash); }
-  for (const [name, hash] of Object.entries(owner.sources)) { assert(/^(?:src|electron|scripts)\//.test(name) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
+  for (const [name, hash] of Object.entries(owner.sources)) { assert((name === 'vite.config.ts' || /^(?:src|electron|scripts)\//.test(name)) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
   app.setName('序作聊天独立离线验收'); app.setPath('userData', path.join(temporary, 'profile')); app.setPath('sessionData', path.join(temporary, 'profile')); app.disableHardwareAcceleration(); app.commandLine.appendSwitch('disable-background-networking'); nativeTheme.themeSource = 'light';
 }
 async function finish(error) {
@@ -65,7 +65,7 @@ function syntheticStream(body, signal) {
   const last = contentText(body.messages.at(-1).content), plan = contentText(body.messages[0].content).includes('自动化方案规划员');
   const imagePlan = plan && last.includes('附件验收');
   const isSlow = last.startsWith('慢慢说明') && ++slowCount === 1;
-  const full = plan ? JSON.stringify({ version: 1, name: imagePlan ? '橘猫参考图宣传方案' : '橘猫产品合作说明书', objective: imagePlan ? '依据本轮已提供的参考图规划完整宣传图片。' : '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: imagePlan ? 'image' : 'word', trigger: { type: 'manual' }, steps: [{ kind: imagePlan ? 'image-generation' : 'text', name: imagePlan ? '按原图制作宣传图' : '撰写完整说明正文', instruction: imagePlan ? '以本轮原图为依据，保留产品主体和可见细节，不添加未经确认的价格。' : '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['内容完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? `# 完整说明\n\n这是用于布局验收的长内容。\n\n${'橘猫创作需要清楚目标、动作、受众和交付尺寸。'.repeat(70)}\n\n| 类别 | 内容 |\n| --- | --- |\n| 角色 | 橘猫 |\n\n\`\`\`text\n${'LONG_UNBROKEN_TOKEN_'.repeat(40)}\n\`\`\`` : calls.length > 6 ? '已收到本轮实际附图或资料，附件内容已进入这次请求。' : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
+  const full = plan ? JSON.stringify({ version: 1, name: imagePlan ? '橘猫参考图宣传方案' : '橘猫产品合作说明书', objective: imagePlan ? '依据本轮已提供的参考图规划完整宣传图片。' : '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: imagePlan ? 'image' : 'word', trigger: { type: 'manual' }, steps: [{ kind: imagePlan ? 'image-generation' : 'text', name: imagePlan ? '按原图制作宣传图' : '撰写完整说明正文', instruction: imagePlan ? '以本轮原图为依据，保留产品主体和可见细节，不添加未经确认的价格。' : '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['内容完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? require('./fixtures/chat-markdown-sample.cjs').text : calls.length > 6 ? '已收到本轮实际附图或资料，附件内容已进入这次请求。' : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
   let controller, stopped = false, timer, release; const encoder = new TextEncoder();
   const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (release) held.delete(release); };
   const push = value => { if (!stopped) controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`)); };
@@ -211,6 +211,8 @@ async function scenario() {
   report.dataDirectories = await fsp.readdir(path.join(temporary, 'data')); assert.deepEqual(report.dataDirectories, ['chat-v1']);
   await require('./fixtures/chat-studio-new-features.cjs').verifyNewChatFeatures({ service, workspaceId, production, inputFiles, calls, report, evaluate, dom, click, fill, select, chooseScenario, until, step });
   assert.equal(calls.length, 9); report.refinementSyntheticPostCount = production.calls.length;
+  await require('./fixtures/chat-markdown-acceptance.cjs').verifyMarkdownReply({ service, workspaceId, calls, report, evaluate, click, dom, step });
+  assert.equal(calls.length, 9);
 }
 async function run() {
   prepare(); await app.whenReady(); await initialize();

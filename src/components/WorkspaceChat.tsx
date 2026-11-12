@@ -13,6 +13,7 @@ import { CostAmount, CostTotal } from './CostAmount';
 import { summarizeCosts } from '../lib/cost-display';
 import { Select } from './Select';
 import { StreamingChatReply } from './StreamingChatReply';
+import { chatReplyPlainText } from '../lib/chat-markdown';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { ModalPortal } from './ModalPortal';
 import { useChatRefinement } from '../hooks/useChatRefinement';
@@ -63,7 +64,7 @@ const ChatMessagePair = memo(function ChatMessagePair({ turn, workspaceId, conve
   return <div className="workspace-chat-turn">
     <article className="workspace-chat-message is-user" aria-label="你发送的消息"><div className="workspace-chat-author"><UserRound size={15} /><strong>你</strong><span>{turn.mode === 'plan' ? '制作需求' : ''}</span></div><div className="workspace-chat-bubble"><p>{turn.userText}</p><ChatAttachments files={turn.attachments || []} workspaceId={workspaceId} conversationId={conversationId} /></div></article>
     <article className="workspace-chat-message is-assistant" aria-label="序作AI回复"><div className="workspace-chat-author"><Sparkles size={15} /><strong>序作 AI</strong><span title={turn.modelName}>{turn.modelName}</span></div><div className="workspace-chat-bubble">
-      {turn.mode === 'plan' ? plan ? <div className="workspace-chat-plan-summary"><span className="chat-plan-badge"><Check size={13} />制作方案已准备好</span><h3>{plan.name}</h3><p>{plan.objective}</p><ol>{plan.steps.slice(0, 4).map((step, index) => <li key={index}>{step.name}</li>)}</ol></div> : <p className="workspace-chat-working">{turn.status === 'running' ? <><LoaderCircle size={16} className="spin" />正在整理方案，完整校验后即可制作…</> : '本轮没有形成可执行的完整方案。已返回内容与费用保留。'}</p> : turn.text ? <StreamingChatReply text={turn.text} /> : <p className="workspace-chat-working"><LoaderCircle size={16} className={turn.status === 'running' ? 'spin' : ''} />{turn.status === 'running' ? '正在思考…' : '本轮未返回正文。'}</p>}
+      {turn.mode === 'plan' ? plan ? <div className="workspace-chat-plan-summary"><span className="chat-plan-badge"><Check size={13} />制作方案已准备好</span><h3>{plan.name}</h3><p>{plan.objective}</p><ol>{plan.steps.slice(0, 4).map((step, index) => <li key={index}>{step.name}</li>)}</ol></div> : <p className="workspace-chat-working">{turn.status === 'running' ? <><LoaderCircle size={16} className="spin" />正在整理方案，完整校验后即可制作…</> : '本轮没有形成可执行的完整方案。已返回内容与费用保留。'}</p> : turn.text ? <StreamingChatReply text={turn.text} streaming={turn.status === 'running'} /> : <p className="workspace-chat-working"><LoaderCircle size={16} className={turn.status === 'running' ? 'spin' : ''} />{turn.status === 'running' ? '正在思考…' : '本轮未返回正文。'}</p>}
       {turn.error && <p className="workspace-chat-error" role="status">{turn.error}</p>}
       {turn.saveIssue && <p className="workspace-chat-error" role="alert">{turn.saveIssue} 请先复制保留回复，再点击下方“重试保存”。</p>}
       {turn.attachmentNotice && <p className="workspace-chat-note">{turn.attachmentNotice}</p>}
@@ -208,7 +209,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const actions = useRef({ send, make, props }); actions.current = { send, make, props };
   const retryTurn = useCallback((turn: ChatTurn) => { void actions.current.send(turn); }, []);
   const makeTurn = useCallback((text: string) => actions.current.make(text), []);
-  const copyTurn = useCallback((text: string) => { void navigator.clipboard.writeText(text).then(() => actions.current.props.notify('已复制回复。')).catch(() => actions.current.props.notify('未能复制，请选择文字复制。', 'error')); }, []);
+  const copyTurn = useCallback((text: string) => { void navigator.clipboard.writeText(chatReplyPlainText(text)).then(() => actions.current.props.notify('已复制正文。')).catch(() => actions.current.props.notify('未能复制，请选择文字复制。', 'error')); }, []);
   const activePlanTurn = turns.find(turn => turn.id === activePlan && turn.plan);
   const stopInComposer = chat.running && !continuingTool && !editingTarget;
   function addIncomingFiles(files: File[]) { if (!files.length) return; if (attachments.busy) { chat.setError('正在添加上一批附件，请稍候再添加。'); return; } void attachments.addFiles(files); }
