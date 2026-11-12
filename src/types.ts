@@ -13,7 +13,7 @@ import type { AssetLibraryBridge, ProjectReference } from './asset-types';
 import type { AppUpdateBridge } from './update-types';
 import type { ReactNode } from 'react';
 
-export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools' | 'business';
+export type ViewId = 'overview' | 'project' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools' | 'business';
 export type ProjectKind = 'ppt' | 'word' | 'excel' | 'image';
 export type PromptCategory = ProjectKind | 'general';
 export interface Workspace {

@@ -2,3 +2,6 @@ export { BUSINESS_STATE_BYTES, businessId, businessStateIssue, checkedBusinessSt
 export { businessEconomics, businessMetrics } from './business-economics';
 export { allocatedAmount, allocationPercent, allocationCosts, checkAllocationShares } from './cost-allocations';
 export { normalizeBusinessRows, businessRecordIdentity } from './business-import';
+
+export * from './business-receivables';
+export * from './business-intake';

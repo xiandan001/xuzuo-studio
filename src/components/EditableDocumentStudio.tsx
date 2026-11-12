@@ -56,6 +56,11 @@ import { LocalRefinement } from './LocalRefinement';
 import { applyDocumentRefinement, documentRefinementTargets } from '../lib/local-refinement';
 import './document-editor.css';
 import { businessDocumentFocus, clearBusinessEditorFocus, focusBusinessDocumentField, readBusinessEditorFocus } from '../lib/business-editor-focus';
+import { DocumentRevisionPanel } from './DocumentRevisionPanel';
+import { readDocumentRevisionContext } from '../lib/document-revision-context';
+import type { DocumentRevisionContext } from '../lib/document-revision-context';
+import type { ChatTargetInspection } from '../chat-types';
+import type { DeliveryPreflightFinding } from '../delivery-types';
 const StudioAssetPicker = lazy(() => import('./StudioAssetPicker').then(module => ({ default: module.StudioAssetPicker })));
 const OfficeFilePreview = lazy(() => import('./OfficeFilePreview').then(module => ({ default: module.OfficeFilePreview })));
 
@@ -92,10 +97,11 @@ export function EditableDocumentStudio(props: PageProps) {
   const [recoveryNotice, setRecoveryNotice] = useState('');
   const workbench = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!ready || record?.projectId !== project.id) return;
+    if (!ready || record && record.projectId !== project.id) return;
+    try { const revision = readDocumentRevisionContext(sessionStorage, props.workspaceId, project.id); if (revision && !sourceArtifactIds.includes(revision.sourceArtifactId)) return; } catch { return; }
     try { const request = readBusinessEditorFocus(sessionStorage, project.id); if (!request) return; const id = businessDocumentFocus(document, request.target); if (!id) { setActionError('客户反馈所指位置已变化，请在制作单中重新核对段落或页面。'); return; } setSelectedId(id); setInstruction(request.text); setInspector('refine'); clearBusinessEditorFocus(sessionStorage, project.id); requestAnimationFrame(() => focusBusinessDocumentField(workbench.current, id, request.target.selectedText)); }
     catch (cause) { setActionError(cause instanceof Error ? cause.message : '返修位置暂未定位，原内容仍保留。'); }
-  }, [ready, project.id, record?.projectId]);
+  }, [ready, project.id, record?.projectId, sourceArtifactIds, props.workspaceId]);
   const [brief, setBrief] = useState(initialForm.brief);
   const [instruction, setInstruction] = useState(initialForm.instruction);
   const [modelId, setModelId] = useState(initialForm.modelId);
@@ -109,6 +115,7 @@ export function EditableDocumentStudio(props: PageProps) {
   const [history, setHistory] = useState<EditorVersionInfo[]>([]);
   const [comparisonRevision, setComparisonRevision] = useState<number>();
   const [officePreview, setOfficePreview] = useState<ArtifactMetadata>();
+  const [officePreviewPage, setOfficePreviewPage] = useState(1);
   const previewAfterExport = useRef(false);
   const [recoveryVersion, setRecoveryVersion] = useState<EditorRecord>();
   const edits = useEditHistory<DocumentHistorySnapshot>();
@@ -411,6 +418,15 @@ export function EditableDocumentStudio(props: PageProps) {
     catch (cause) { if (current.current.projectId === projectId && loadEpoch.current === operationEpoch && sourceRequest.current === request) setError(cause instanceof Error ? cause.message : '读取生成正文未完成，当前文稿保留。'); }
     finally { if (current.current.projectId === projectId && loadEpoch.current === operationEpoch) setBusy(''); }
   }
+  function loadRevisionSource(inspection: ChatTargetInspection, context: DocumentRevisionContext) {
+    if (!ready || busy || current.current.projectId !== context.projectId) throw Error('编辑器正在处理其他操作，请稍后载入原版。');
+    const next = editorFromText(kind, project.name, inspection.documentSource || '');
+    const snapshot = current.current;
+    const backup = preserveEditorDraft(localStorage, project.id, { document: snapshot.document, sourceArtifactIds: snapshot.sourceArtifactIds, baseRevision: snapshot.record?.revision || 0 });
+    localStorage.setItem(recoveryKey(project.id), JSON.stringify({ document: next, sourceArtifactIds: [context.sourceArtifactId], baseRevision: snapshot.record?.revision || 0 }));
+    change(next, true, [context.sourceArtifactId]); setSelectedId(selectedContentId(next)); setConflictDraft(backup); setAssetRecoveryResolved(true); setSelectedRecovery('0');
+    props.notify('已载入客户返修原版，切换前的文稿已保留，可恢复；未调用模型。');
+  }
   async function importImage(replaceTarget?: DocumentImageTarget) {
     if (busy || !ready) return;
     const projectId = project.id, operationEpoch = loadEpoch.current; setBusy('image'); setError('');
@@ -426,7 +442,24 @@ export function EditableDocumentStudio(props: PageProps) {
     } catch (cause) { if (current.current.projectId === projectId && loadEpoch.current === operationEpoch) setError(cause instanceof Error ? cause.message : '图片导入未完成。'); }
     finally { if (current.current.projectId === projectId && loadEpoch.current === operationEpoch) setBusy(''); }
   }
+  async function openPreflightIssue(finding: DeliveryPreflightFinding) {
+    const target = finding.target, snapshot = current.current, epoch = loadEpoch.current;
+    if (target.projectId !== project.id || busy || !ready || !window.desktop?.chat) return;
+    try {
+      const inspected = await window.desktop.chat.inspectTarget({ workspaceId: props.workspaceId, target: { projectId: project.id, artifactId: target.artifactId, sha256: target.sha256, kind, editorRevision: target.sourceRevision } });
+      if (current.current.projectId !== snapshot.projectId || loadEpoch.current !== epoch) return;
+      if (inspected.sha256 !== target.sha256 || target.sourceRevision !== undefined && inspected.sourceRevision !== target.sourceRevision) throw Error('被检查成品已变化，请重新检查当前版本。');
+      const latest = current.current, id = target.blockId || target.pageId, parts = latest.document.kind === 'word' ? latest.document.blocks : latest.document.slides;
+      if (!latest.dirty && target.sourceRevision !== undefined && target.sourceRevision === latest.record?.revision && id && parts.filter(part => part.id === id).length === 1) {
+        setSelectedId(id); setSelectedCellId(''); layout.openPanel('format');
+        requestAnimationFrame(() => focusBusinessDocumentField(workbench.current, id)); return;
+      }
+      setOfficePreviewPage(target.pageNumber || 1); setOfficePreview(inspected.artifact);
+      props.notify(latest.dirty ? '当前草稿保留，已打开被检查的实际成品页面。' : '已打开实际成品页面；未猜测编辑源中的位置。', 'info');
+    } catch (cause) { if (current.current.projectId === snapshot.projectId && loadEpoch.current === epoch) setActionError(workflowPublicError(cause, '检查位置暂未打开，当前稿件保留。')); }
+  }
   async function previewCurrentOffice() {
+    setOfficePreviewPage(1);
     if (!ready || busy) return;
     if (!dirty && currentExport[0]) { setOfficePreview(currentExport[0]); return; }
     const identity = project.id; previewAfterExport.current = true;
@@ -522,18 +555,18 @@ export function EditableDocumentStudio(props: PageProps) {
   const files = <ArtifactResults artifacts={realArtifacts} runner={props.workflowRunner} projectId={project.id} />;
   const deliveryTools = <><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={!!busy || !ready || !bridge} onClick={() => { void previewCurrentOffice(); }}>预览实际 Office 文件</button><button type="button" className="btn btn-secondary" disabled={!!busy || !ready || !bridge} onClick={() => { void persist(true); }}>导出到项目</button></div><p>先导出当前版本，再核对实际文件；确认交付与普通导出分开记录。</p></>;
   const panel = layout.tool === 'ai' ? aiTools : layout.tool === 'assets' ? assets : layout.tool === 'format' ? formatTools : layout.tool === 'versions' ? versions : layout.tool === 'files' ? files : deliveryTools;
-  const notices = <>{Object.keys(previewErrors).length > 0 && <div className="ed-new-source" role="status"><span>当前可见插图有 {Object.keys(previewErrors).length} 张预览未能读取，原文件与文稿保留。</span><button type="button" className="btn btn-secondary" onClick={retryPreviews}>重新读取插图预览</button></div>}<ProjectReferences props={props} />
+  const notices = <><DocumentRevisionPanel props={props} ready={ready} busy={!!busy} dirty={dirty} revision={record?.revision || 0} sourceArtifactIds={sourceArtifactIds} exportedRevision={exported ? record?.revision : undefined} exportedArtifacts={currentExport} onLoadSource={loadRevisionSource} />{Object.keys(previewErrors).length > 0 && <div className="ed-new-source" role="status"><span>当前可见插图有 {Object.keys(previewErrors).length} 张预览未能读取，原文件与文稿保留。</span><button type="button" className="btn btn-secondary" onClick={retryPreviews}>重新读取插图预览</button></div>}<ProjectReferences props={props} />
     <RecoveryDraftNotice error={recovery.error} onRetry={recovery.retry} onDownload={recovery.exportDraft} />
     {recoveryVersion && <section className="editor-recovery-notice" role="region" aria-label="可恢复历史版本"><h3>编辑源 v{recoveryVersion.revision} · {recoveryVersion.document.title}</h3><pre>{editorPlainText(recoveryVersion.document)}</pre><div><button className="btn btn-primary" disabled={!!busy || !bridge?.restore} onClick={() => { void restoreDamagedSource(); }}>保留原稿并恢复此版本</button><button className="btn btn-secondary" onClick={() => setRecoveryVersion(undefined)}>取消恢复</button></div></section>}
     {recoveryNotice && <div className="ed-new-source" role="status"><History size={17} /><span>{recoveryNotice}</span></div>}
     {error && <div className="ed-error" role="alert">{error}<span>当前编辑内容不会被自动覆盖。</span>{isWorkspaceConnectionError(error) ? <WorkspaceConnectionRecovery workspaceId={props.workspaceId} disabled={!!busy} onRecovered={() => setReload(value => value + 1)} /> : !ready && <button className="btn btn-secondary" disabled={!!busy} onClick={() => setReload(value => value + 1)}>重新读取编辑源</button>}{!ready && history.length > 0 && <button className="btn btn-secondary" onClick={() => { setInspector('history'); layout.openPanel('versions'); }}>查看可恢复历史</button>}</div>}{source && !sourceArtifactIds.includes(source.id) && <div className="ed-new-source"><Sparkles size={17} /><span>{loadingSource ? '正在整理完整文稿…' : '新生成的完整文稿已就绪。查看时会自动保留当前草稿，可随时恢复。'}</span><button className="btn btn-secondary" disabled={!!busy || !ready || !!loadingSource} onClick={() => { void loadGenerated(); }}>查看新生成文稿</button></div>}
     {conflictDraft && <div className="ed-new-source ed-recovery-source" role="status"><History size={17} /><span>切换前的文稿已保留，保存后会成为新版本，已有文件不变。</span>{recoveryDrafts(conflictDraft).length > 1 && <Select aria-label="选择保留草稿" value={selectedRecovery} onValueChange={setSelectedRecovery} options={recoveryDrafts(conflictDraft).map((item, index) => ({ value: String(index), label: `${index + 1}. ${item.document.title} · ${item.document.kind === 'word' ? `${item.document.blocks.length} 段` : `${item.document.slides.length} 页`}` }))} />}<button className="btn btn-secondary" disabled={!!busy || !ready} onClick={loadConflictDraft}>{props.assetToApply?.projectId === project.id && !assetRecoveryResolved ? '载入恢复稿后插入' : '载入未保存恢复稿'}</button>{props.assetToApply?.projectId === project.id && !assetRecoveryResolved && <div className="ed-asset-recovery-choice"><span>素材已复制，请先载入恢复稿，或选择插入当前文稿。</span><button className="btn btn-primary" disabled={!!busy || !ready} onClick={() => setAssetRecoveryResolved(true)}>插入当前文稿</button></div>}</div>}</>;
   return <div className="sw-editor-root" ref={workbench} onSelectCapture={scopedEdits.capture} onMouseUpCapture={scopedEdits.capture} onKeyUpCapture={scopedEdits.capture} onFocusCapture={event => { scopedEdits.capture(event); if (event.target instanceof HTMLElement && event.target.dataset.editField && event.target.closest('.ed-main')) setShowImageTools(false); }} onCompositionStartCapture={() => { composing.current = true; }} onCompositionEndCapture={() => { composing.current = false; }}>
-    <StudioWorkbench projectName={project.name} kind={kind} layout={layout} onTool={openTool} saveStatus={!ready ? '正在读取编辑源' : dirty ? '草稿已保留 · 项目版本尚未保存' : record ? '已保存项目版本 v' + record.revision + (exported ? ' · 对应成品已导出' : ' · 尚未导出此版') : '新文稿 · 尚未保存项目版本'} selectionLabel={document.kind === 'ppt' ? '第 ' + (Math.max(0, document.slides.findIndex(slide => slide.id === selectedId)) + 1) + ' / ' + document.slides.length + ' 页' : selectedCellId ? '当前表格单元格' : '当前段落 · 点击正文直接编辑'} navigation={navigation} navigationLabel={kind === 'ppt' ? '页面导航' : '文档大纲'} panel={panel} notices={notices} selectionTools={scopedEdits.toolbar} cost={<CostTotal summary={cost} />} busy={!!busy || !ready} exporting={busy === 'export'} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!bridge && hasResult} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onSave={() => { void persist(); }} onExport={() => { void persist(true, true); }} deliveryPanel={<DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind={kind} sourceRevision={record?.revision || 0} dirty={dirty || !ready} artifactIds={currentExport.map(file => file.id)} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} checks={editorDeliveryChecks(document, { saved: !!record && !dirty, exported })} />}>
+    <StudioWorkbench projectName={project.name} kind={kind} layout={layout} onTool={openTool} saveStatus={!ready ? '正在读取编辑源' : dirty ? '正在编辑 · 草稿已保留，尚未保存项目版本' : record ? '已保存项目版本 v' + record.revision + (exported ? ' · 对应成品已导出' : ' · 尚未导出此版') : '新文稿 · 尚未保存项目版本'} selectionLabel={document.kind === 'ppt' ? '第 ' + (Math.max(0, document.slides.findIndex(slide => slide.id === selectedId)) + 1) + ' / ' + document.slides.length + ' 页' : selectedCellId ? '当前表格单元格' : '当前段落 · 点击正文直接编辑'} navigation={navigation} navigationLabel={kind === 'ppt' ? '页面导航' : '文档大纲'} panel={panel} notices={notices} selectionTools={scopedEdits.toolbar} cost={<CostTotal summary={cost} />} busy={!!busy || !ready} exporting={busy === 'export'} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!bridge && hasResult} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onSave={() => { void persist(); }} onExport={() => { void persist(true, true); }} deliveryPanel={<DeliveryPanel onOpenIssue={openPreflightIssue} inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind={kind} sourceRevision={record?.revision || 0} dirty={dirty || !ready} artifactIds={currentExport.map(file => file.id)} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} checks={editorDeliveryChecks(document, { saved: !!record && !dirty, exported })} />}>
             <main className="ed-main">{!ready ? <div className="ed-loading">{error ? <FileText size={28} /> : <LoaderCircle className="spin" size={28} />}<p>{error ? '请保留原文件并检查工作区路径，当前未创建空白文件覆盖它。' : '正在读取项目编辑源…'}</p></div> : document.kind === 'word' ? <WordEditor showToolbar={false} showAddControls={false} document={document} onChange={changeTypedDocument} selectedId={selectedId} onSelect={id => { scopedEdits.chooseContent(id); setSelectedId(id); setSelectedCellId(''); }} onSelectTableCell={(id, cellId) => { scopedEdits.chooseContent(id); setSelectedId(id); setSelectedCellId(cellId); }} images={images} previews={previews} onEditImage={id => { scopedEdits.chooseContent(id, true); setSelectedId(id); setShowImageTools(true); layout.openPanel('format'); }} onImportImage={() => { void importImage(); }} disabled={!!busy} /> : <PresentationEditor showNavigation={false} showToolbar={false} showImageControls={false} document={document} onChange={changeTypedDocument} selectedId={selectedId} onSelect={id => { scopedEdits.chooseContent(id); setSelectedId(id); }} images={images} previews={previews} onEditImage={id => { scopedEdits.chooseContent(id, true); setSelectedId(id); setShowImageTools(true); layout.openPanel('format'); }} onImportImage={() => { void importImage(); }} disabled={!!busy} />}</main>
     </StudioWorkbench>
     {promptPicker && <PromptPicker prompts={props.prompts} category={kind} onClose={() => setPromptPicker(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPicker(false); }} />}{promptDraft && <PromptEditor categories={props.configuration.categories} initial={promptDraft} onClose={() => setPromptDraft(null)} onSave={(draft, id) => { props.onSavePrompt(draft, id); setPromptDraft(null); }} />}
     {illustrationPicker && illustrationPicker.projectId === project.id && illustrationPicker.workspaceId === props.workspaceId && <Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker props={props} title="选择文档配图" description="选中素材将复制到当前项目，并用于下一次生成配图；当前正文和未保存编辑保持不变。" confirmLabel="用作本次文档配图" onClose={closeIllustrationPicker} onChoose={useIllustrationMaterial} /></Suspense>}
-    {officePreview && officePreview.projectId === project.id && <Suspense fallback={<p role="status">正在打开实际文件预览…</p>}><OfficeFilePreview artifact={officePreview} onClose={() => setOfficePreview(undefined)} onOpenSource={() => { void props.workflowRunner.openArtifact(officePreview.id); }} /></Suspense>}
+    {officePreview && officePreview.projectId === project.id && <Suspense fallback={<p role="status">正在打开实际文件预览…</p>}><OfficeFilePreview initialPage={officePreviewPage} artifact={officePreview} onClose={() => setOfficePreview(undefined)} onOpenSource={() => { void props.workflowRunner.openArtifact(officePreview.id); }} /></Suspense>}
   </div>;
 }

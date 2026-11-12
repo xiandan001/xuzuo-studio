@@ -11,7 +11,7 @@ import { PdfPageCanvas } from './PdfPageCanvas';
 import type { PdfEdgeHint } from './PdfPageCanvas';
 import './OfficeFilePreview.css';
 
-export function OfficeFilePreview({ artifact, onClose, onOpenSource }: { artifact: ArtifactMetadata; onClose: () => void; onOpenSource?: () => void }) {
+export function OfficeFilePreview({ artifact, initialPage = 1, onClose, onOpenSource }: { artifact: ArtifactMetadata; initialPage?: number; onClose: () => void; onOpenSource?: () => void }) {
   const bridge = window.desktop?.officePreview;
   const [status, setStatus] = useState<OfficePreviewStatus>(), [rendered, setRendered] = useState<RenderedOfficePreview>(), [error, setError] = useState(''), [busy, setBusy] = useState(true), [saving, setSaving] = useState(false), [saved, setSaved] = useState<ArtifactMetadata>();
   const [revision, setRevision] = useState(0), [page, setPage] = useState(1), [pageInput, setPageInput] = useState('1'), [zoom, setZoom] = useState(100), [hints, setHints] = useState<PdfEdgeHint[]>([]);
@@ -24,6 +24,7 @@ export function OfficeFilePreview({ artifact, onClose, onOpenSource }: { artifac
     return () => { current = false; void bridge?.cancel(requestId).catch(() => undefined); };
   }, [artifact.id, revision, bridge]);
   useEffect(() => registerEditorSession({ id: `office-pdf-${artifact.id}`, projectId: artifact.projectId || '', label: '正在保存预览 PDF', getState: () => ({ dirty: false, pending: savePending.current }), save: async () => false, exportRecovery: () => false }), [artifact.id, artifact.projectId]);
+  useEffect(() => { if (!pdf.document) return; const value = Math.max(1, Math.min(pdf.document.numPages, Number.isSafeInteger(initialPage) ? initialPage : 1)); setPage(value); setPageInput(String(value)); setHints([]); }, [artifact.id, initialPage, pdf.document]);
   function changePage(next: number) { const value = Math.max(1, Math.min(pdf.document?.numPages || 1, next)); setPage(value); setPageInput(String(value)); setHints([]); }
   async function configure() { if (!bridge || busy) return; setBusy(true); setError(''); try { const info = await bridge.chooseRenderer(); setStatus(info); if (info.available) { forcePreview.current = false; setRevision(value => value + 1); } } catch (cause) { setError(workflowPublicError(cause, '渲染器未能配置。')); } finally { setBusy(false); } }
   async function savePdf() { if (!bridge || !rendered || savePending.current) return; const identity = artifact.id; savePending.current = true; setSaving(true); setError(''); try { const result = await bridge.savePdf({ previewId: rendered.previewId }); if (scope.current === identity) setSaved(result.artifact); } catch (cause) { if (scope.current === identity) setError(workflowPublicError(cause, 'PDF 未保存，原文件仍保留。')); } finally { savePending.current = false; if (scope.current === identity) setSaving(false); } }

@@ -50,6 +50,7 @@ function remapChatBackups(snapshots, idMap, backupId) {
         const mapped = idMap[link.runId] && idMap[link.target.projectId] && idMap[link.target.artifactId];
         return { ...link, runId: idMap[link.runId] || link.runId, target: { ...link.target, projectId: idMap[link.target.projectId] || link.target.projectId, artifactId: idMap[link.target.artifactId] || link.target.artifactId }, ...(!mapped || link.sourceOnly ? { sourceOnly: true, sourceRunId: link.sourceRunId || link.runId } : {}) };
       });
+      if (record.exports) restored.exports = record.exports.map(link => ({ ...link, turnId: idMap[link.turnId] || link.turnId, projectId: idMap[link.projectId] || link.projectId, runId: idMap[link.runId] || link.runId, ...(!idMap[link.projectId] || !idMap[link.runId] || link.sourceOnly ? { sourceOnly: true } : {}) }));
       restored._importOrigin = { backupId, sourceWorkspaceId: snapshot.workspaceId, sourceConversationId: record.id, sourceHash: hash(JSON.stringify(record)) };
       restored.turns = record.turns.map(turn => {
         const next = structuredClone(turn); next.id = idMap[turn.id]; delete next.credentialId;

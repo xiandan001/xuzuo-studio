@@ -6,13 +6,25 @@ import { ChatScenarioPicker } from './ChatScenarioPicker';
 import { availableChatScenarios } from '../lib/chat-scenarios';
 
 let root: Root | undefined, host: HTMLDivElement;
-beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true); host = document.createElement('div'); document.body.append(host); vi.stubGlobal('fetch', vi.fn(() => { throw Error('Choosing a scene cannot call a model'); })); });
+beforeEach(() => { localStorage.clear(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true); host = document.createElement('div'); document.body.append(host); vi.stubGlobal('fetch', vi.fn(() => { throw Error('Choosing a scene cannot call a model'); })); });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; host.remove(); expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 async function click(label: string) { const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.getAttribute('aria-label') === label || button.textContent?.trim() === label); expect(button).toBeTruthy(); await act(async () => button!.click()); }
 async function render(value = 'chat-default', disabled = false) {
   const select = vi.fn(); await act(async () => { root = createRoot(host); root.render(<ChatScenarioPicker scenarios={availableChatScenarios('workspace')} value={value} disabled={disabled} onSelect={select} />); }); return select;
 }
 describe('输入区使用场景选择', () => {
+  it('收藏和最近入口按工作区保存，切换场景不发送或创建项目', async () => {
+    const select = vi.fn(), scenarios = availableChatScenarios('workspace');
+    await act(async () => { root = createRoot(host); root.render(<ChatScenarioPicker workspaceId="one" scenarios={scenarios} value="chat-default" onSelect={select} />); });
+    await click('选择使用场景'); await click('收藏壁纸');
+    expect(select).not.toHaveBeenCalled(); await click('使用场景 壁纸');
+    expect(select).toHaveBeenCalledTimes(1); expect(host.querySelector('[aria-label="快速切换壁纸"]')).toBeTruthy();
+    await act(async () => root!.render(<ChatScenarioPicker workspaceId="two" scenarios={scenarios} value="chat-default" onSelect={select} />));
+    expect(host.querySelector('[aria-label="快速切换壁纸"]')).toBeNull();
+    await act(async () => root!.render(<ChatScenarioPicker workspaceId="one" scenarios={scenarios} value="chat-default" onSelect={select} />));
+    expect(host.querySelector('[aria-label="快速切换壁纸"]')).toBeTruthy();
+    await click('选择使用场景'); await click('取消收藏壁纸'); await click('最近'); expect(document.querySelector('[aria-label="使用场景 壁纸"]')).toBeTruthy();
+  });
   it('只选择场景而不发送，专用工具与参考要求清楚展示', async () => {
     const select = await render(); await click('选择使用场景'); expect(document.querySelector('[role=dialog]')).toBeTruthy(); expect(select).not.toHaveBeenCalled();
     await click('图片'); expect(document.body.textContent).toContain('专用工作台'); expect(document.body.textContent).toContain('需 1 张参考图');

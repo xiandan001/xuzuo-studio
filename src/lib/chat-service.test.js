@@ -31,6 +31,23 @@ afterEach(async () => {
   for (const directory of owned.splice(0)) { if (!path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'xuzuo-chat-test-')) throw Error('Unowned cleanup'); await fs.rm(directory, { recursive: true, force: true }); }
 });
 describe('无需项目的普通聊天持久化与计费', () => {
+  it('本地文件关联可重复核对并持久化，来源/费用不变，错回复和模型任务不能冒充本地保存', async () => {
+    let run;
+    const f = await setup({ readRun: async () => structuredClone(run) });
+    await f.service.start(base); const before = await settled(f.service), fees = await f.service.ledger();
+    const sourceSha256 = createHash('sha256').update(before.turns[0].text).digest('hex');
+    const input = { ...base, runId: 'local-export', turnId: base.id, kind: 'word', sourceSha256 };
+    run = { id: input.runId, workspaceId: base.workspaceId, projectId: 'file-project', mode: 'live', createdAt: new Date().toISOString(), snapshot: { outputKind: 'word', sourceChat: { conversationId: base.conversationId, turnId: base.id, sha256: sourceSha256 }, steps: [{ id: 'save-file', kind: 'export', enabled: true }] } };
+    const saved = await f.service.linkExport(input); await f.service.linkExport(input);
+    expect(saved.exports).toHaveLength(1); expect((await f.service.read(base)).exports).toEqual(saved.exports);
+    expect((await f.service.read(base)).turns).toEqual(before.turns); expect(await f.service.ledger()).toEqual(fees); expect(f.calls).toHaveLength(1);
+    await expect(f.service.linkExport({ ...input, sourceSha256: 'a'.repeat(64) })).rejects.toThrow(/原回复/);
+    run.snapshot.steps[0].kind = 'text'; await expect(f.service.linkExport(input)).rejects.toThrow(/绑定当前回复/);
+    run.snapshot.steps[0].kind = 'export'; await f.service.shutdown();
+    const reopened = createChatService({ directory: f.directory, credentialStore: credentials }); services.push(reopened);
+    expect((await reopened.read(base)).exports).toEqual(saved.exports); expect(await reopened.ledger()).toEqual(fees);
+    expect((await reopened.exportWorkspace(base.workspaceId)).conversations[0].exports).toEqual(saved.exports);
+  });
   it('直接发送首条消息，不创建Project或工作区文件夹，仅写应用会话目录', async () => {
     const f = await setup(); const started = await f.service.start(base); expect(started.turns[0].status).toBe('running');
     const conversation = await settled(f.service); expect(conversation.turns[0]).toMatchObject({ userText: base.text, text: receipt.text, status: 'complete', costState: 'calculated', costCents: 5 });

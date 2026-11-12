@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const sha = value => createHash('sha256').update(value).digest('hex');
-async function verifyNewChatFeatures({ service, workspaceId, production, inputFiles, calls, report, evaluate, dom, click, fill, select, chooseScenario, until, step }) {
+async function verifyNewChatFeatures({ service, workspaceId, production, inputFiles, calls, report, evaluate, dom, click, fill, select, chooseScenario, until, step, reload, viewport }) {
   const original = (await service.list(workspaceId))[0], originalLedger = await service.ledger(workspaceId), fixed = entries => entries.map(({ projectName: _name, ...entry }) => entry);
   const originalId = original.id, feeRecords = fixed(originalLedger), checks = report.productivityChecks = {};
   async function sameFees() { assert.equal(calls.length, 9); assert.deepEqual(fixed(await service.ledger(workspaceId)), feeRecords); }
@@ -49,6 +49,57 @@ async function verifyNewChatFeatures({ service, workspaceId, production, inputFi
     const outputs = run.attempts.flatMap(attempt => attempt.artifacts || []).filter(file => file.kind === 'image'); assert(outputs.some(file => file.id !== production.source.id)); assert.equal(sha((await production.artifactStore.read(production.source.id)).buffer), inputFiles.pngSha256);
     await service.linkProduction({ workspaceId, conversationId: linked.id, runId: run.id, target: linked.productions[0].target, instruction: linked.productions[0].instruction }); assert.equal((await service.read({ workspaceId, conversationId: linked.id })).productions.length, 1); assert.equal(production.calls.length, 1);
     await click('.creation-production .home-result-discuss', '继续修改这份'); await dom(`document.querySelector('.chat-target-heading')&&document.querySelector('.chat-fixture').dataset.discussedArtifact`, 'result-card continuation binds exact exported file'); const selectedId = await evaluate(`document.querySelector('.chat-fixture').dataset.discussedArtifact`); assert(outputs.some(file => file.id === selectedId)); assert.notEqual(selectedId, production.source.id); assert.equal(production.calls.length, 1); checks.boundRefinement = checks.refinementFeesSeparate = true;
+  });
+  await step('favorite-and-recent-scenes-survive-reload-without-model-calls', async () => {
+    await history('当前'); await click('.chat-history-open', '可追踪的客户讨论'); await dom(`document.querySelectorAll('.workspace-chat-turn').length===9`, 'original reply restored for local productivity checks');
+    await click('[aria-label="选择使用场景"]'); await click('[aria-label="收藏自由聊天"]'); await click('[aria-label="收藏看图问答"]'); await click('.chat-scenario-groups button', '收藏');
+    await dom(`document.querySelectorAll('.chat-scenario-choice').length===2`, 'favorites filter only shows actual favorites'); await click('[aria-label="使用场景 自由聊天"]');
+    await click('[aria-label="快速切换看图问答"]'); await dom(`document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('看图问答')`, 'favorite shortcut switches without sending');
+    const key = `xuzuo-chat-scenes-v1:${workspaceId}`, preferences = await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);
+    assert.deepEqual(preferences.favorites, ['chat-default', 'chat-vision']); assert.equal(preferences.recent[0], 'chat-vision');
+    await click('[aria-label="选择使用场景"]'); await click('.chat-scenario-groups button', '最近'); await dom(`document.querySelector('[aria-label="使用场景 看图问答"]')`, 'recent list includes the actual last selection'); await click('[aria-label="关闭使用场景"]');
+    await reload(); await dom(`document.querySelectorAll('.workspace-chat-turn').length===9&&document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('看图问答')`, 'scenario restored through actual preload and React reload');
+    assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`), preferences);
+    report.sceneLayouts = [];
+    for (const width of [1080, 1440]) for (const theme of ['light', 'dark']) {
+      await viewport(width, theme);
+      const layout = await evaluate(`(()=>{const composer=document.querySelector('.workspace-chat-composer'),shortcuts=document.querySelector('[aria-label="常用场景快捷入口"]'),toolbar=document.querySelector('.workspace-chat-composer-toolbar'),a=composer.getBoundingClientRect(),b=shortcuts.getBoundingClientRect(),t=toolbar.getBoundingClientRect();return {width:innerWidth,theme:document.documentElement.dataset.appTheme,documentWidth:document.documentElement.scrollWidth,composerWidth:a.width,shortcutWidth:b.width,passed:document.documentElement.scrollWidth<=innerWidth+2&&b.left>=a.left-2&&b.right<=a.right+2&&t.right<=innerWidth+2}})()`);
+      assert.equal(layout.passed, true, JSON.stringify(layout)); report.sceneLayouts.push(layout);
+    }
+    await sameFees(); assert.equal(production.calls.length, 1); report.sceneChecks = { favorites: true, recent: true, reloadRestores: true, lightDarkLayouts: true, noAdditionalCalls: true };
+    await click('button', '载入验收作品');
+  });
+  await step('chat-reply-saves-real-word-ppt-excel-previews-and-opens-editors', async () => {
+    const originalRecord = await service.read({ workspaceId, conversationId: originalId }), sourceTurn = originalRecord.turns.find(turn => turn.status === 'complete' && turn.mode !== 'plan' && turn.text.includes('| 类别 | 内容 |'));
+    assert(sourceTurn, 'A previously paid complete Markdown reply with a real table is required');
+    const sourceSha256 = sha(sourceTurn.text), originalProductionLedger = (await production.engine.snapshot()).ledger, exportChecks = report.exportChecks = {}, exported = report.chatExports = [];
+    const extension = { word: 'docx', ppt: 'pptx', excel: 'xlsx' }, labels = { word: 'Word 文档', ppt: 'PPT 演示', excel: 'Excel 表格' };
+    for (const kind of ['word', 'ppt', 'excel']) {
+      const project = production.documentProjects.find(project => project.kind === kind), store = kind === 'excel' ? production.spreadsheetStore : production.editorStore, before = await store.load({ projectId: project.id, kind });
+      assert.deepEqual(before, production.manualRecords[kind]);
+      await click('.workspace-chat-turn:has(.chat-reply-text h1) .workspace-chat-message-actions button', '保存为文件'); await dom(`document.querySelector('.chat-file-dialog')`, 'actual file export dialog');
+      if (kind !== 'word') await click('.chat-file-formats button', labels[kind]); await select('回复保存项目', project.name); await click('.chat-file-dialog footer button', '保存文件');
+      let link; await until(async () => { const record = await service.read({ workspaceId, conversationId: originalId }); link = record.exports?.find(item => item.kind === kind); return !!link; }, `actual ${kind} export associated through native chat linkExport`);
+      let run; await until(async () => { run = await production.engine.runDetail(link.runId); if (['failed', 'cancelled', 'interrupted'].includes(run.status)) throw Error(JSON.stringify(run)); return run.status === 'complete'; }, `real export-only ${kind} workflow completes`);
+      assert.equal(run.snapshot.sourceChat.sha256, sourceSha256); assert.equal(run.snapshot.sourceChat.turnId, sourceTurn.id); assert(run.snapshot.steps.every(step => step.kind === 'export'));
+      const file = run.attempts.flatMap(attempt => attempt.artifacts || []).find(file => file.kind === 'office' && file.name.endsWith('.' + extension[kind])); assert(file, `actual ${extension[kind]} file is required`);
+      const actual = await production.artifactStore.read(file.id), zip = await require('jszip').loadAsync(actual.buffer, { checkCRC32: true });
+      assert(actual.path.startsWith(await production.workspaceStorage.projectDirectory(project.id))); assert(actual.buffer.subarray(0, 2).equals(Buffer.from('PK')));
+      if (kind === 'word') { const xml = await zip.file('word/document.xml').async('string'); assert(xml.includes('完整说明') && xml.includes('橘猫')); }
+      else if (kind === 'ppt') { const pages = Object.keys(zip.files).filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name)); assert(pages.length > 1); assert((await Promise.all(pages.map(name => zip.file(name).async('string')))).join('').includes('橘猫')); }
+      else { const workbook = new (require('exceljs').Workbook)(); await workbook.xlsx.load(actual.buffer); assert.equal(workbook.worksheets[0].getCell('A1').value, '类别'); assert.equal(workbook.worksheets[0].getCell('B2').value, '橘猫'); }
+      const selector = `.creation-production:has(footer span[title$=".${extension[kind]}"])`;
+      await dom(`document.querySelector(${JSON.stringify(selector)})`, `${kind} result card uses actual linked native run`); await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
+      await dom(`document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')})?.textContent.includes('橘猫')`, `${kind} HomeProductionResult reads the exact export input`);
+      await click(selector + ' [aria-label="打开编辑器"]'); await dom(`document.querySelector('.chat-fixture').dataset.editorKind===${JSON.stringify(kind)}`, `${kind} result directly enters actual editor`);
+      await dom(`document.querySelector('.chat-fixture-editor')&&[document.querySelector('.chat-fixture-editor').textContent,...[...document.querySelectorAll('.chat-fixture-editor input,.chat-fixture-editor textarea')].map(e=>e.value)].join(' ').includes(${JSON.stringify('MANUAL_' + kind.toUpperCase() + '_UNCHANGED')})`, `${kind} real editor retains the saved manual draft`);
+      assert.deepEqual(await store.load({ projectId: project.id, kind }), before); await click('[aria-label="验收返回聊天"]'); await dom(`document.querySelectorAll('.workspace-chat-turn').length===9`, 'back to the original conversation without an extra model turn');
+      await service.linkExport({ workspaceId, conversationId: originalId, turnId: sourceTurn.id, runId: run.id, kind, sourceSha256 }); assert.equal((await service.read({ workspaceId, conversationId: originalId })).exports.filter(item => item.runId === run.id).length, 1);
+      exported.push({ kind, runId: run.id, artifactId: file.id, sha256: sha(actual.buffer), bytes: actual.buffer.length }); exportChecks[kind] = true;
+    }
+    assert.equal((await service.read({ workspaceId, conversationId: originalId })).turns.find(turn => turn.id === sourceTurn.id).text, sourceTurn.text);
+    assert.deepEqual((await production.engine.snapshot()).ledger, originalProductionLedger); await sameFees(); assert.equal(production.calls.length, 1);
+    Object.assign(exportChecks, { actualOfficeBytes: true, homeResultPreviews: true, directEditors: true, draftsAndFeesPreserved: true, sourceAssociationsIdempotent: true });
   });
 }
 module.exports = { verifyNewChatFeatures };

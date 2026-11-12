@@ -20,6 +20,8 @@ export interface BusinessTask {
   artifactIds: string[]; factsRevision: number; error?: string;
 }
 export interface BusinessOrder {
+  paymentPlan?: BusinessPaymentPlan;
+  intakes?: BusinessIntake[];
   referenceArtifactIds?: string[];
   deliveries?: BusinessDeliveryReceipt[];
   preparedHash?: string;
@@ -37,6 +39,7 @@ export interface BusinessDeliveryReceipt {
   checks: { content: boolean; rights: boolean; format: boolean };
 }
 export interface BusinessFeedback {
+  revisionAdoption?: { sourceArtifactId: string; sourceSha256: string; exportRevision: number; artifactIds: string[]; adoptedAt: string };
   id: string; orderId: string; round: number;
   target: { projectId: string; artifactId?: string; pageId?: string; blockId?: string; selectedText?: string; sheetId?: string; cellAddress?: string; region?: { x: number; y: number; width: number; height: number } };
   proofPackageId?: string; proofAnnotationId?: string; sourceSha256?: string; sourceRevision?: number;
@@ -48,9 +51,27 @@ export interface BusinessCostAllocation {
   note: string; createdAt: string; voidedAt?: string;
 }
 export interface BusinessTransaction {
+  paymentMilestoneId?: string;
   id: string; orderId: string; productId?: string; kind: 'receipt' | 'refund' | 'fee' | 'expense' | 'labor';
   amountCents: number; quantity?: number; minutes?: number; hourlyRateCents?: number; occurredAt: string;
   note: string; source?: string; externalId?: string; voidedAt?: string;
+}
+export interface BusinessPaymentPlan {
+  currency: 'CNY'; agreedCents: number;
+  milestones: { id: string; label: string; amountCents: number; dueDate?: string; note?: string }[];
+  assignments?: { id: string; transactionId: string; milestoneId?: string; createdAt: string; voidedAt?: string }[];
+}
+export type BusinessIntakeKey = 'brief' | 'purpose' | 'quantity' | 'size' | 'deadline' | 'includedRevisions' | 'formats';
+export interface BusinessIntakeSource { artifactId: string; originalArtifactId?: string; sha256: string; name: string; mimeType: string; text?: string; }
+export interface BusinessIntakeCandidate {
+  key: BusinessIntakeKey; value: string;
+  evidence: { artifactId: string; page?: number; snippet: string; textMatched: boolean }[];
+}
+export interface BusinessIntake {
+  requestId?: string;
+  id: string; createdAt: string; factsRevision: number; sources: BusinessIntakeSource[];
+  candidates: BusinessIntakeCandidate[]; missing: BusinessIntakeKey[]; warnings: string[];
+  runId?: string; confirmedAt?: string; confirmedValues?: Partial<Record<BusinessIntakeKey, string>>;
 }
 export interface BusinessMetric {
   evidenceArtifactId?: string;
@@ -85,6 +106,11 @@ export interface BusinessListingInput {
 }
 export interface BusinessListingResult { artifacts: ArtifactMetadata[]; formalArtifactIds: string[]; previewArtifactIds: string[]; }
 export interface BusinessBridge {
+  adoptRevision?: (input: { workspaceId: string; orderId: string; feedbackId: string; sourceArtifactId: string; sourceSha256: string; sourceRevision?: number; exportRevision: number; artifactIds: string[] }) => Promise<BusinessProductionResult>;
+  intakeRead?: (input: { workspaceId: string; orderId: string; artifactIds: string[]; text?: string }) => Promise<{ state: BusinessState; intakeId: string }>;
+  intakeExtract?: (input: { workspaceId: string; orderId: string; intakeId: string }) => Promise<{ state: BusinessState; intakeId: string }>;
+  intakeConfirm?: (input: { workspaceId: string; orderId: string; intakeId: string; expectedRevision: number; values: Partial<Record<BusinessIntakeKey, string>>; confirmed: true }) => Promise<BusinessState>;
+  exportStatement?: (input: { workspaceId: string; orderId: string }) => Promise<{ saved: boolean; artifact?: ArtifactMetadata }>;
   linkOutput?: (input: { workspaceId: string; projectId: string; artifactIds: string[]; orderId?: string; name?: string }) => Promise<BusinessState>;
   allocateCosts?: (input: { workspaceId: string; expectedRevision: number; entryId: string; allocations: { projectId?: string; orderId?: string; basisPoints: number }[]; note?: string }) => Promise<BusinessState>;
   importProofFeedback?: (input: { workspaceId: string; orderId?: string; title?: string; packageId: string; annotations: { id: string; target: BusinessFeedback['target']; text: string; sourceSha256: string; sourceRevision?: number }[] }) => Promise<BusinessState>;

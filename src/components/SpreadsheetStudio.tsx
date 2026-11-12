@@ -3,7 +3,7 @@ import { AlignCenter, AlignLeft, AlignRight, BookOpen, History, LoaderCircle, Pl
 import type { PageProps, PromptDraft } from '../types';
 import type { ArtifactMetadata } from '../live-types';
 import type { SpreadsheetCell, SpreadsheetDocument, SpreadsheetRecord, SpreadsheetSheet, SpreadsheetVersionInfo } from '../spreadsheet-types';
-import { cellFromInput, cellToInput, columnLabel, SPREADSHEET_LIMITS, validateSpreadsheetDocument } from '../lib/spreadsheet-engine';
+import { cellFromInput, cellToInput, columnLabel, parseCellAddress, SPREADSHEET_LIMITS, validateSpreadsheetDocument } from '../lib/spreadsheet-engine';
 import { createSpreadsheetCalculationCache } from '../lib/spreadsheet-calculation-cache';
 import { emptySpreadsheet, hasSpreadsheetEdits, legacySpreadsheetDocument, newSpreadsheetSheet, nextSpreadsheetName, pasteSpreadsheetCells, readSpreadsheetRecovery, renameSpreadsheetSheet, resolveSpreadsheetRecovery, spreadsheetConflictKey, spreadsheetFormKey, spreadsheetFromText, spreadsheetNameError, spreadsheetRecoveryKey, SPREADSHEET_COLUMN_LIMIT, SPREADSHEET_ROW_LIMIT, updateSpreadsheetCell } from '../lib/spreadsheet-ui';
 import { spreadsheetMissingInputs } from '../lib/spreadsheet-generated';
@@ -52,6 +52,11 @@ import { RecoveryDraftNotice } from './RecoveryDraftNotice';
 import { ProjectReferences } from './ProjectReferences';
 import './spreadsheet-editor.css';
 import { businessSpreadsheetFocus, clearBusinessEditorFocus, readBusinessEditorFocus } from '../lib/business-editor-focus';
+import { DocumentRevisionPanel } from './DocumentRevisionPanel';
+import { readDocumentRevisionContext } from '../lib/document-revision-context';
+import type { DocumentRevisionContext } from '../lib/document-revision-context';
+import type { ChatTargetInspection } from '../chat-types';
+import type { DeliveryPreflightFinding } from '../delivery-types';
 const StudioAssetPicker = lazy(() => import('./StudioAssetPicker').then(module => ({ default: module.StudioAssetPicker })));
 const OfficeFilePreview = lazy(() => import('./OfficeFilePreview').then(module => ({ default: module.OfficeFilePreview })));
 
@@ -84,6 +89,7 @@ export function SpreadsheetStudio(props: PageProps) {
   const [conflictDraft, setConflictDraft] = useState<SpreadsheetRecovery>();
   const [history, setHistory] = useState<SpreadsheetVersionInfo[]>([]);
   const [officePreview, setOfficePreview] = useState<ArtifactMetadata>();
+  const [officePreviewPage, setOfficePreviewPage] = useState(1);
   const previewAfterExport = useRef(false);
   const [recoveryVersion, setRecoveryVersion] = useState<SpreadsheetRecord>();
   const edits = useEditHistory<SpreadsheetHistorySnapshot>();
@@ -109,8 +115,8 @@ export function SpreadsheetStudio(props: PageProps) {
   const [promptPicker, setPromptPicker] = useState(false);
   const [promptDraft, setPromptDraft] = useState<PromptDraft | null>(null);
   const loadEpoch = useRef(0);
-  const current = useRef({ projectKey, workbook, record, sourceArtifactIds });
-  current.current = { projectKey, workbook, record, sourceArtifactIds };
+  const current = useRef({ projectKey, workbook, record, sourceArtifactIds, dirty });
+  current.current = { projectKey, workbook, record, sourceArtifactIds, dirty };
   const appliedPrompt = useRef<string | undefined>(undefined);
   const skipFormulaBlur = useRef(false);
   const pendingCellEdit = useRef(false);
@@ -120,9 +126,10 @@ export function SpreadsheetStudio(props: PageProps) {
   const ready = loadedKey === projectKey;
   useEffect(() => {
     if (!ready) return;
+    try { const revision = readDocumentRevisionContext(sessionStorage, props.workspaceId, project.id); if (revision && !sourceArtifactIds.includes(revision.sourceArtifactId)) return; } catch { return; }
     try { const request = readBusinessEditorFocus(sessionStorage, project.id); if (!request) return; const target = businessSpreadsheetFocus(workbook, request.target); if (!target) { setActionError('客户反馈所指单元格已变化，请在制作单中重新核对。'); return; } setSelectedSheetId(target.sheetId); setSelectedAddress(target.address); setInstruction(request.text); setInspector('refine'); clearBusinessEditorFocus(sessionStorage, project.id); }
     catch (cause) { setActionError(cause instanceof Error ? cause.message : '返修单元格暂未定位，原内容仍保留。'); }
-  }, [ready, project.id]);
+  }, [ready, project.id, sourceArtifactIds, props.workspaceId]);
   const bridge = window.desktop?.spreadsheets;
   const sheet = workbook.sheets.find(item => item.id === selectedSheetId) || workbook.sheets[0];
   const selectedCell = sheet.cells[selectedAddress];
@@ -417,7 +424,34 @@ export function SpreadsheetStudio(props: PageProps) {
     } catch (cause) { if (operationCurrent(key, epoch)) setError(workflowPublicError(cause, '生成表格载入失败，当前工作簿仍保留。')); }
     finally { if (operationCurrent(key, epoch)) setBusy(''); }
   }
+  function loadRevisionSource(inspection: ChatTargetInspection, context: DocumentRevisionContext) {
+    if (!ready || busy || context.projectId !== project.id) throw Error('工作簿正在处理其他操作，请稍后载入原版。');
+    const next = spreadsheetFromText(inspection.documentSource || '', current.current.workbook.title);
+    const backup = { document: current.current.workbook, sourceArtifactIds: current.current.sourceArtifactIds, baseRevision: current.current.record?.revision || 0 };
+    const previous = stored(spreadsheetConflictKey(project.id));
+    if (previous) localStorage.setItem(`${spreadsheetConflictKey(project.id)}.${Date.now()}`, previous);
+    localStorage.setItem(spreadsheetConflictKey(project.id), JSON.stringify(backup));
+    change(next, [context.sourceArtifactId]); setConflictDraft(backup); setSelectedSheetId(next.sheets[0].id); setSelectedAddress('A1');
+    props.notify('已载入客户返修原版，原工作簿已保留，可恢复；未调用模型。');
+  }
+  async function openPreflightIssue(finding: DeliveryPreflightFinding) {
+    const target = finding.target, key = projectKey, epoch = loadEpoch.current;
+    if (target.projectId !== project.id || busy || !ready || !window.desktop?.chat) return;
+    try {
+      const inspected = await window.desktop.chat.inspectTarget({ workspaceId: props.workspaceId, target: { projectId: project.id, artifactId: target.artifactId, sha256: target.sha256, kind: 'excel', editorRevision: target.sourceRevision } });
+      if (!operationCurrent(key, epoch)) return;
+      if (inspected.sha256 !== target.sha256 || target.sourceRevision !== undefined && inspected.sourceRevision !== target.sourceRevision) throw Error('被检查成品已变化，请重新检查当前版本。');
+      const candidates = current.current.workbook.sheets.filter(item => target.sheetId ? item.id === target.sheetId : target.sheetName ? item.name === target.sheetName : false);
+      if (!current.current.dirty && target.sourceRevision !== undefined && target.sourceRevision === current.current.record?.revision && candidates.length === 1 && target.cellAddress) {
+        const cell = parseCellAddress(target.cellAddress), selected = candidates[0];
+        if (cell.row <= selected.rowCount && cell.column <= selected.columnCount) { setSelectedSheetId(selected.id); setSelectedAddress(cell.address); setRefineRange(''); layout.openPanel('format'); return; }
+      }
+      setOfficePreviewPage(target.pageNumber || 1); setOfficePreview(inspected.artifact);
+      props.notify(current.current.dirty ? '当前草稿保留，已打开被检查的实际成品。' : '已打开实际文件，未猜测工作表位置。', 'info');
+    } catch (cause) { if (operationCurrent(key, epoch)) setActionError(workflowPublicError(cause, '检查位置暂未打开，当前工作簿保留。')); }
+  }
   async function previewCurrentOffice() {
+    setOfficePreviewPage(1);
     if (!ready || busy) return;
     if (!dirty && currentExport[0]) { setOfficePreview(currentExport[0]); return; }
     const key = projectKey; previewAfterExport.current = true;
@@ -531,14 +565,14 @@ export function SpreadsheetStudio(props: PageProps) {
   const deliveryTools = <><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={disabled || !bridge} onClick={() => { void previewCurrentOffice(); }}>预览实际 Excel 文件</button><button type="button" className="btn btn-secondary" disabled={disabled || !bridge} onClick={() => { void persist(true); }}>导出到项目</button></div><p>宽表打印自动使用 A3 横向，普通表使用 A4。请核对公式、数据与排版，再确认交付。</p></>;
   const panel = layout.tool === 'ai' ? aiTools : layout.tool === 'format' ? formatTools : layout.tool === 'versions' ? versions : layout.tool === 'assets' ? assets : layout.tool === 'files' ? <ArtifactResults artifacts={realArtifacts} runner={props.workflowRunner} projectId={project.id} /> : deliveryTools;
   return <div ref={workbench} className="sw-editor-root ss-unified" data-spreadsheet-layout="unified" onChangeCapture={event => captureCellSelection(event, true)} onSelectCapture={captureCellSelection} onPointerDownCapture={event => { if (event.target instanceof HTMLTextAreaElement && (event.target === formulaEditor.current || event.target.closest('.ss-grid'))) setCellTextSelection(previous => previous ? { ...previous, recoveryPoint: false } : previous); }} onKeyDownCapture={event => { if (event.key === 'Escape' && event.target instanceof HTMLTextAreaElement && (event.target === formulaEditor.current || event.target.closest('.ss-grid')) && !event.nativeEvent.isComposing) resetScopedHistory(); }}>
-    <StudioWorkbench projectName={project.name} kind="excel" layout={layout} onTool={openTool} saveStatus={!ready ? '正在读取工作簿' : dirty ? '草稿已保留 · 项目版本尚未保存' : record ? '已保存工作簿 v' + record.revision + (exported ? ' · 对应成品已导出' : ' · 此版尚未导出') : localSaved ? '浏览器草稿已保存 · 本地项目版本尚未建立' : '新工作簿 · 尚未保存项目版本'} selectionLabel={sheet.name + '!' + (refineRange || selectedAddress)} navigation={navigation} navigationLabel="工作表" panel={panel} notices={<>    <ProjectReferences props={props} />
+    <StudioWorkbench projectName={project.name} kind="excel" layout={layout} onTool={openTool} saveStatus={!ready ? '正在读取工作簿' : dirty ? '正在编辑 · 草稿已保留，尚未保存项目版本' : record ? '已保存工作簿 v' + record.revision + (exported ? ' · 对应成品已导出' : ' · 此版尚未导出') : localSaved ? '浏览器草稿已保存 · 本地项目版本尚未建立' : '新工作簿 · 尚未保存项目版本'} selectionLabel={sheet.name + '!' + (refineRange || selectedAddress)} navigation={navigation} navigationLabel="工作表" panel={panel} notices={<><DocumentRevisionPanel props={props} ready={ready} busy={!!busy} dirty={dirty} revision={record?.revision || 0} sourceArtifactIds={sourceArtifactIds} exportedRevision={exported ? record?.revision : undefined} exportedArtifacts={currentExport} onLoadSource={loadRevisionSource} /><ProjectReferences props={props} />
     <RecoveryDraftNotice error={recovery.error} onRetry={recovery.retry} onDownload={recovery.exportDraft} />
     {recoveryVersion && <section className="editor-recovery-notice" role="region" aria-label="可恢复历史工作簿"><h3>工作簿 v{recoveryVersion.revision} · {recoveryVersion.document.title}</h3><p>每张表预览前 20 个已用单元格，恢复包含全部内容。</p><pre>{recoveryVersion.document.sheets.map(item => `${item.name}\n${Object.entries(item.cells).slice(0, 20).map(([address, cell]) => `${address}: ${cell.formula !== undefined ? `=${cell.formula}` : String(cell.value ?? '')}`).join('\n')}`).join('\n\n')}</pre><div><button className="btn btn-primary" disabled={!!busy || !bridge?.restore} onClick={() => { void restoreDamagedSource(); }}>保留原稿并恢复此版本</button><button className="btn btn-secondary" onClick={() => setRecoveryVersion(undefined)}>取消恢复</button></div></section>}
     {error && <div className="ss-message ss-message-error" role="alert"><span>{error} 当前编辑内容会保留。</span>{isWorkspaceConnectionError(error) ? <WorkspaceConnectionRecovery workspaceId={props.workspaceId} disabled={!!busy} onRecovered={() => setReload(value => value + 1)} /> : !ready && <button className="btn btn-secondary" disabled={!!busy} onClick={() => setReload(value => value + 1)}>重新读取</button>}{!ready && history.length > 0 && <button className="btn btn-secondary" onClick={() => openInspector('history')}>查看可恢复历史</button>}</div>}
     {source && !sourceArtifactIds.includes(source.id) && <div className="ss-message"><Sparkles size={17} /><span>{autoLoading ? '正在把生成结果载入工作表…' : '有新生成的表格内容。切换时会保留当前编辑，可一键恢复。'}</span><button className="btn btn-secondary" disabled={disabled || autoLoading} onClick={() => { void loadGenerated(); }}>载入生成表格</button></div>}
     {conflictDraft && <div className="ss-message"><History size={17} /><span>上次编辑已保留；恢复时也会保留当前内容，保存版本均不受影响。</span><button className="btn btn-secondary" disabled={disabled} onClick={restoreConflict}>载入恢复稿</button></div>}
     {missingInputs.length > 0 && <RememberedDetails rememberKey={layout.rememberKey('spreadsheet:missing-inputs')} className="ss-missing-inputs panel"><summary>待补充资料 · {missingInputs.length} 项</summary><p>模型已将缺少的资料单独列出，未补造数据。内容也保存在“资料说明”工作表中。</p><ul>{missingInputs.map((item, index) => <li key={index}>{item}</li>)}</ul></RememberedDetails>}
-</>} selectionTools={scopeVisible && <div className="ss-scope-tools"><SelectionHistoryToolbar label={exactText ? `${sheet.name}!${selectedAddress} · 选中文字` : `${sheet.name}!${refineRange || selectedAddress} · 单元格区域`} selectionPreview={exactText ? selectionValue.slice(textSelection.start, textSelection.end) : undefined} selectedCount={exactText ? Array.from(selectionValue.slice(textSelection.start, textSelection.end)).length : 0} exactSelection={exactText} scopeDescription={exactText ? textSelection.recoveryPoint && textSelection.start === textSelection.end ? '已保留局部恢复位置，可重做刚才所选文字' : `已选择 ${Array.from(selectionValue.slice(textSelection.start, textSelection.end)).length} 字，只恢复选区内变化` : '按整个单元格恢复值、公式与格式，区域外内容保留'} canUndo={!scopeReason && scopeUndo.available} canRedo={!scopeReason && scopeRedo.available} reason={scopeReason || (!scopeUndo.available && !scopeRedo.available ? scopeUndo.reason : undefined)} disabled={disabled} onUndo={() => moveScopedHistory('undo')} onRedo={() => moveScopedHistory('redo')} onClearSelection={() => { setCellTextSelection(undefined); formulaEditor.current?.setSelectionRange(0, 0); setShowScopeTools(true); }} /><label className="ss-scope-range"><span>单元格区域</span><input className="field" aria-label="表格撤销重做区域" placeholder={selectedAddress} value={refineRange} onChange={event => { setRefineRange(event.target.value); setCellTextSelection(undefined); }} disabled={disabled} /><small>例如 A1 或 A1:D20，与 AI 精修区域同步</small></label></div>} cost={<CostTotal summary={cost} />} busy={disabled} exporting={busy === 'export'} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!bridge && hasResult} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onSave={() => { void persist(); }} onExport={() => { void persist(true, true); }} deliveryPanel={<DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="excel" sourceRevision={record?.revision || 0} dirty={dirty || !ready} artifactIds={currentExport.map(file => file.id)} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} checks={spreadsheetDeliveryChecks(workbook, calculationState.pending || calculationState.error ? undefined : calculation, { saved: !!record && !dirty && ready, exported })} />}>
+</>} selectionTools={scopeVisible && <div className="ss-scope-tools"><SelectionHistoryToolbar label={exactText ? `${sheet.name}!${selectedAddress} · 选中文字` : `${sheet.name}!${refineRange || selectedAddress} · 单元格区域`} selectionPreview={exactText ? selectionValue.slice(textSelection.start, textSelection.end) : undefined} selectedCount={exactText ? Array.from(selectionValue.slice(textSelection.start, textSelection.end)).length : 0} exactSelection={exactText} scopeDescription={exactText ? textSelection.recoveryPoint && textSelection.start === textSelection.end ? '已保留局部恢复位置，可重做刚才所选文字' : `已选择 ${Array.from(selectionValue.slice(textSelection.start, textSelection.end)).length} 字，只恢复选区内变化` : '按整个单元格恢复值、公式与格式，区域外内容保留'} canUndo={!scopeReason && scopeUndo.available} canRedo={!scopeReason && scopeRedo.available} reason={scopeReason || (!scopeUndo.available && !scopeRedo.available ? scopeUndo.reason : undefined)} disabled={disabled} onUndo={() => moveScopedHistory('undo')} onRedo={() => moveScopedHistory('redo')} onClearSelection={() => { setCellTextSelection(undefined); formulaEditor.current?.setSelectionRange(0, 0); setShowScopeTools(true); }} /><label className="ss-scope-range"><span>单元格区域</span><input className="field" aria-label="表格撤销重做区域" placeholder={selectedAddress} value={refineRange} onChange={event => { setRefineRange(event.target.value); setCellTextSelection(undefined); }} disabled={disabled} /><small>例如 A1 或 A1:D20，与 AI 精修区域同步</small></label></div>} cost={<CostTotal summary={cost} />} busy={disabled} exporting={busy === 'export'} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!bridge && hasResult} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onSave={() => { void persist(); }} onExport={() => { void persist(true, true); }} deliveryPanel={<DeliveryPanel onOpenIssue={openPreflightIssue} inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="excel" sourceRevision={record?.revision || 0} dirty={dirty || !ready} artifactIds={currentExport.map(file => file.id)} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} checks={spreadsheetDeliveryChecks(workbook, calculationState.pending || calculationState.error ? undefined : calculation, { saved: !!record && !dirty && ready, exported })} />}>
       <main className="ss-main panel">
       {!ready ? <div className="ss-loading">{error ? <Table2 size={26} /> : <LoaderCircle className="spin" size={26} />}<p>{error ? '请检查工作区路径；原工作簿未被空白文件覆盖。' : '正在读取项目工作簿…'}</p></div> : <>
         <div className={`ss-formula-bar ${fullCellOpen ? 'show-full-content' : ''}`}><output aria-label="选中单元格地址">{selectedAddress}</output><span aria-hidden="true">fx</span><textarea ref={formulaEditor} rows={1} aria-label="单元格值或公式" value={formulaInput} disabled={disabled} spellCheck={false} onChange={event => { pendingFormulaEdit.current = true; setFormulaInput(event.target.value); }} onBlur={() => { pendingFormulaEdit.current = false; if (skipFormulaBlur.current) { skipFormulaBlur.current = false; return; } if (formulaInput !== cellToInput(selectedCell)) inputCell(selectedAddress, formulaInput); }} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); pendingFormulaEdit.current = false; skipFormulaBlur.current = true; inputCell(selectedAddress, formulaInput); event.currentTarget.blur(); } else if (event.key === 'Escape') { pendingFormulaEdit.current = false; skipFormulaBlur.current = true; setFormulaInput(cellToInput(selectedCell)); event.currentTarget.blur(); } }} placeholder="输入值，或以 = 开始输入公式" /></div>
@@ -552,6 +586,6 @@ export function SpreadsheetStudio(props: PageProps) {
     </main>
     </StudioWorkbench>
     {promptPicker && <PromptPicker prompts={props.prompts} category="excel" onClose={() => setPromptPicker(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPicker(false); }} />}{promptDraft && <PromptEditor categories={props.configuration.categories} initial={promptDraft} onClose={() => setPromptDraft(null)} onSave={(draft, id) => { props.onSavePrompt(draft, id); setPromptDraft(null); }} />}
-    {officePreview && officePreview.projectId === project.id && <Suspense fallback={<p role="status">正在打开实际文件预览…</p>}><OfficeFilePreview artifact={officePreview} onClose={() => setOfficePreview(undefined)} onOpenSource={() => { void props.workflowRunner.openArtifact(officePreview.id); }} /></Suspense>}
+    {officePreview && officePreview.projectId === project.id && <Suspense fallback={<p role="status">正在打开实际文件预览…</p>}><OfficeFilePreview initialPage={officePreviewPage} artifact={officePreview} onClose={() => setOfficePreview(undefined)} onOpenSource={() => { void props.workflowRunner.openArtifact(officePreview.id); }} /></Suspense>}
   </div>;
 }

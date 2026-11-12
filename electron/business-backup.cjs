@@ -57,7 +57,7 @@ function remapBusinessAssistMarkers(input, ids) {
     if (record.run?.purpose !== 'business-assist' || typeof record.run.snapshot?.description !== 'string') continue;
     const original = record.run.snapshot.description; let marker;
     try { marker = JSON.parse(original); } catch { continue; }
-    if (!marker || marker.type !== 'xuzuo-business-assist' || !core.businessId(marker.workspaceId) || !core.businessId(marker.orderId) || !['listing', 'feedback', 'performance'].includes(marker.purpose) || !core.businessId(marker.requestId)) continue;
+    if (!marker || marker.type !== 'xuzuo-business-assist' || !core.businessId(marker.workspaceId) || !core.businessId(marker.orderId) || !['listing', 'feedback', 'performance', 'intake'].includes(marker.purpose) || !core.businessId(marker.requestId)) continue;
     marker.workspaceId = Object.hasOwn(ids, marker.workspaceId) ? ids[marker.workspaceId] : marker.workspaceId;
     marker.orderId = Object.hasOwn(ids, marker.orderId) ? ids[marker.orderId] : marker.orderId;
     const serialized = JSON.stringify(marker), workflowId = 'bizassist-' + createHash('sha256').update(marker.orderId).digest('hex').slice(0, 24) + '-' + marker.requestId;

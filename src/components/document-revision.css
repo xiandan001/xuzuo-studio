@@ -1,0 +1,4 @@
+.revision-context{display:grid;gap:12px;padding:18px 20px;margin-bottom:16px;border:1px solid var(--ui-border);border-radius:16px;background:var(--ui-surface);box-shadow:0 3px 12px #0000000a;min-width:0}
+.revision-context-title{display:flex;align-items:center;gap:12px;color:var(--ui-fg)}
+.revision-context-title>div{display:grid;gap:4px;min-width:0}.revision-context-title strong{font-size:16px}.revision-context-title span,.revision-context>p{font-size:14px;color:var(--ui-fg-secondary);overflow-wrap:anywhere;margin:0}
+.revision-context-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.revision-context-error{color:var(--ui-danger);overflow-wrap:anywhere}

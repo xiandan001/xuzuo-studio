@@ -11,6 +11,7 @@ export interface ChatAttachment { id: string; name: string; mimeType: string; by
 export interface ChatTarget { projectId: string; artifactId: string; sha256: string; kind: ProjectKind; editorRevision?: number; }
 export interface ChatTargetInspection { artifact: ArtifactMetadata; sha256: string; documentSource?: string; sourceRevision?: number; }
 export interface ChatProductionLink { runId: string; target: ChatTarget; instruction: string; createdAt: string; sourceOnly?: boolean; sourceRunId?: string; }
+export interface ChatExportLink { runId: string; projectId: string; turnId: string; kind: 'word' | 'ppt' | 'excel'; sourceSha256: string; createdAt: string; sourceOnly?: boolean; }
 export interface ChatHistoryRequest { workspaceId: string; query?: string; scope?: 'active' | 'archived' | 'trash'; cursor?: number; limit?: number; }
 export interface ChatHistoryPage { items: ChatConversationSummary[]; total: number; scanned: number; nextCursor?: number; }
 export interface ChatManageRequest { workspaceId: string; conversationId: string; action: 'rename' | 'pin' | 'unpin' | 'archive' | 'trash' | 'restore'; title?: string; }
@@ -60,7 +61,7 @@ export interface ChatConversationSummary {
   trashedAt?: string;
   matchSnippet?: string;
 }
-export interface ChatConversation extends ChatConversationSummary { version: 1; turns: ChatTurn[]; productions?: ChatProductionLink[]; unavailableReason?: string; }
+export interface ChatConversation extends ChatConversationSummary { version: 1; turns: ChatTurn[]; productions?: ChatProductionLink[]; exports?: ChatExportLink[]; unavailableReason?: string; }
 export interface ChatStartRequest {
   id: string;
   workspaceId: string;
@@ -79,6 +80,7 @@ export interface ChatStartRequest {
 }
 export interface ChatChangedEvent { workspaceId: string; conversationId: string; ledgerChanged: boolean; turn?: ChatTurn; stream?: ChatStreamDelta; title?: string; updatedAt?: string; historyChanged?: boolean; }
 export interface ChatBridge {
+  linkExport?: (input: { workspaceId: string; conversationId: string; turnId: string; runId: string; kind: 'word' | 'ppt' | 'excel'; sourceSha256: string }) => Promise<ChatConversation>;
   selectTarget: (input: { workspaceId: string; projectId: string; artifactId: string; kind: ProjectKind }) => Promise<{ target: ChatTarget; inspection: ChatTargetInspection }>;
   linkProduction: (input: { workspaceId: string; conversationId: string; target: ChatTarget; runId: string; instruction: string }) => Promise<ChatConversation>;
   search: (input: ChatHistoryRequest) => Promise<ChatHistoryPage>;

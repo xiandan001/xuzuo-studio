@@ -1,3 +1,4 @@
+const { chatExportsValid, checkedChatExport } = require('./chat-file-link.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -34,7 +35,7 @@ function indexValid(value, workspaceId) {
   });
 }
 function recordValid(value, input) {
-  if (value?.version !== 1 || !idValid(value.id) || !idValid(value.workspaceId) || value.id !== input.conversationId || value.workspaceId !== input.workspaceId || typeof value.title !== 'string' || value.title.length > 100 || !dateValid(value.createdAt) || !dateValid(value.updatedAt) || !Array.isArray(value.turns) || value.turns.length > 300 || value._importOrigin !== undefined && !importOriginValid(value._importOrigin) || !historyFieldsValid(value) || !productionsValid(value.productions)) return false;
+  if (value?.version !== 1 || !idValid(value.id) || !idValid(value.workspaceId) || value.id !== input.conversationId || value.workspaceId !== input.workspaceId || typeof value.title !== 'string' || value.title.length > 100 || !dateValid(value.createdAt) || !dateValid(value.updatedAt) || !Array.isArray(value.turns) || value.turns.length > 300 || value._importOrigin !== undefined && !importOriginValid(value._importOrigin) || !historyFieldsValid(value) || !productionsValid(value.productions) || !chatExportsValid(value.exports)) return false;
   const ids = new Set();
   return value.turns.every(turn => {
     if (!turn || !idValid(turn.id) || ids.has(turn.id) || typeof turn.userText !== 'string' || turn.userText.length > 10000 || typeof turn.text !== 'string' || turn.text.length > 2 * 1024 * 1024 || !['running', 'complete', 'cancelled', 'failed', 'interrupted'].includes(turn.status) || !dateValid(turn.createdAt) || !dateValid(turn.updatedAt) || !Number.isSafeInteger(turn.costCents) || turn.costCents < 0 || !COST_STATES.has(turn.costState) || typeof turn.modelName !== 'string' || typeof turn.modelId !== 'string' || !turn._billing || turn._billing.modelId !== turn.modelId || !turn._billing.connection || !/^[a-f0-9]{64}$/.test(turn._fingerprint || '')) return false;
@@ -72,7 +73,7 @@ function summary(record) {
   return { id: record.id, workspaceId: record.workspaceId, title: record.title, ...historyFields(record), createdAt: record.createdAt, updatedAt: record.updatedAt, turnCount: record.turns.length, ...(record.turns.some(isActive) ? { activeTurnId: record.turns.find(isActive).id } : {}) };
 }
 const publicTurn = turn => ({ ...Object.fromEntries(Object.entries(turn).filter(([key]) => !key.startsWith('_'))), streamSequence: turn._streamSequence || 0 });
-function publicConversation(record) { return { version: 1, ...summary(record), turns: record.turns.map(publicTurn), ...(record.productions?.length ? { productions: clone(record.productions) } : {}) }; }
+function publicConversation(record) { return { ...(record.exports?.length ? { exports: clone(record.exports) } : {}), version: 1, ...summary(record), turns: record.turns.map(publicTurn), ...(record.productions?.length ? { productions: clone(record.productions) } : {}) }; }
 function blank(input) { const time = now(); return { version: 1, id: input.conversationId, workspaceId: input.workspaceId, title: '新对话', createdAt: time, updatedAt: time, turns: [] }; }
 function checkedScope(input) {
   if (!input || !idValid(input.workspaceId) || !idValid(input.conversationId)) throw Error('对话或工作区编号无效。');
@@ -579,6 +580,14 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       return publicConversation(record);
     });
   }
+  async function linkExport(input) {
+    checkedScope(input); if (closing || typeof readRun !== 'function') throw Error('应用正在退出或文件任务不可读，原文件保留。');
+    return serial(input.workspaceId, async () => {
+      const record = clone(await loadRecord(input)), link = checkedChatExport(record, input, await readRun(input.runId));
+      if (!record.exports?.some(item => item.runId === link.runId)) { record.exports = [...(record.exports || []), link]; record.updatedAt = now(); await persist(record); emit(record); }
+      return publicConversation(record);
+    });
+  }
   async function validateRestore(value) {
     const snapshot = validateWorkspaceSnapshot(value); await recover(snapshot.workspaceId);
     if ([...active.keys()].some(key => key.startsWith(`${snapshot.workspaceId}/`)) || [...dirty.keys()].some(key => key.startsWith(`${snapshot.workspaceId}/`))) throw Error('请先结束本工作区的回答并保存记录，再恢复聊天备份。');
@@ -591,7 +600,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     return snapshot;
   }
   return {
-    start, search: searchHistory, manage: manageHistory, selectTarget, inspectTarget, linkProduction,
+    start, search: searchHistory, manage: manageHistory, selectTarget, inspectTarget, linkProduction, linkExport,
     importAsset: input => importSource(input, 'asset'), importProjectArtifact: input => importSource(input, 'project'),
     async importBytes(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有添加新附件。'); return serial(input.workspaceId, () => attachments.importBytes(input, input.files)); },
     async importAttachments(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有导入新附件。'); return serial(input.workspaceId, () => attachments.importPaths(input, input.paths)); },

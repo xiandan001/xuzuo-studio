@@ -75,6 +75,8 @@ jobs:
         run: node node_modules/vite/bin/vite.js build
       - name: Verify actual business renderer interactions
         run: node scripts/verify-business-browser.mjs
+      - name: Verify project overview and revision interactions
+        run: node scripts/verify-project-flow-browser.mjs
       - name: Verify bead market native data and renderer
         run: node scripts/verify-bead-market-ui.mjs
       - name: Verify real animation studio interactions
@@ -129,6 +131,8 @@ jobs:
             work/bead-native-output/*.png
             work/commerce-native-output/report.json
             work/commerce-native-output/*.png
+            work/project-flow-browser-output/report.json
+            work/project-flow-browser-output/*.png
             work/business-browser-output/report.json
             work/business-browser-output/*.png
             work/bead-market-browser-native-output/report.json
@@ -181,7 +185,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.7.1/full-install-lifecycle.json
+            outputs/release-v2.8.0/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -191,8 +195,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.7.1/Xuzuo-Studio-Setup-2.7.1.exe
-            outputs/release-v2.7.1/Xuzuo-Studio-Setup-2.7.1.exe.blockmap
-            outputs/release-v2.7.1/Xuzuo-Studio-Setup-2.7.1.manifest.json
-            outputs/release-v2.7.1/latest.yml
-            outputs/release-v2.7.1/package-verification.json
+            outputs/release-v2.8.0/Xuzuo-Studio-Setup-2.8.0.exe
+            outputs/release-v2.8.0/Xuzuo-Studio-Setup-2.8.0.exe.blockmap
+            outputs/release-v2.8.0/Xuzuo-Studio-Setup-2.8.0.manifest.json
+            outputs/release-v2.8.0/latest.yml
+            outputs/release-v2.8.0/package-verification.json

@@ -38,7 +38,7 @@ function wiredRuntime() {
   vm.runInContext(fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8') + '\n;globalThis.testRuntime={registerRuntime,setClosing:value=>{runtimeClosing=value;},drain:()=>drainRuntime(),writeFailed:()=>closingWriteFailed};', context);
   context.testRuntime.registerRuntime({ list: async () => ['key-meta'] });
   const invoke = (name, input) => Promise.resolve().then(() => handlers.get('runtime:' + name)({}, input));
-  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions };
+  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions, services };
 }
 describe('真实main注册的业务IPC与生命周期接线（无Electron进程）', () => {
   it('提前登录不依赖项目，查询受限更新登录状态，退出只允许读取而不追加确认', async () => {
@@ -81,4 +81,34 @@ describe('真实main注册的业务IPC与生命周期接线（无Electron进程�
     const f = wiredRuntime(), proof = { documentSha256: 'a'.repeat(64), originalSourceArtifactId: 'real-source' }, artifacts = [{ id: 'real-output' }]; await f.captures['commerce-images'].onExport({ projectId: 'project', document: { title: '正式产物' }, artifacts, commerceExport: proof }); expect(f.live.recordLocalExport).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'workspace', projectId: 'project', artifacts, commerceExport: proof }));
     await f.context.testRuntime.drain(); expect(f.events.indexOf('business-production:prepareClose')).toBeLessThan(f.events.indexOf('commerce-images:shutdown')); expect(f.events.indexOf('commerce-images:shutdown')).toBeLessThan(f.events.indexOf('live-workflow-engine:shutdown'));
   });
+  it('新增识读、对账单、预检和聊天导出接入实际main注册器', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'), statements = f.services.get('business-statements'), preflight = f.services.get('delivery-preflight'), chat = f.services.get('chat-service');
+    intake.intakeRead = vi.fn(async input => ({ intakeId: 'draft', workspaceId: input.workspaceId }));
+    statements.exportStatement = vi.fn(async () => ({ saved: true })); preflight.preflight = vi.fn(async () => ({ version: 1 })); chat.linkExport = vi.fn(async () => ({ exports: [] }));
+    await expect(f.invoke('business-intakeRead', { workspaceId: 'workspace', orderId: 'order' })).resolves.toMatchObject({ intakeId: 'draft' });
+    await expect(f.invoke('business-exportStatement', { workspaceId: 'workspace', orderId: 'order' })).resolves.toEqual({ saved: true });
+    await expect(f.invoke('delivery-preflight', { projectId: 'project', artifactIds: ['file'] })).resolves.toEqual({ version: 1 });
+    await expect(f.invoke('chat-linkExport', { workspaceId: 'workspace', conversationId: 'conversation', runId: 'run' })).resolves.toEqual({ exports: [] });
+    expect(f.captures['business-intake'].businessStore).toBe(f.data.store); expect(f.captures['business-intake'].businessAssist).toBe(f.assist);
+    expect(f.captures['business-statements'].businessStore).toBe(f.data.store); expect(f.captures['delivery-preflight'].officePreview()).toBe(f.services.get('office-preview-handlers'));
+    f.context.testRuntime.setClosing(true);
+    for (const name of ['business-intakeRead', 'business-intakeExtract', 'business-intakeConfirm', 'business-adoptRevision', 'business-exportStatement', 'delivery-preflight', 'chat-linkExport']) await expect(f.invoke(name, { workspaceId: 'workspace' })).rejects.toThrow('退出');
+  });
+  it('退出主动取消在途需求识读不是本地保存失败，排空后可退出', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'); let rejectRequest;
+    intake.intakeExtract = vi.fn(() => new Promise((_, reject) => { rejectRequest = reject; }));
+    const request = f.invoke('business-intakeExtract', { workspaceId: 'workspace', orderId: 'order', intakeId: 'draft' }), observed = request.catch(error => error);
+    for (let round = 0; !rejectRequest && round < 30; round++) await Promise.resolve(); expect(rejectRequest).toBeTypeOf('function');
+    f.assist.prepareClose = async () => { rejectRequest(Object.assign(Error('已因退出取消识读，费用已保留'), { name: 'AbortError', code: 'BUSINESS_ASSIST_CLOSING' })); };
+    await expect(f.context.testRuntime.drain()).resolves.toBeUndefined(); expect((await observed).name).toBe('AbortError'); expect(f.context.testRuntime.writeFailed()).toBe(false);
+  });
+  it('识读候选真实落盘失败仍阻止静默退出，不能借取消豁免吞写入错误', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'); let rejectRequest;
+    intake.intakeExtract = vi.fn(() => new Promise((_, reject) => { rejectRequest = reject; }));
+    const request = f.invoke('business-intakeExtract', { workspaceId: 'workspace', orderId: 'order', intakeId: 'draft' }), observed = request.catch(error => error);
+    for (let round = 0; !rejectRequest && round < 30; round++) await Promise.resolve(); expect(rejectRequest).toBeTypeOf('function');
+    f.assist.prepareClose = async () => { rejectRequest(Error('controlled intake draft disk failure')); };
+    await expect(f.context.testRuntime.drain()).rejects.toThrow('未能保存'); expect((await observed).message).toContain('disk failure'); expect(f.context.testRuntime.writeFailed()).toBe(true);
+  });
+
 });

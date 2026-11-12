@@ -1,5 +1,6 @@
 const { parentPort, workerData } = require('node:worker_threads');
 async function run() {
+  if (workerData.task === 'delivery-preflight') return require('./delivery-preflight-analysis.cjs').analyzeDeliveryArtifact(workerData.input);
   if (workerData.task === 'commerce-compose') return require('./commerce-compositor.cjs').composeCommerceImage(workerData.input);
   if (workerData.task === 'commerce-alpha') return require('./commerce-compositor.cjs').applyCommerceAlpha(workerData.input);
   if (workerData.task === 'commerce-protect') return require('./commerce-compositor.cjs').protectCommercePixels(workerData.input);

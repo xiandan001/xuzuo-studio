@@ -14,6 +14,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
   { id: 'documents', label: '文档工作台', icon: FileText },
   { id: 'images', label: '图片工作台', icon: Image },
   { id: 'projects', label: '我的作品', icon: FolderOpen },
+  { id: 'project', label: '项目概览', icon: FolderOpen },
   { id: 'assets', label: '素材库', icon: Sparkles },
   { id: 'prompts', label: '提示词模板', icon: BookOpenText },
   { id: 'categories', label: '我的分类', icon: Layers3 },
@@ -41,7 +42,7 @@ export const TOOL_GROUPS: ToolNavigationGroup[] = [
 export function primaryNavigationView(view: ViewId): PrimaryNavigationView {
   if (view === 'overview' || view === 'business') return 'overview';
   if (['assets', 'prompts', 'categories'].includes(view)) return 'assets';
-  if (view === 'projects' || view === 'documents' || view === 'images') return 'projects';
+  if (view === 'project' || view === 'projects' || view === 'documents' || view === 'images') return 'projects';
   if (['automation', 'workflows', 'activity'].includes(view)) return 'automation';
   return null;
 }

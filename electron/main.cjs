@@ -39,7 +39,7 @@ const { createApplicationExit } = require('./application-exit.cjs');
 const { readValidationOwner, startValidationLifecycle } = require('./validation-lifecycle.cjs');
 
 let mainWindow;
-let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs, appUpdater, automationCenter, chatService, customerProofing;
+let liveEngine, applicationExit, stopValidationLifecycle, automaticBilling, studioDialogs, appUpdater, automationCenter, chatService, customerProofing, deliveryPreflight;
 let runtimeClosing = false, drainRuntime = async () => undefined;
 const runtimeRequests = new Set();
 let closingWriteFailed = false;
@@ -133,6 +133,8 @@ function registerRuntime(credentials) {
   const businessOptions = { businessStore: businessData.store, workspaceStorage, artifactStore, liveEngine, commerceImages, editorStore, spreadsheetStore, getContext: getBusinessContext, assertAdmission: async project => { const id = typeof project === 'string' ? project : project?.id; if (runtimeClosing || relocatingProjects.has(id)) throw Error('项目目录正在处理，请稍后继续。'); await workspaceStorage.assertNotPurged(id); }, start: input => withProjectWrite(input.project.id, () => liveEngine.start(input)) };
   const businessProduction = require('./business-production.cjs').createBusinessProduction(businessOptions);
   const businessAssist = require('./business-assist.cjs').createBusinessAssist(businessOptions);
+  const businessIntake = require('./business-intake.cjs').createBusinessIntake({ ...businessOptions, businessStore: businessData.store, businessAssist, extractText: file => cpuTasks.run('reference-text', { buffer: file.buffer, mimeType: file.mimeType, name: file.name }) });
+  const businessStatements = require('./business-statements.cjs').createBusinessStatements({ businessStore: businessData.store, dialog, getWindow: () => mainWindow });
   const businessListing = require('./business-listing.cjs').createBusinessListing({ ...businessOptions, cpuTasks });
   const isBusinessWorkspaceBusy = workspaceId => businessWorkspaceWrites.has(workspaceId) || businessProduction.isWorkspaceBusy(workspaceId) || Boolean(beadMarket?.isWorkspaceBusy(workspaceId)) || Boolean(animationService?.isWorkspaceBusy(workspaceId));
   const isBusinessProjectBusy = id => businessProduction.isProjectBusy(id) || businessAssist.isProjectBusy(id) || Boolean(beadMarket?.isProjectBusy(id)) || Boolean(animationService?.isProjectBusy(id));
@@ -192,10 +194,13 @@ function registerRuntime(credentials) {
     if (runtimeClosing && !['chat-read', 'chat-list', 'chat-ledger', 'chat-cancel', 'chat-flush'].includes(name) && !closingAnimationRead && !closingMarketRead && !closingBusinessRead && !['status', 'snapshot', 'poll-snapshot', 'lookup-start', 'run-detail', 'editor-load', 'editor-history', 'editor-loadVersion', 'spreadsheet-load', 'spreadsheet-history', 'spreadsheet-loadVersion', 'bead-read', 'bead-history', 'bead-cancel', 'bead-export-recovery'].includes(name)) throw new Error('应用正在保存并退出，未开始新的操作。');
     const task = Promise.resolve().then(async () => { if (!name.startsWith('chat-') && !['status', 'snapshot', 'poll-snapshot', 'start-checked', 'lookup-start', 'run-detail', 'recalculate-costs', 'bead-export-recovery', 'bead-cancel', 'bead-market-sessions', 'bead-market-login', 'bead-market-confirm-login'].includes(name)) await projectPurge.ready; return ['workspace-choose', 'workspace-repair', 'workspace-reconnect'].includes(name) ? withWorkspaceDirectory(input?.workspaceId, () => action(input)) : action(input); });
     const marketWrite = name.startsWith('bead-market-') && !['bead-market-read', 'bead-market-cancel', 'bead-market-openSource', 'bead-market-sessions'].includes(name) || name.startsWith('animation-') && !['animation-read', 'animation-control'].includes(name);
-    const businessWrite = /^(?:business-(?:save|import-commit|export-recovery|prepare|deliver|adopt|listing)|commerce-(?:save|render|applyAlpha|protect|mask|restore|exportRecovery))$/.test(name);
-    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, ['chat-start', 'chat-cancel', 'chat-flush', 'chat-import-attachments', 'chat-attach-to-project', 'chat-importBytes', 'chat-importAsset', 'chat-importProjectArtifact', 'chat-manage', 'chat-linkProduction', 'project-templates-save', 'project-templates-remove', 'project-templates-instantiate', 'proofing-create', 'proofing-import', 'business-allocateCosts', 'business-linkOutput', 'business-importProofFeedback'].includes(name) || marketWrite || businessWrite || name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-') || name.startsWith('commerce-') || name === 'business-listing');
+    const businessWrite = /^(?:business-(?:save|import-commit|export-recovery|prepare|deliver|adopt|adoptRevision|intakeRead|intakeExtract|intakeConfirm|exportStatement|listing)|commerce-(?:save|render|applyAlpha|protect|mask|restore|exportRecovery))$/.test(name);
+    if (!['status', 'snapshot', 'poll-snapshot', 'lookup-start'].includes(name)) trackRuntimeTask(task, ['chat-start', 'chat-cancel', 'chat-flush', 'chat-import-attachments', 'chat-attach-to-project', 'chat-importBytes', 'chat-importAsset', 'chat-importProjectArtifact', 'chat-manage', 'chat-linkProduction', 'chat-linkExport', 'project-templates-save', 'project-templates-remove', 'project-templates-instantiate', 'proofing-create', 'proofing-import', 'business-allocateCosts', 'business-linkOutput', 'business-importProofFeedback'].includes(name) || marketWrite || businessWrite || name.startsWith('automation-planning-') || /^(?:editor|spreadsheet)-(?:save|export|restore)$/.test(name) || /^(?:bead-(?:generate|save|restore|export|import-document|export-recovery)|export-wallpaper-4k)$/.test(name) || ['project-purge-execute', 'customer-quote-export', 'automation-context', 'automation-save-rule', 'automation-enabled', 'automation-trigger', 'automation-cancel-job', 'automation-resolve', 'automation-archive-project', 'automation-restore-project', 'save-image-markup', 'asset-import', 'asset-update', 'asset-attach', 'asset-save', 'workspace-choose', 'workspace-move-project', 'workspace-ensure-project', 'workspace-create-project', 'workspace-reconnect', 'export-draft', 'backup-export', 'backup-import', 'backup-acknowledge', 'workspace-relocate', 'delivery-review', 'delivery-confirm', 'delivery-zip', 'batch-create', 'batch-control'].includes(name), name.startsWith('bead-') || name.startsWith('commerce-') || name === 'business-listing' || name === 'business-intakeExtract');
     return task;
   });
+  deliveryPreflight = require('./delivery-preflight.cjs').createDeliveryPreflight({ artifactStore, officePreview: () => officePreview, runAnalysis: (file, binding, signal) => cpuTasks.run('delivery-preflight', { file, binding }, { signal }), readDocumentArtifact: async artifact => { const source = await documentArtifactPreview(artifact); if (!source) return undefined; const kind = artifact.mimeType.includes('spreadsheetml') ? 'excel' : artifact.mimeType.includes('presentationml') ? 'ppt' : 'word'; const document = kind === 'excel' ? require('./spreadsheet-generated.cjs').spreadsheetFromText(source.text, artifact.name) : require('./editor-generated.cjs').editorFromText(kind, artifact.name, source.text); return { document, sourceRevision: source.sourceRevision }; } });
+  handle('delivery-preflight', input => deliveryPreflight.preflight(input));
+  handle('delivery-preflight-cancel', input => deliveryPreflight.cancel(input));
   const officePreview = registerOfficePreviewHandlers({ handle, dialog, getWindow: () => mainWindow, artifactStore, directory: path.join(app.getPath('userData'), 'office-preview-v1'), withProjectWrite, shell, trackWrite: task => trackRuntimeTask(task, true) });
   drainRuntime = async () => {
     runtimeClosing = true;
@@ -209,6 +214,7 @@ function registerRuntime(credentials) {
     await commerceImages.prepareClose();
     await beads.prepareClose();
     await beadPrinter.drain();
+    await deliveryPreflight.shutdown();
     await officePreview.shutdown();
     await automaticBilling.stop();
     await commerceImages.shutdown();
@@ -222,6 +228,7 @@ function registerRuntime(credentials) {
     await projectTemplates.drain();
     await Promise.all([editorStore.drain(), spreadsheetStore.drain(), artifactStore.drain(), assets.flush(), assetCategories.flush(), backupManager.flush(), deliveries.drain(), cpuTasks.drain(), thumbnails.drain(), quoteExporter.drain()]);
     await liveEngine.flush();
+    await businessIntake.drain();
     await businessData.drain();
     await beadMarket.drain();
     await animationService.drain();
@@ -240,7 +247,9 @@ function registerRuntime(credentials) {
   } });
   handle('business-snapshot', workspaceId => withBusinessWrite(workspaceId, async () => { await businessAssist.recover(workspaceId); return businessData.snapshot(workspaceId); }));
   for (const [method, name] of Object.entries({ save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery' })) handle(`business-${name}`, input => withBusinessWrite(input?.workspaceId, () => businessData[method](input)));
-  for (const method of ['prepare', 'start', 'control', 'deliver', 'adopt']) handle(`business-${method}`, input => withBusinessWrite(input?.workspaceId, () => businessProduction[method](input)));
+  for (const method of ['prepare', 'start', 'control', 'deliver', 'adopt', 'adoptRevision']) handle(`business-${method}`, input => withBusinessWrite(input?.workspaceId, () => businessProduction[method](input)));
+  for (const method of ['intakeRead', 'intakeExtract', 'intakeConfirm']) handle(`business-${method}`, input => withBusinessWrite(input?.workspaceId, () => businessIntake[method](input)));
+  handle('business-exportStatement', input => withBusinessWrite(input?.workspaceId, () => businessStatements.exportStatement(input)));
   handle('business-assist', input => withBusinessWrite(input?.workspaceId, () => businessAssist.assist(input)));
   handle('business-listing', input => withBusinessWrite(input?.workspaceId, () => withProjectWrite(input?.projectId, () => businessListing.export(input))));
   for (const method of ['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery']) handle(`commerce-${method}`, input => ['read', 'history', 'cancel', 'exportRecovery'].includes(method) ? commerceImages[method](input) : withProjectWrite(input?.projectId, () => commerceImages[method](input)));
@@ -292,7 +301,7 @@ function registerRuntime(credentials) {
   handle('status', () => ({ available: true }));
   handle('proofing-create', input => withProjectWrite(input?.projectId, () => customerProofing.create(input)));
   handle('proofing-import', async input => { const selected = await dialog.showOpenDialog(mainWindow, { title: '导入客户校样反馈', properties: ['openFile'], filters: [{ name: '校样反馈', extensions: ['json'] }] }); if (selected.canceled || !selected.filePaths.length) return undefined; const filename = selected.filePaths[0]; const stat = await fs.lstat(filename); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw Error('反馈文件不可用或超过2MB。'); return withBusinessWrite(input?.workspaceId, async () => customerProofing.importFeedback({ ...input, feedback: JSON.parse(await fs.readFile(filename, 'utf8')) })); });
-  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'search', 'manage', 'selectTarget', 'inspectTarget', 'importBytes', 'importAsset', 'importProjectArtifact', 'linkProduction']) handle(`chat-${method}`, input => chatService[method](input));
+  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'search', 'manage', 'selectTarget', 'inspectTarget', 'importBytes', 'importAsset', 'importProjectArtifact', 'linkProduction', 'linkExport']) handle(`chat-${method}`, input => chatService[method](input));
   for (const method of ['list','save','instantiate','remove']) handle(`project-templates-${method}`, input => method === 'instantiate' ? withProjectWrite(input?.targetProjectId, () => projectTemplates[method](input)) : projectTemplates[method](input));
   for (const method of ['allocateCosts','linkOutput','importProofFeedback']) handle(`business-${method}`, input => withBusinessWrite(input?.workspaceId, () => businessData[method](input)));
   handle('chat-import-attachments', async input => {
@@ -524,7 +533,7 @@ app.whenReady().then(() => {
   if (!ownsInstance) return;
   const credentials = registerCredentials();
   registerRuntime(credentials);
-  applicationExit = createApplicationExit({ app, dialog: studioDialogs, ipcMain, getWindow: () => mainWindow, trustedSender, getTaskState: async () => ({ running: (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.filter(run => run.status === 'running').length + (await chatService.status()).running }), drain: () => drainRuntime(), beforeExit: async () => { try { await appUpdater?.prepareInstall(); } finally { appUpdater?.stop(); } }, validationOwner, visibleValidation, onStatus: state => { if (state.phase === 'cancelled') { runtimeClosing = false; closingWriteFailed = false; chatService?.resume(); customerProofing.resume(); } else runtimeClosing = true; } });
+  applicationExit = createApplicationExit({ app, dialog: studioDialogs, ipcMain, getWindow: () => mainWindow, trustedSender, getTaskState: async () => ({ running: (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.filter(run => run.status === 'running').length + (await chatService.status()).running }), drain: () => drainRuntime(), beforeExit: async () => { try { await appUpdater?.prepareInstall(); } finally { appUpdater?.stop(); } }, validationOwner, visibleValidation, onStatus: state => { if (state.phase === 'cancelled') { runtimeClosing = false; closingWriteFailed = false; chatService?.resume(); customerProofing.resume(); deliveryPreflight?.resume(); } else runtimeClosing = true; } });
   const maintenance = createAppMaintenance({ app, appId: 'local.xuzuo.studio' });
   appUpdater = createAppUpdater({ app, maintenance, fetchImpl: (url, options) => net.fetch(url, options), powerMonitor, platform: validationRequested ? 'validation' : process.platform, onStatus: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:status', state); } });
   const updatesReady = appUpdater.start();

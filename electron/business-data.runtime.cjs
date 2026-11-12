@@ -3,6 +3,20 @@
 const factories = {
 "./business-data": function(module, exports, require) {
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.businessRecordIdentity = exports.normalizeBusinessRows = exports.checkAllocationShares = exports.allocationCosts = exports.allocationPercent = exports.allocatedAmount = exports.businessMetrics = exports.businessEconomics = exports.newBusinessState = exports.checkedBusinessState = exports.businessStateIssue = exports.businessId = exports.BUSINESS_STATE_BYTES = void 0;
 var business_validation_1 = require("./business-validation");
@@ -22,6 +36,8 @@ Object.defineProperty(exports, "checkAllocationShares", { enumerable: true, get:
 var business_import_1 = require("./business-import");
 Object.defineProperty(exports, "normalizeBusinessRows", { enumerable: true, get: function () { return business_import_1.normalizeBusinessRows; } });
 Object.defineProperty(exports, "businessRecordIdentity", { enumerable: true, get: function () { return business_import_1.businessRecordIdentity; } });
+__exportStar(require("./business-receivables"), exports);
+__exportStar(require("./business-intake"), exports);
 
 },
 "./business-validation": function(module, exports, require) {
@@ -32,6 +48,7 @@ exports.newBusinessState = newBusinessState;
 exports.businessStateIssue = businessStateIssue;
 exports.checkedBusinessState = checkedBusinessState;
 const cost_allocations_1 = require("./cost-allocations");
+const business_extra_validation_1 = require("./business-extra-validation");
 exports.BUSINESS_STATE_BYTES = 8 * 1024 * 1024;
 const businessId = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 exports.businessId = businessId;
@@ -71,7 +88,11 @@ function validate(input) {
         fail('同一项目的商品编号重复。');
     const brandIds = new Set(value.brands.map(row => row.id)), productIds = new Set(value.products.map(row => row.id)), orderIds = new Set(value.orders.map(row => row.id)), runOwners = new Map();
     for (const o of value.orders) {
-        if (!object(o, ['id', 'name', 'recipe', 'sourceProjectId', 'brandId', 'brief', 'productIds', 'projectIds', 'runIds', 'outputIds', 'includedRevisions', 'deadline', 'status', 'factsRevision', 'facts', 'factsConfirmedAt', 'outputKinds', 'imageCount', 'sizes', 'tasks', 'bindings', 'createdAt', 'updatedAt', 'error', 'preparedHash', 'deliveries', 'referenceArtifactIds']) || !text(o.name, 200, true) || !one(o.recipe, ['merchant', 'digital', 'documents']) || !(0, exports.businessId)(o.sourceProjectId) || !optional(o.brandId, id => (0, exports.businessId)(id) && brandIds.has(id)) || !text(o.brief) || !ids(o.productIds, 2000) || o.productIds.some(id => !productIds.has(id)) || !ids(o.projectIds, 5000) || !ids(o.runIds, 10000) || !ids(o.outputIds, 20000) || !optional(o.referenceArtifactIds, row => ids(row, 20)) || !integer(o.includedRevisions, 100) || !optional(o.deadline, time) || !one(o.status, ['draft', 'ready', 'running', 'sample-review', 'review', 'complete', 'paused', 'failed', 'archived']) || !integer(o.factsRevision, Number.MAX_SAFE_INTEGER - 1) || !facts(o.facts) || !optional(o.factsConfirmedAt, time) || !ids(o.outputKinds, 4) || !o.outputKinds.length || o.outputKinds.some(kind => !projectKinds.includes(kind)) || !integer(o.imageCount, 20) || o.imageCount < 1 || !list(o.sizes, row => object(row, ['width', 'height', 'label']) && integer(row.width, 8192) && Number(row.width) >= 64 && integer(row.height, 8192) && Number(row.height) >= 64 && Number(row.width) * Number(row.height) <= 16000000 && text(row.label, 100), 16) || !Array.isArray(o.tasks) || o.tasks.length > 5000 || !plain(o.bindings) || !timestampFields(o) || !optional(o.error, row => text(row, 4000)) || !optional(o.preparedHash, row => typeof row === 'string' && /^[a-f0-9]{64}$/i.test(row)))
+        if (!(0, business_extra_validation_1.validPaymentPlan)(o.paymentPlan) || !(0, business_extra_validation_1.validIntakes)(o.intakes))
+            fail('需求确认资料或分期应收格式无效。');
+        if (o.intakes?.some(row => row.runId && !o.runIds?.includes(row.runId)))
+            fail('需求识读的实际运行必须归属本制作单，费用记录保留。');
+        if (!object(o, ['id', 'name', 'recipe', 'sourceProjectId', 'brandId', 'brief', 'productIds', 'projectIds', 'runIds', 'outputIds', 'includedRevisions', 'deadline', 'status', 'factsRevision', 'facts', 'factsConfirmedAt', 'outputKinds', 'imageCount', 'sizes', 'tasks', 'bindings', 'createdAt', 'updatedAt', 'error', 'preparedHash', 'deliveries', 'referenceArtifactIds', 'paymentPlan', 'intakes']) || !text(o.name, 200, true) || !one(o.recipe, ['merchant', 'digital', 'documents']) || !(0, exports.businessId)(o.sourceProjectId) || !optional(o.brandId, id => (0, exports.businessId)(id) && brandIds.has(id)) || !text(o.brief) || !ids(o.productIds, 2000) || o.productIds.some(id => !productIds.has(id)) || !ids(o.projectIds, 5000) || !ids(o.runIds, 10000) || !ids(o.outputIds, 20000) || !optional(o.referenceArtifactIds, row => ids(row, 20)) || !integer(o.includedRevisions, 100) || !optional(o.deadline, time) || !one(o.status, ['draft', 'ready', 'running', 'sample-review', 'review', 'complete', 'paused', 'failed', 'archived']) || !integer(o.factsRevision, Number.MAX_SAFE_INTEGER - 1) || !facts(o.facts) || !optional(o.factsConfirmedAt, time) || !ids(o.outputKinds, 4) || !o.outputKinds.length || o.outputKinds.some(kind => !projectKinds.includes(kind)) || !integer(o.imageCount, 20) || o.imageCount < 1 || !list(o.sizes, row => object(row, ['width', 'height', 'label']) && integer(row.width, 8192) && Number(row.width) >= 64 && integer(row.height, 8192) && Number(row.height) >= 64 && Number(row.width) * Number(row.height) <= 16000000 && text(row.label, 100), 16) || !Array.isArray(o.tasks) || o.tasks.length > 5000 || !plain(o.bindings) || !timestampFields(o) || !optional(o.error, row => text(row, 4000)) || !optional(o.preparedHash, row => typeof row === 'string' && /^[a-f0-9]{64}$/i.test(row)))
             fail('制作单资料或关联格式无效。');
         if (o.deliveries !== undefined && (!Array.isArray(o.deliveries) || o.deliveries.length > 1000 || Array.from(o.deliveries).some(row => !plain(row) || !(0, exports.businessId)(row.id)) || new Set(o.deliveries.map(row => row.id)).size !== o.deliveries.length))
             fail('交付回执重复或超过容量。');
@@ -95,9 +116,11 @@ function validate(input) {
         }
     }
     for (const f of value.feedback)
-        if (!object(f, ['id', 'orderId', 'round', 'target', 'text', 'tasks', 'status', 'runIds', 'additionalQuoteCents', 'createdAt', 'updatedAt', 'proofPackageId', 'proofAnnotationId', 'sourceSha256', 'sourceRevision']) || !orderIds.has(f.orderId) || !integer(f.round, 10000) || f.round < 1 || !object(f.target, ['projectId', 'artifactId', 'pageId', 'blockId', 'selectedText', 'sheetId', 'cellAddress', 'region']) || !(0, exports.businessId)(f.target.projectId) || !optional(f.target.artifactId, exports.businessId) || !optional(f.target.pageId, row => text(row, 200)) || !optional(f.target.blockId, row => text(row, 200)) || !optional(f.target.selectedText, row => text(row, 10000)) || !text(f.text, 10000, true) || !list(f.tasks, row => text(row, 2000, true), 100) || !one(f.status, ['open', 'approved', 'applied', 'confirmed']) || !ids(f.runIds, 1000) || !optional(f.additionalQuoteCents, integer) || !timestampFields(f))
+        if (!object(f, ['id', 'orderId', 'round', 'target', 'text', 'tasks', 'status', 'runIds', 'additionalQuoteCents', 'createdAt', 'updatedAt', 'proofPackageId', 'proofAnnotationId', 'sourceSha256', 'sourceRevision', 'revisionAdoption']) || !orderIds.has(f.orderId) || !integer(f.round, 10000) || f.round < 1 || !object(f.target, ['projectId', 'artifactId', 'pageId', 'blockId', 'selectedText', 'sheetId', 'cellAddress', 'region']) || !(0, exports.businessId)(f.target.projectId) || !optional(f.target.artifactId, exports.businessId) || !optional(f.target.pageId, row => text(row, 200)) || !optional(f.target.blockId, row => text(row, 200)) || !optional(f.target.selectedText, row => text(row, 10000)) || !text(f.text, 10000, true) || !list(f.tasks, row => text(row, 2000, true), 100) || !one(f.status, ['open', 'approved', 'applied', 'confirmed']) || !ids(f.runIds, 1000) || !optional(f.additionalQuoteCents, integer) || !timestampFields(f))
             fail('客户返修记录格式无效。');
     for (const f of value.feedback) {
+        if (!(0, business_extra_validation_1.validRevisionAdoption)(f.revisionAdoption) || f.revisionAdoption && (f.status !== 'confirmed' || f.revisionAdoption.sourceArtifactId !== f.target.artifactId || f.sourceSha256 && f.sourceSha256 !== f.revisionAdoption.sourceSha256))
+            fail('返修采用记录无效。');
         if (!optional(f.sourceRevision, row => Number.isSafeInteger(row) && Number(row) > 0) || !optional(f.proofPackageId, exports.businessId) || !optional(f.proofAnnotationId, exports.businessId) || !optional(f.sourceSha256, row => typeof row === 'string' && /^[a-f0-9]{64}$/.test(row)) || [f.proofPackageId, f.proofAnnotationId, f.sourceSha256].filter(Boolean).length % 3 !== 0)
             fail('校样反馈来源不完整。');
         if (!optional(f.target.sheetId, row => text(row, 200, true)) || !optional(f.target.cellAddress, row => typeof row === 'string' && /^[A-Z]{1,3}[1-9]\d{0,6}$/.test(row)))
@@ -114,8 +137,18 @@ function validate(input) {
             fail('费用归属无效，比例须为0.01%至100%。');
     (0, cost_allocations_1.checkAllocationShares)(allocations);
     for (const t of value.transactions)
-        if (!object(t, ['id', 'orderId', 'productId', 'kind', 'amountCents', 'quantity', 'minutes', 'hourlyRateCents', 'occurredAt', 'note', 'source', 'externalId', 'voidedAt']) || !orderIds.has(t.orderId) || !optional(t.productId, id => (0, exports.businessId)(id) && value.orders.find(o => o.id === t.orderId).productIds.includes(id)) || !one(t.kind, ['receipt', 'refund', 'fee', 'expense', 'labor']) || !integer(t.amountCents) || !optional(t.quantity, row => integer(row) && Number(row) > 0) || t.quantity !== undefined && !['receipt', 'refund'].includes(t.kind) || !optional(t.minutes, minutes) || !optional(t.hourlyRateCents, integer) || (t.minutes === undefined) !== (t.hourlyRateCents === undefined) || t.kind !== 'labor' && t.minutes !== undefined || !time(t.occurredAt) || !text(t.note, 4000) || !optional(t.source, row => text(row, 200, true)) || !optional(t.externalId, row => text(row, 200, true)) || !optional(t.voidedAt, time))
+        if (!object(t, ['id', 'orderId', 'productId', 'kind', 'amountCents', 'quantity', 'minutes', 'hourlyRateCents', 'occurredAt', 'note', 'source', 'externalId', 'voidedAt', 'paymentMilestoneId']) || !orderIds.has(t.orderId) || !optional(t.productId, id => (0, exports.businessId)(id) && value.orders.find(o => o.id === t.orderId).productIds.includes(id)) || !one(t.kind, ['receipt', 'refund', 'fee', 'expense', 'labor']) || !integer(t.amountCents) || !optional(t.quantity, row => integer(row) && Number(row) > 0) || t.quantity !== undefined && !['receipt', 'refund'].includes(t.kind) || !optional(t.minutes, minutes) || !optional(t.hourlyRateCents, integer) || (t.minutes === undefined) !== (t.hourlyRateCents === undefined) || t.kind !== 'labor' && t.minutes !== undefined || !time(t.occurredAt) || !text(t.note, 4000) || !optional(t.source, row => text(row, 200, true)) || !optional(t.externalId, row => text(row, 200, true)) || !optional(t.voidedAt, time))
             fail('实收或费用流水格式无效，金额必须使用非负整数分，件数仅允许收款或退款的正整数。');
+    for (const t of value.transactions)
+        if (t.paymentMilestoneId !== undefined && (!['receipt', 'refund'].includes(t.kind) || !(0, exports.businessId)(t.paymentMilestoneId) || !value.orders.find(o => o.id === t.orderId)?.paymentPlan?.milestones.some(row => row.id === t.paymentMilestoneId)))
+            fail('收退款的分期归属不存在，请保留原分期或作废更正流水。');
+    const transactionById = new Map(value.transactions.map(row => [row.id, row]));
+    for (const order of value.orders)
+        for (const assignment of order.paymentPlan?.assignments || []) {
+            const transaction = transactionById.get(assignment.transactionId);
+            if (!transaction || transaction.orderId !== order.id || !['receipt', 'refund'].includes(transaction.kind) || assignment.milestoneId && !order.paymentPlan.milestones.some(row => row.id === assignment.milestoneId))
+                fail('付款归属需关联本单真实收退款与有效分期。');
+        }
     for (const m of value.metrics)
         if (!object(m, ['id', 'orderId', 'artifactId', 'evidenceArtifactId', 'platform', 'variant', 'publishedAt', 'period', 'impressions', 'clicks', 'inquiries', 'orders', 'revenueCents', 'source', 'externalId', 'createdAt']) || !orderIds.has(m.orderId) || !optional(m.artifactId, exports.businessId) || !optional(m.evidenceArtifactId, exports.businessId) || !text(m.platform, 100, true) || !text(m.variant, 200, true) || !optional(m.publishedAt, time) || !text(m.period, 100, true) || !['impressions', 'clicks', 'inquiries', 'orders', 'revenueCents'].every(key => optional(m[key], integer)) || !text(m.source, 200, true) || !optional(m.externalId, row => text(row, 200, true)) || !time(m.createdAt))
             fail('平台表现记录格式无效，缺失指标请留空，不要填造数据。');
@@ -555,6 +588,107 @@ function checkAllocationShares(rows) {
             throw Error('同一笔费用的分摊合计不能超过100%。');
         totals.set(row.entryId, sum);
     }
+}
+
+},
+"./business-extra-validation": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.businessDate = void 0;
+exports.validPaymentPlan = validPaymentPlan;
+exports.validIntakes = validIntakes;
+exports.validRevisionAdoption = validRevisionAdoption;
+const business_intake_1 = require("./business-intake");
+const id = (v) => typeof v === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(v);
+const text = (v, max) => typeof v === 'string' && v.length <= max && !v.includes('\0');
+const obj = (v, keys) => !!v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v)) && Object.keys(v).every(key => keys.includes(key));
+const integer = (v, max = 1_000_000_000_000) => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) <= max;
+const hash = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+const time = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const businessDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v;
+exports.businessDate = businessDate;
+function validPaymentPlan(value) {
+    if (value === undefined)
+        return true;
+    if (!obj(value, ['currency', 'agreedCents', 'milestones', 'assignments']) || value.currency !== 'CNY' || !integer(value.agreedCents) || !Array.isArray(value.milestones) || !value.milestones.length || value.milestones.length > 12)
+        return false;
+    if (value.assignments !== undefined) {
+        if (!Array.isArray(value.assignments) || value.assignments.length > 20000 || new Set(value.assignments.map(row => row?.id)).size !== value.assignments.length || !value.assignments.every(row => obj(row, ['id', 'transactionId', 'milestoneId', 'createdAt', 'voidedAt']) && id(row.id) && id(row.transactionId) && (row.milestoneId === undefined || id(row.milestoneId)) && time(row.createdAt) && (row.voidedAt === undefined || time(row.voidedAt))))
+            return false;
+        const active = value.assignments.filter(row => !row.voidedAt);
+        if (new Set(active.map(row => row.transactionId)).size !== active.length)
+            return false;
+    }
+    const rows = value.milestones;
+    return new Set(rows.map(row => row?.id)).size === rows.length && rows.every(row => obj(row, ['id', 'label', 'amountCents', 'dueDate', 'note']) && id(row.id) && text(row.label, 100) && !!String(row.label).trim() && integer(row.amountCents) && Number(row.amountCents) > 0 && (row.dueDate === undefined || (0, exports.businessDate)(row.dueDate)) && (row.note === undefined || text(row.note, 1000))) && rows.reduce((sum, row) => sum + Number(row.amountCents), 0) === value.agreedCents;
+}
+function validIntakes(value) {
+    if (value === undefined)
+        return true;
+    if (!Array.isArray(value) || value.length > 12 || new Set(value.map(row => row?.id)).size !== value.length)
+        return false;
+    return value.every(row => {
+        if (!obj(row, ['id', 'requestId', 'createdAt', 'factsRevision', 'sources', 'candidates', 'missing', 'warnings', 'runId', 'confirmedAt', 'confirmedValues']) || !id(row.id) || row.requestId !== undefined && !id(row.requestId) || !time(row.createdAt) || !integer(row.factsRevision, Number.MAX_SAFE_INTEGER - 1) || row.runId !== undefined && !id(row.runId) || row.confirmedAt !== undefined && !time(row.confirmedAt))
+            return false;
+        if (!Array.isArray(row.sources) || !row.sources.length || row.sources.length > 16 || new Set(row.sources.map(source => source?.artifactId)).size !== row.sources.length || !row.sources.every(source => obj(source, ['artifactId', 'originalArtifactId', 'sha256', 'name', 'mimeType', 'text']) && id(source.artifactId) && (source.originalArtifactId === undefined || id(source.originalArtifactId)) && hash(source.sha256) && text(source.name, 500) && text(source.mimeType, 200) && (source.text === undefined || text(source.text, 80000))))
+            return false;
+        const sources = new Set(row.sources.map(source => source.artifactId));
+        if (!Array.isArray(row.candidates) || row.candidates.length > 70 || !row.candidates.every(candidate => obj(candidate, ['key', 'value', 'evidence']) && business_intake_1.BUSINESS_INTAKE_KEYS.includes(candidate.key) && text(candidate.value, 4000) && !!String(candidate.value).trim() && Array.isArray(candidate.evidence) && candidate.evidence.length > 0 && candidate.evidence.length <= 16 && candidate.evidence.every(evidence => obj(evidence, ['artifactId', 'page', 'snippet', 'textMatched']) && sources.has(evidence.artifactId) && (evidence.page === undefined || integer(evidence.page, 100000) && Number(evidence.page) > 0) && text(evidence.snippet, 2000) && !!String(evidence.snippet).trim() && typeof evidence.textMatched === 'boolean')))
+            return false;
+        if (!Array.isArray(row.missing) || row.missing.length > 7 || !row.missing.every(key => business_intake_1.BUSINESS_INTAKE_KEYS.includes(key)) || !Array.isArray(row.warnings) || row.warnings.length > 30 || !row.warnings.every(item => text(item, 1000)))
+            return false;
+        return row.confirmedValues === undefined ? row.confirmedAt === undefined : !!row.confirmedAt && obj(row.confirmedValues, business_intake_1.BUSINESS_INTAKE_KEYS) && Object.values(row.confirmedValues).every(item => text(item, 4000));
+    });
+}
+function validRevisionAdoption(value) {
+    return value === undefined || obj(value, ['sourceArtifactId', 'sourceSha256', 'exportRevision', 'artifactIds', 'adoptedAt']) && id(value.sourceArtifactId) && hash(value.sourceSha256) && integer(value.exportRevision) && Number(value.exportRevision) > 0 && time(value.adoptedAt) && Array.isArray(value.artifactIds) && value.artifactIds.length > 0 && value.artifactIds.length <= 20 && value.artifactIds.every(id) && new Set(value.artifactIds).size === value.artifactIds.length;
+}
+
+},
+"./business-intake": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BUSINESS_INTAKE_KEYS = exports.BUSINESS_INTAKE_FIELDS = void 0;
+exports.BUSINESS_INTAKE_FIELDS = [
+    { key: 'brief', label: '整体需求', example: '客户明确要求的内容' },
+    { key: 'purpose', label: '用途／投放场景', example: '电商详情页、小红书、演示汇报' },
+    { key: 'quantity', label: '交付数量', example: '5' },
+    { key: 'size', label: '交付尺寸', example: '1080×1920' },
+    { key: 'deadline', label: '截止日期', example: '2026-11-30' },
+    { key: 'includedRevisions', label: '包含修改次数', example: '2' },
+    { key: 'formats', label: '文件格式', example: 'PNG、PPTX' },
+];
+exports.BUSINESS_INTAKE_KEYS = exports.BUSINESS_INTAKE_FIELDS.map(row => row.key);
+
+},
+"./business-receivables": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.businessToday = businessToday;
+exports.businessReceivables = businessReceivables;
+exports.businessOrderReceivables = businessOrderReceivables;
+const shanghaiDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
+function businessToday(now) { const parts = shanghaiDate.formatToParts(now); return ['year', 'month', 'day'].map(kind => parts.find(part => part.type === kind)?.value || '').join('-'); }
+function businessReceivables(state, orderId, now = new Date()) {
+    const order = state.orders.find(row => row.id === orderId);
+    return businessOrderReceivables(order, state.transactions.filter(row => row.orderId === orderId), businessToday(now));
+}
+function businessOrderReceivables(order, transactions, today) {
+    const plan = order?.paymentPlan;
+    const rows = transactions.filter(row => !row.voidedAt && ['receipt', 'refund'].includes(row.kind));
+    const assignments = new Map((plan?.assignments || []).filter(row => !row.voidedAt).map(row => [row.transactionId, row.milestoneId]));
+    const assignedTo = (row) => assignments.has(row.id) ? assignments.get(row.id) : row.paymentMilestoneId;
+    const net = rows.reduce((sum, row) => sum + (row.kind === 'receipt' ? row.amountCents : -row.amountCents), 0);
+    let unassigned = rows.filter(row => !assignedTo(row)).reduce((sum, row) => sum + (row.kind === 'receipt' ? row.amountCents : -row.amountCents), 0);
+    const milestones = (plan?.milestones || []).map(row => {
+        const explicit = rows.filter(item => assignedTo(item) === row.id).reduce((sum, item) => sum + (item.kind === 'receipt' ? item.amountCents : -item.amountCents), 0);
+        const allocated = Math.min(Math.max(0, row.amountCents - explicit), Math.max(0, unassigned));
+        unassigned -= allocated;
+        const paidCents = explicit + allocated, remainingCents = Math.max(0, row.amountCents - paidCents);
+        return { ...row, paidCents, remainingCents, automaticCents: allocated, overdue: !!row.dueDate && row.dueDate < today && remainingCents > 0, due: !!row.dueDate && row.dueDate <= today && remainingCents > 0 };
+    });
+    const remainingCents = plan ? Math.max(0, plan.agreedCents - net) : 0;
+    return { hasPlan: !!plan, agreedCents: plan?.agreedCents || 0, netReceivedCents: net, remainingCents, overpaidCents: plan ? Math.max(0, net - plan.agreedCents) : 0, unassignedCents: unassigned, milestones, dueCents: Math.min(remainingCents, milestones.filter(row => row.due).reduce((sum, row) => sum + row.remainingCents, 0)), needsAllocation: !!plan && (unassigned < 0 || milestones.some(row => row.paidCents < 0 || row.paidCents > row.amountCents)) };
 }
 
 }

@@ -10,7 +10,7 @@ function businessProjectIds(state) {
   return [...new Set([...state.products.map(row => row.projectId), ...state.brands.map(row => row.projectId), ...state.orders.flatMap(row => [row.sourceProjectId, ...row.projectIds, ...row.tasks.map(task => task.projectId), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.projectId))]), ...(state.costAllocations || []).map(row => row.projectId), ...state.feedback.map(row => row.target.projectId)].filter(Boolean))];
 }
 function businessArtifactIds(state) {
-  return [...new Set([...state.products.flatMap(row => row.referenceArtifactIds), ...state.brands.flatMap(row => [row.logoArtifactId, ...row.approvedSampleIds]), ...state.orders.flatMap(row => [...row.outputIds, ...(row.referenceArtifactIds || []), ...row.tasks.flatMap(task => [...task.artifactIds, ...(task.referenceArtifactIds || [])]), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.artifactId))]), ...state.feedback.map(row => row.target.artifactId), ...state.metrics.flatMap(row => [row.artifactId, row.evidenceArtifactId])].filter(Boolean))];
+  return [...new Set([...state.products.flatMap(row => row.referenceArtifactIds), ...state.brands.flatMap(row => [row.logoArtifactId, ...row.approvedSampleIds]), ...state.orders.flatMap(row => [...row.outputIds, ...(row.referenceArtifactIds || []), ...(row.intakes || []).flatMap(intake => intake.sources.map(source => source.artifactId)), ...row.tasks.flatMap(task => [...task.artifactIds, ...(task.referenceArtifactIds || [])]), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.artifactId))]), ...state.feedback.flatMap(row => [row.target.artifactId, ...(row.revisionAdoption?.artifactIds || [])]), ...state.metrics.flatMap(row => [row.artifactId, row.evidenceArtifactId])].filter(Boolean))];
 }
 function checkFinancialHistory(before, next) {
   for (const old of before.transactions) {
@@ -29,7 +29,14 @@ function checkFinancialHistory(before, next) {
     if (!current && (old.runIds.length || old.deliveries?.length)) throw Error('有模型费用或交付历史的制作单不能删除，请归档。');
     if (current && old.runIds.some(id => !current.runIds.includes(id))) throw Error('已关联的模型运行和费用不能移除，原费用继续保留。');
     for (const receipt of old.deliveries || []) if (!current?.deliveries?.some(row => row.id === receipt.id && JSON.stringify(row) === JSON.stringify(receipt))) throw Error('历史交付回执不能删除或改写。');
+    for (const intake of old.intakes || []) if (intake.confirmedAt && !current?.intakes?.some(row => row.id === intake.id && JSON.stringify(row) === JSON.stringify(intake))) throw Error('已核对的需求来源与确认值不能改写，请读取新资料追加需求卡。');
+    const paymentAssignments = new Map((current?.paymentPlan?.assignments || []).map(row => [row.id, row]));
+    for (const assignment of old.paymentPlan?.assignments || []) {
+      const found = paymentAssignments.get(assignment.id), stable = row => JSON.stringify(Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'voidedAt')));
+      if (!found || stable(found) !== stable(assignment) || assignment.voidedAt && found.voidedAt !== assignment.voidedAt) throw Error('付款归属历史不能删除或改写，请作废旧归属再追加。');
+    }
   }
+  for (const old of before.feedback.filter(row => row.revisionAdoption)) if (!next.feedback.some(row => row.id === old.id && row.status === 'confirmed' && JSON.stringify(row.revisionAdoption) === JSON.stringify(old.revisionAdoption))) throw Error('已采用的返修与确认记录不能删除或改写。');
 }
 function createBusinessStore({ workspaceStorage, artifactStore, onChanged, fileSystem = fsDefault }) {
   const fs = fileSystem, queue = createSerialQueue();
@@ -86,6 +93,8 @@ function createBusinessStore({ workspaceStorage, artifactStore, onChanged, fileS
     const next = core.checkedBusinessState(candidate, workspaceId);
     if (next.revision !== found.state.revision) throw conflict();
     if (!internal && JSON.stringify(next.costAllocations || []) !== JSON.stringify(found.state.costAllocations || [])) throw Error('费用归属请通过分摊窗口更改，原始账本不会改写。');
+    if (!internal && next.orders.some(row => JSON.stringify(row.intakes || []) !== JSON.stringify(found.state.orders.find(old => old.id === row.id)?.intakes || []))) throw Error('需求来源与确认记录请通过需求确认卡更新。');
+    if (!internal && next.feedback.some(row => JSON.stringify(row.revisionAdoption) !== JSON.stringify(found.state.feedback.find(old => old.id === row.id)?.revisionAdoption))) throw Error('返修采用记录需由后端核对导出文件后生成。');
     if (!internal) invalidateBusinessInputs(found.state, next);
     checkFinancialHistory(found.state, next); await scope(next, found.state);
     if (!internal && next.orders.some(row => (row.deliveries || []).some(receipt => !found.state.orders.find(old => old.id === row.id)?.deliveries?.some(old => old.id === receipt.id)))) throw Error('交付回执需由后端检查文件后生成，请使用确认交付。');

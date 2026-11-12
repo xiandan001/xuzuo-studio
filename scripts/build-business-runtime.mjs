@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), require = createRequire(import.meta.url);
 const healthy = path.join(root, 'work/ui-build/node_modules/typescript');
 const ts = require(fs.existsSync(healthy) ? healthy : 'typescript');
-const modules = ['business-data', 'business-validation', 'business-economics', 'business-import', 'cost-display', 'cost-allocations'];
+const modules = ['business-data', 'business-validation', 'business-economics', 'business-import', 'cost-display', 'cost-allocations', 'business-extra-validation', 'business-intake', 'business-receivables'];
 const factories = modules.map(name => {
   const filename = path.join(root, 'src/lib/' + name + '.ts');
   const output = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, strict: true }, reportDiagnostics: true });
