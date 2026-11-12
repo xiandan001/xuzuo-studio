@@ -121,7 +121,7 @@ function validate(input) {
     for (const f of value.feedback) {
         if (!(0, business_extra_validation_1.validRevisionAdoption)(f.revisionAdoption) || f.revisionAdoption && (f.status !== 'confirmed' || f.revisionAdoption.sourceArtifactId !== f.target.artifactId || f.sourceSha256 && f.sourceSha256 !== f.revisionAdoption.sourceSha256))
             fail('返修采用记录无效。');
-        if (!optional(f.sourceRevision, row => Number.isSafeInteger(row) && Number(row) > 0) || !optional(f.proofPackageId, exports.businessId) || !optional(f.proofAnnotationId, exports.businessId) || !optional(f.sourceSha256, row => typeof row === 'string' && /^[a-f0-9]{64}$/.test(row)) || [f.proofPackageId, f.proofAnnotationId, f.sourceSha256].filter(Boolean).length % 3 !== 0)
+        if (!optional(f.sourceRevision, row => Number.isSafeInteger(row) && Number(row) > 0) || !optional(f.proofPackageId, exports.businessId) || !optional(f.proofAnnotationId, exports.businessId) || !optional(f.sourceSha256, row => typeof row === 'string' && /^[a-f0-9]{64}$/.test(row)) || [f.proofPackageId, f.proofAnnotationId].filter(Boolean).length % 2 !== 0 || !!f.proofPackageId && !f.sourceSha256 || !!f.sourceSha256 && !f.target.artifactId)
             fail('校样反馈来源不完整。');
         if (!optional(f.target.sheetId, row => text(row, 200, true)) || !optional(f.target.cellAddress, row => typeof row === 'string' && /^[A-Z]{1,3}[1-9]\d{0,6}$/.test(row)))
             fail('反馈表格位置无效。');

@@ -161,7 +161,7 @@ async function scenario() {
     const posts = calls.length, folders = await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`);
     await click('[aria-label="选择使用场景"]'); await dom(`document.querySelector('[aria-label="搜索使用场景"]')`, 'custom scenario search');
     await evaluate(`(()=>{const e=document.querySelector('[aria-label="搜索使用场景"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'看图');e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
-    await dom(`document.querySelectorAll('[aria-label="可用场景"]>button').length===1`, 'scenario search filters choices');
+    await dom(`document.querySelectorAll('[aria-label="可用场景"] .chat-scenario-choice').length===1`, 'scenario search filters choices');
     await click('[aria-label="使用场景 看图问答"]'); await dom(`!document.querySelector('[aria-label="搜索使用场景"]')&&document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('看图问答')`, 'selected scenario visible');
     assert.equal(calls.length, posts); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), folders); report.attachmentChecks.scenarioChoiceIsLocal = true;
   });

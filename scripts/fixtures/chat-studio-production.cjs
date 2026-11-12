@@ -17,9 +17,10 @@ async function createFixtureProduction({ directory, workspaceId, png, nativeImag
   const model = { id: 'fixture-image-model', name: '离线精修模型', modelId: 'fixture-image-edit', connectionId: connection.id, enabled: true, capabilities: ['image-editing', 'image-generation'], pricing: { unit: 'image', currency: 'CNY', input: '', output: '0.10' } };
   const key = { ...credential, id: 'fixture-image-key', connectionId: connection.id, name: '离线图片账户' };
   const workspaceStorage = createWorkspaceStorage({ directory: path.join(directory, 'workspace-registration') }), workspace = path.join(directory, 'workspace'); await fs.mkdir(workspace, { recursive: true });
+  const artifactStore = createArtifactStore({ directory: path.join(directory, 'artifacts'), workspaceStorage, fitEngineering: async input => nativeImage.createFromBuffer(input.buffer).resize({ width: input.target.width, height: input.target.height }).toPNG() });
+  workspaceStorage.setArtifactMigrator((projectId, destination, options) => artifactStore.migrateProject(projectId, destination, options));
   await workspaceStorage.bindRoot({ workspaceId, name: '独立文档与聊天验收', directory: workspace, projects: [] });
   await workspaceStorage.ensureProject({ projectId: project.id, workspaceId, name: project.name });
-  const artifactStore = createArtifactStore({ directory: path.join(directory, 'artifacts'), workspaceStorage, fitEngineering: async input => nativeImage.createFromBuffer(input.buffer).resize({ width: input.target.width, height: input.target.height }).toPNG() });
   const editorStore = createEditorStore({ workspaceStorage, artifactStore }), spreadsheetStore = createSpreadsheetStore({ workspaceStorage, artifactStore });
   const documentProjects = [], manualRecords = {};
   for (const kind of ['word', 'ppt', 'excel']) {

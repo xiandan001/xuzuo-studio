@@ -1,9 +1,9 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { readProjectBrowserState, saveProjectBrowserState } from '../lib/project-browser-state';
+import { defaultProjectBrowserState, readProjectBrowserState, saveProjectBrowserState } from '../lib/project-browser-state';
 import type { ProjectBrowserState } from '../lib/project-browser-state';
 
 export function useProjectBrowserState(workspaceId: string, fallbackCollection: ProjectBrowserState['collection']) {
-  const initial = useMemo(() => readProjectBrowserState(localStorage, workspaceId, fallbackCollection), [workspaceId]);
+  const initial = useMemo(() => { try { return readProjectBrowserState(localStorage, workspaceId, fallbackCollection); } catch { return defaultProjectBrowserState(workspaceId, fallbackCollection); } }, [workspaceId]);
   const [stored, setStored] = useState(initial), state = stored.workspaceId === workspaceId ? stored : initial;
   const current = useRef(state);
   current.current = { ...state, scrollTop: current.current.workspaceId === state.workspaceId ? current.current.scrollTop : state.scrollTop };

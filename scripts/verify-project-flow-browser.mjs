@@ -11,7 +11,7 @@ assert.equal(process.platform, 'win32', 'Project flow renderer acceptance is Win
 assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
 assert.match(process.env.GITHUB_SHA || '', /^[a-f0-9]{40}$/i);
 assert(process.env.RUNNER_TEMP && process.env.GITHUB_WORKSPACE);
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), load = createRequire(path.join(root, 'package.json'));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), localRuntime = process.argv.includes('--local-runtime'), dependencyRoot = localRuntime ? path.join(root, 'work/ui-build') : root, load = createRequire(path.join(dependencyRoot, 'package.json'));
 assert.equal((await fs.realpath(root)).toLowerCase(), (await fs.realpath(process.env.GITHUB_WORKSPACE)).toLowerCase());
 const dist = path.join(root, 'work/project-flow-browser-dist'), output = path.join(root, 'work/project-flow-browser-output');
 const temporaryRoot = await fs.realpath(process.env.RUNNER_TEMP), temporary = await fs.mkdtemp(path.join(temporaryRoot, 'xuzuo-project-flow-browser-')), nonce = randomUUID();
@@ -31,7 +31,7 @@ async function bundleFiles(directory, base = directory, result = {}) {
 }
 async function launch(owner) {
   const { isolatedEnvironment } = createRequire(import.meta.url)('./verify-bead-native.cjs');
-  const environment = isolatedEnvironment(temporary, { directory: root });
+  const environment = isolatedEnvironment(temporary, { directory: dependencyRoot });
   Object.assign(environment, { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_SHA: report.commit, GITHUB_WORKSPACE: root, RUNNER_TEMP: temporaryRoot });
   assert(!Object.keys(environment).some(key => /TOKEN|PASSWORD|SECRET|API_KEY|CREDENTIAL/.test(key)));
   const child = spawn(load('electron'), [path.join(root, 'scripts/verify-project-flow-browser-native.cjs'), temporary, `--user-data-dir=${path.join(temporary, 'profile')}`], { cwd: root, env: environment, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -62,7 +62,7 @@ try {
   const vite = await import(pathToFileURL(load.resolve('vite')).href), react = (await import(pathToFileURL(load.resolve('@vitejs/plugin-react')).href)).default;
   const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
   const buildStart = performance.now();
-  await vite.build({ configFile: false, root: path.join(root, 'scripts/fixtures'), base: './', plugins: [react(), { name: 'isolated-business-fixture-csp', transformIndexHtml: () => [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: csp }, injectTo: 'head' }] }], build: { outDir: dist, emptyOutDir: false, sourcemap: false, rollupOptions: { input: path.join(root, 'scripts/fixtures/project-flow-browser-fixture.html') } } });
+  await vite.build({ configFile: false, root: path.join(root, 'scripts/fixtures'), base: './', resolve: localRuntime ? { alias: ['react', 'react-dom', 'lucide-react', 'markdown-it', '@mdit/plugin-cjk-friendly', 'pdfjs-dist'].map(name => ({ find: name, replacement: path.join(dependencyRoot, 'node_modules', name) })) } : undefined, plugins: [react(), { name: 'isolated-business-fixture-csp', transformIndexHtml: () => [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: csp }, injectTo: 'head' }] }], build: { outDir: dist, emptyOutDir: false, sourcemap: false, rollupOptions: { input: path.join(root, 'scripts/fixtures/project-flow-browser-fixture.html') } } });
   report.buildMs = Math.round(performance.now() - buildStart);
   const files = await bundleFiles(dist); assert(Object.keys(files).includes('project-flow-browser-fixture.html'));
   const sources = {};

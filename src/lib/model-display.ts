@@ -4,5 +4,5 @@ export function compactModelName(model: Pick<ModelConfiguration, 'name' | 'model
   return (metadata > 0 ? parts.slice(0, metadata).join(' · ') : model.name).trim() || model.modelId;
 }
 export function modelDisplayDetails(model: ModelConfiguration, connection?: ModelConnection): string {
-  return [model.name, model.modelId, connection?.name, connection?.baseUrl, `计价币种：${model.pricing.currency}`, model.capabilities.includes('vision') ? '支持看图' : '文字模型'].filter(Boolean).join(' · ');
+  return [model.name, model.modelId, connection?.name, connection?.baseUrl, model.pricing?.currency ? `计价币种：${model.pricing.currency}` : '计价未配置', model.capabilities.includes('vision') ? '支持看图' : '文字模型'].filter(Boolean).join(' · ');
 }

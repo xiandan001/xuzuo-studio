@@ -68,7 +68,7 @@ function domAction(input) {
   return true;
 }
 const action = input => evaluate(`(${domAction.toString()})(${JSON.stringify(input)})`);
-async function click(selector, text) { await until(`click ${text || selector}`, `(${domAction.toString()})(${JSON.stringify({ type: 'exists', selector, text })})`); await action({ type: 'click', selector, text }); }
+async function click(selector, text) { await until(`click ${text || selector}`, `(${domAction.toString()})(${JSON.stringify({ type: 'exists', selector, text })})`); await action({ type: 'scroll', selector, text }); await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); await action({ type: 'click', selector, text }); }
 async function fill(label, value) { await action({ type: 'fill', selector: `[aria-label=${JSON.stringify(label)}]`, value }); }
 async function step(name, operation) { const began = performance.now(); report.phase = name; await operation(); report.steps.push({ name, durationMs: Math.round(performance.now() - began) }); }
 async function layout(label) {
@@ -79,7 +79,8 @@ async function layout(label) {
 }
 async function capture(name, selector) {
   await evaluate(`(async()=>{${selector ? `document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'start',behavior:'instant'});` : 'scrollTo(0,0);'}await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode().catch(()=>{})));})()`);
-  await delay(60);
+  window.webContents.invalidate(); await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  await delay(100);
   const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }); assert(!image.isEmpty(), 'Empty Chromium capture');
   const bytes = image.toPNG(), filename = `${String(report.screenshots.length + 1).padStart(2, '0')}-${name}.png`; assert(bytes.length > 5000, 'Capture is unexpectedly blank');
   fs.writeFileSync(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: hash(bytes) });
@@ -104,7 +105,7 @@ async function scenario() {
     await until('list view selected', "document.querySelector('[aria-label=\"列表视图\"]')?.getAttribute('aria-pressed')==='true'");
     await layout('projects-1440-light'); await capture('projects-list-light-1440');
     const hubBegan = performance.now(), beforeInventory = await evaluate('window.projectFlowBrowserFixture.snapshot().calls.inventories.length');
-    await click('.op-project-name', '合作说明返修验收');
+    await click('.op-table-project b', '合作说明返修验收');
     await until('actual project hub', 'document.querySelector(".project-hub h1")?.textContent==="合作说明返修验收"');
     returnPosition = await evaluate('JSON.parse(window.projectFlowBrowserFixture.browserState()).scrollTop');
     assert(returnPosition > 100, 'Expected a genuine scrolled project-list position');
@@ -117,6 +118,7 @@ async function scenario() {
     window.setContentSize(960, 1000); await delay(80); await layout('project-hub-960-light'); window.setContentSize(1440, 1000); await delay(80);
   });
   await step('feedback-exact-source-entry', async () => {
+    report.beforeFeedback = await evaluate('({text:document.querySelector(".project-hub")?.textContent,state:window.projectFlowBrowserFixture.snapshot().state,routes:window.projectFlowBrowserFixture.snapshot().calls.routes})');
     await click('button', '处理客户反馈');
     await until('feedback approved', 'document.querySelector(".bs-feedback-item")?.textContent.includes("打开对应位置")||document.querySelector(".bs-feedback-item")?.textContent.includes("编辑并完成本轮")');
     await capture('feedback-source-light-1440', '.bs-feedback-item');
