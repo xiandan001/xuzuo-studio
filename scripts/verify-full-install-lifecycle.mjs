@@ -102,6 +102,12 @@ async function main() {
     process.exit(1);
   }, 720000); totalDeadline.unref();
   Object.assign(report, { commit: process.env.GITHUB_SHA, version: current.version, fixture, oldInstaller: { version: oldVersion, bytes: oldBytes, sha256: oldSha }, baselineEngine: 'Current production SetupEngine with verified complete 2.1.5 runtime; not literal old installer entry point' });
+  const moveProof = await json(path.join(root, 'work/setup-directory-move-output/report.json'));
+  assert(moveProof.passed && moveProof.commit === process.env.GITHUB_SHA && moveProof.version === current.version && !moveProof.normalApplicationStarted && !moveProof.installerExecuted && !moveProof.registryTouched && moveProof.providerCalls === 0);
+  assert.deepEqual(moveProof.fixture.cases.map(item => item.name).sort(), ['delayed-lock-release', 'permanent-lock-preserves-source', 'validation-failure-no-retry']);
+  assert(moveProof.fixture.cases.every(item => item.passed === true));
+  for (const source of moveProof.sources) { inside(root, path.join(root, source.name)); assert.equal((await identity(path.join(root, source.name))).sha256, source.sha256); }
+  report.directoryMoveLockHandlingVerified = true; report.directoryMoveLockProof = moveProof;
   await fsp.writeFile(path.join(fixture, 'owner.json'), JSON.stringify({ kind: 'xuzuo-full-install-ci', directory: fixture, commit: process.env.GITHUB_SHA, nonce: randomUUID() }) + '\n', { flag: 'wx' });
   const { setupMetadata, compileSetup, archivePayload } = await import('./build-setup.mjs');
   const guid = randomUUID(), metadata = setupMetadata({ appId: 'local.xuzuo.studio.full.qa.' + guid, productName: 'Xuzuo full runtime QA', executableProductName: sourcePackage.build.productName, validation: true, validationRoot: fixture, shortcutRoot: path.join(fixture, 'shortcuts'), shortcutName: 'Xuzuo full runtime QA ' + guid, defaultDirectoryName: 'application' });
@@ -109,7 +115,7 @@ async function main() {
   report.namespace = { appId: metadata.appId, installGuid: metadata.installGuid, shortcutRoot: metadata.shortcutRoot, uninstallRegistryKey: metadata.uninstallRegistryKey };
   const framework = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319'), compiler = path.join(framework, 'csc.exe');
   const references = ['System.dll', 'System.Core.dll', 'System.Xml.dll', 'System.Xaml.dll', 'System.Web.Extensions.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll', 'Microsoft.CSharp.dll', 'WPF/WindowsBase.dll', 'WPF/PresentationCore.dll', 'WPF/PresentationFramework.dll'].map(name => path.join(framework, name));
-  const sources = ['setup-contracts.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs', 'setup-update-fixture.cs'].map(name => path.join(root, 'scripts/native', name));
+  const sources = ['setup-contracts.cs', 'setup-directory-move.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs', 'setup-update-fixture.cs'].map(name => path.join(root, 'scripts/native', name));
   report.installerSource = []; for (const file of sources) report.installerSource.push({ name: path.basename(file), ...await identity(file) });
   async function controller(destination, meta, manifest, payload) {
     const metaFile = path.join(path.dirname(destination), path.basename(destination) + '.metadata.json'); await fsp.writeFile(metaFile, JSON.stringify(meta) + '\n', { flag: 'wx' });

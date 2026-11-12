@@ -151,6 +151,8 @@ jobs:
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
         run: node scripts/build-setup.mjs runtime
+      - name: Verify bounded directory switching under real locks
+        run: node scripts/verify-setup-directory-move.mjs
       - name: Package desktop application
         run: node node_modules/electron-builder/cli.js --win dir --publish never --config.electronDist=node_modules/electron/dist
       - name: Build custom Windows installer
