@@ -9,7 +9,7 @@ const { Worker } = require('node:worker_threads');
 const root = path.resolve(__dirname, '..'), sha = value => createHash('sha256').update(value).digest('hex'), began = Date.now();
 const workspaceId = 'chat-ui-workspace', channels = [], calls = [], held = new Set();
 const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 }, attachmentChecks: {} };
-let owner, temporary, window, service, cpuTasks, inputFiles, finishing = false, slowCount = 0, importCount = 0;
+let owner, temporary, window, service, cpuTasks, inputFiles, production, finishing = false, slowCount = 0, importCount = 0;
 const workerTasks = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deadline = setTimeout(() => { void finish(Error('Chat studio native acceptance exceeded 120 seconds')); }, 120000);
@@ -37,6 +37,7 @@ async function finish(error) {
   }
   for (const release of [...held]) release();
   try { await service?.shutdown(); } catch (cause) { report.errors.push(String(cause)); }
+  try { await production?.engine.shutdown(); } catch (cause) { report.errors.push(String(cause)); }
   try { await cpuTasks?.drain(); await until(() => workerTasks.every(task => task.exited), 'attachment worker exit', 2500); } catch (cause) { report.errors.push(String(cause)); }
   if (app.isReady()) report.processIds = [...new Set([...report.processIds, ...app.getAppMetrics().map(item => item.pid)].filter(Number.isInteger))];
   for (const current of BrowserWindow.getAllWindows()) current.destroy(); for (const channel of channels) ipcMain.removeHandler(channel);
@@ -54,6 +55,8 @@ async function click(selector, text) {
 }
 async function fill(value) { await dom(`document.querySelector('[aria-label="聊天内容"]')`, 'chat input'); await evaluate(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]');e.scrollIntoView({block:'center'});e.focus();Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`); }
 async function select(label, value) { await click(`[aria-label="${label}"]`); await click('[role="option"]', value); }
+async function chooseScenario(name) { await click('[aria-label="选择使用场景"]'); await click(`[aria-label="使用场景 ${name}"]`); }
+async function localAttachments() { await click('[aria-label="添加聊天附件"]'); await click('[aria-label="附件来源"] button', '本机文件'); }
 async function step(name, action) { report.phase = name; process.stdout.write('Chat studio step: ' + name + '\n'); const start = Date.now(); await action(); report.steps.push({ name, ms: Date.now() - start }); }
 async function currentConversation() { let items; await until(async () => { items = await service.list(workspaceId); return items.length > 0; }, 'conversation index created'); return service.read({ workspaceId, conversationId: items[0].id }); }
 async function settled(count, status = 'complete') { await until(async () => { const value = await currentConversation(); return value.turns.length === count && value.turns.at(-1).status === status; }, `turn ${count} ${status}`); await dom(`document.querySelectorAll('.workspace-chat-turn').length===${count}&&!document.querySelector('[aria-label="停止回复"]')`, 'renderer adopted final turn'); }
@@ -97,14 +100,20 @@ async function initialize() {
   const connection = { id: 'chat-connection', name: '离线合成服务', providerId: 'openai', protocol: 'openai-chat', baseUrl: 'https://chat-offline.invalid/v1', enabled: true, status: 'configured' };
   const model = { id: 'chat-model', name: 'GPT-6.1 Terra · 离线夹具', modelId: 'gpt-6.1-terra', connectionId: connection.id, enabled: true, capabilities: ['text', 'vision'], pricing: { unit: 'million-tokens', currency: 'CNY', input: '1000', output: '1000' } };
   const credential = { id: 'chat-metadata-key', connectionId: connection.id, name: '独立测试账户', lastFour: 'test', enabled: true, updatedAt: '' };
-  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), extractText: file => cpuTasks.run('reference-text', { name: file.name, mimeType: file.mimeType, buffer: file.buffer }), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
+  production = await require('./fixtures/chat-studio-production.cjs').createFixtureProduction({ directory: path.join(temporary, 'production-data'), workspaceId, png, nativeImage, credential });
+  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), ...require('../electron/chat-project-attachments.cjs').createChatProjectAttachments(production.artifactStore), readArtifact: production.readArtifact, readRun: id => production.engine.runDetail(id), readAsset: async input => { assert.equal(input.workspaceId, workspaceId); assert.equal(input.assetId, 'fixture-local-asset'); assert.equal(input.builtin, false); return { name: '验收本地纹理.png', mimeType: 'image/png', buffer: await fsp.readFile(inputFiles.png) }; }, extractText: file => cpuTasks.run('reference-text', { name: file.name, mimeType: file.mimeType, buffer: file.buffer }), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
   const fixtureUrl = pathToFileURL(path.join(owner.dist, 'chat-studio.html')).href;
   const handle = (name, action) => { const channel = 'runtime:' + name; channels.push(channel); ipcMain.handle(channel, (event, input) => { assert.equal(event.sender, window.webContents); assert.equal(event.senderFrame, window.webContents.mainFrame); assert.equal(event.senderFrame.url, fixtureUrl); return action(input); }); };
-  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger']) handle('chat-' + method, input => service[method](input));
+  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'search', 'manage', 'selectTarget', 'inspectTarget', 'importBytes', 'importAsset', 'importProjectArtifact', 'linkProduction']) handle('chat-' + method, input => service[method](input));
   handle('chat-import-attachments', input => { assert.equal(input.workspaceId, workspaceId); importCount++; return service.importAttachments({ ...input, paths: importCount === 1 ? [inputFiles.png, inputFiles.text, inputFiles.docx] : [inputFiles.text, inputFiles.docx] }); });
   handle('chat-preview-attachment', input => service.previewAttachment(input));
-  handle('chat-attach-to-project', () => { throw Error('This fixture must not create a project or transfer references without a real project.'); });
-  handle('status', () => ({ workspaceId, configuration: { models: [model], connections: [connection], credentials: [credential], vaultStatus: { available: true } } }));
+  handle('chat-attach-to-project', input => { assert.equal(input.projectId, production.project.id); return service.attachToProject(input); });
+  handle('status', () => ({ workspaceId, project: production.project, artifact: production.source, configuration: { models: [model, production.model], connections: [connection, production.connection], credentials: [credential, production.credential], vaultStatus: { available: true } } }));
+  handle('asset-list', () => [{ id: 'fixture-local-asset', workspaceId, name: '验收本地纹理', kind: 'image', mimeType: 'image/png', bytes: png.length }]);
+  handle('list-project-artifacts', projectId => { assert.equal(projectId, production.project.id); return production.artifactStore.listProject(projectId); });
+  handle('preview-artifact', id => production.artifactStore.preview(id));
+  handle('preflight', input => production.engine.preflight(input));
+  handle('start-checked', input => production.start(input)); handle('lookup-start', input => production.lookup(input)); handle('snapshot', () => production.engine.snapshot());
   handle('automation-planning-list', () => []);
 }
 async function layout(width, theme, index) {
@@ -135,13 +144,13 @@ async function scenario() {
     await click('.workspace-chat-message-actions button', '重新回答'); await settled(4); const retried = await currentConversation(); assert.equal(retried.turns.at(-1).sourceTurnId, priorId); assert.equal(calls.length, 4); for (const row of cancelledLedger) assert.deepEqual((await service.ledger(workspaceId)).find(item => item.id === row.id), row); assert.equal((await service.ledger(workspaceId)).length, 4); report.stopAndRetryPreserveCosts = true;
   });
   await step('chat-to-validated-plan-before-folder-selection', async () => {
-    const before = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await dom(`document.querySelector('.workspace-chat-modes button[aria-pressed="true"]')?.textContent.includes('制作')`, 'chat converted to plan input'); assert.equal(calls.length, before); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
-    await click('.workspace-chat-formats button', 'Word'); await fill('把刚才的想法整理为两页Word说明，包含目标与步骤。'); await click('[aria-label="发送聊天消息"]'); await until(() => held.size > 0 && calls.length === before + 1, 'held partial plan response'); await dom(`document.querySelector('.workspace-chat-working')?.textContent.includes('完整校验')`, 'plan partial hidden behind validation state'); assert.equal(await evaluate(`document.querySelectorAll('.home-plan-primary button').length`), 0); assert.equal((await currentConversation()).turns.at(-1).plan, undefined);
+    const before = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await dom(`document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('宣传图')`, 'chat converted to plan scenario'); assert.equal(calls.length, before); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
+    await chooseScenario('Word 文档'); await fill('把刚才的想法整理为两页Word说明，包含目标与步骤。'); await click('[aria-label="发送聊天消息"]'); await until(() => held.size > 0 && calls.length === before + 1, 'held partial plan response'); await dom(`document.querySelector('.workspace-chat-working')?.textContent.includes('完整校验')`, 'plan partial hidden behind validation state'); assert.equal(await evaluate(`document.querySelectorAll('.home-plan-primary button').length`), 0); assert.equal((await currentConversation()).turns.at(-1).plan, undefined);
     for (const release of [...held]) release(); await settled(5); await dom(`document.querySelector('.home-plan h3')?.textContent==='橘猫产品合作说明书'`, 'complete plan visible without a project'); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0'); assert.equal((await currentConversation()).turns.at(-1).plan.outputKind, 'word'); report.planValidatedBeforeDisplay = true;
     await click('.home-plan-primary .btn-primary'); await dom(`document.querySelector('.chat-fixture').dataset.folderRequests==='1'`, 'only explicit production asks for a folder'); assert.equal(calls.length, before + 1); report.deferredProjectSelection = true;
   });
   await step('long-content-theme-width-scroll-and-sender-distinction', async () => {
-    await click('.workspace-chat-modes button', '聊天'); await fill('长内容：请提供一份包含表格与代码的完整说明。'); await click('[aria-label="发送聊天消息"]'); await settled(6); await dom(`document.querySelector('.workspace-chat-thread>div:last-child pre code')`, 'actual long code rendering');
+    await chooseScenario('自由聊天'); await fill('长内容：请提供一份包含表格与代码的完整说明。'); await click('[aria-label="发送聊天消息"]'); await settled(6); await dom(`document.querySelector('.workspace-chat-thread>div:last-child pre code')`, 'actual long code rendering');
     let index = 0; for (const width of [1440, 960]) for (const theme of ['light', 'dark']) await layout(width, theme, ++index); report.renderMetrics = app.getAppMetrics().map(item => ({ type: item.type, cpu: item.cpu, memory: item.memory }));
   });
   report.originalSyntheticPostCount = calls.length; assert.equal(report.originalSyntheticPostCount, 6);
@@ -154,7 +163,7 @@ async function scenario() {
     assert.equal(calls.length, posts); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), folders); report.attachmentChecks.scenarioChoiceIsLocal = true;
   });
   await step('import-real-files-preview-remove-and-send-image-only', async () => {
-    const posts = calls.length; await fill(''); await click('[aria-label="添加聊天附件"]');
+    const posts = calls.length; await fill(''); await localAttachments();
     await dom(`document.querySelector('[aria-label="本轮附件"]')?.children.length===3`, 'three genuine files imported'); assert.equal(importCount, 1); assert.equal(calls.length, posts);
     for (const [filename, expected] of [['reference-cat.png', 'image'], ['product-facts.txt', 'TXT事实'], ['product-brief.docx', '秋日手作']]) {
       await click(`.workspace-chat-composer [title="预览 ${filename}"]`);
@@ -176,7 +185,7 @@ async function scenario() {
     report.imageAttachment = { id: image.id, name: image.name, sha256: image.sha256, bytes: image.bytes };
   });
   await step('image-chat-to-plan-retains-actual-reference', async () => {
-    const posts = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await click('.workspace-chat-formats button', '图片');
+    const posts = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await chooseScenario('宣传图');
     await fill('附件验收：请按刚才的参考图规划一张产品宣传图，保留原图产品细节。'); await click('[aria-label="发送聊天消息"]'); await until(() => held.size > 0 && calls.length === posts + 1, 'held image plan response');
     const content = calls.at(-1).body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []), imageParts = content.filter(part => part.type === 'image_url');
     assert(imageParts.some(part => sha(Buffer.from(part.image_url.url.split(',')[1], 'base64')) === inputFiles.pngSha256));
@@ -185,7 +194,7 @@ async function scenario() {
     assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '1'); report.attachmentChecks.chatToPlanKeepsImage = true;
   });
   await step('office-and-text-attachments-reach-provider-as-real-body-text', async () => {
-    await click('[aria-label="选择使用场景"]'); await click('[aria-label="使用场景 资料解读"]'); await fill(''); await click('[aria-label="添加聊天附件"]');
+    await click('[aria-label="选择使用场景"]'); await click('[aria-label="使用场景 资料解读"]'); await fill(''); await localAttachments();
     await dom(`document.querySelector('[aria-label="本轮附件"]')?.children.length===2`, 'text and office references selected'); assert.equal(importCount, 2);
     const before = calls.length; await click('[aria-label="发送聊天消息"]'); await settled(9); assert.equal(calls.length, before + 1);
     const parts = calls.at(-1).body.messages.at(-1).content, text = typeof parts === 'string' ? parts : parts.filter(part => part.type === 'text').map(part => part.text).join('\n');
@@ -200,6 +209,8 @@ async function scenario() {
   });
   assert.equal(Object.keys(require.cache).some(file => file === path.join(root, 'electron/main.cjs')), false); report.fakePostCount = calls.length; report.attachmentSyntheticPostCount = calls.length - report.originalSyntheticPostCount; assert.equal(report.fakePostCount, 9); assert.equal(report.attachmentSyntheticPostCount, 3);
   report.dataDirectories = await fsp.readdir(path.join(temporary, 'data')); assert.deepEqual(report.dataDirectories, ['chat-v1']);
+  await require('./fixtures/chat-studio-new-features.cjs').verifyNewChatFeatures({ service, workspaceId, production, inputFiles, calls, report, evaluate, dom, click, fill, select, chooseScenario, until, step });
+  assert.equal(calls.length, 9); report.refinementSyntheticPostCount = production.calls.length;
 }
 async function run() {
   prepare(); await app.whenReady(); await initialize();

@@ -15,6 +15,13 @@ function sse(events, split = 7) {
 }
 const finalResponse = text => ({ type: 'response.completed', response: { id: 'resp-fixture', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }], usage: { input_tokens: 10, output_tokens: 12, output_tokens_details: { reasoning_tokens: 3 } } } });
 describe('普通聊天的真实供应商传输', () => {
+  it('identifies an HTTP-200 quota stream error without exposing provider messages or retrying', async () => {
+    let calls = 0, failure;
+    try { await executeChat(input, messages, { credentialStore: credentials, fetchImpl: async () => { calls++; return sse([{ type: 'response.output_text.delta', delta: '已返回片段' }, { type: 'error', error: { code: 'credit_balance_exhausted', type: 'insufficient_quota', message: 'fixture-secret-123 untrusted details' } }]); } }); }
+    catch (error) { failure = error; }
+    expect(calls).toBe(1); expect(failure.code).toBe('PROVIDER_QUOTA'); expect(failure.message).toContain('余额或调用额度不足');
+    expect(failure.message).not.toContain('fixture-secret'); expect(failure.partialText).toBe('已返回片段'); expect(failure.requestStarted).toBe(true);
+  });
   it('Responses保留原生多轮角色，发送强度并流式解码跨字节中文与用量', async () => {
     let sent; const chunks = [];
     const result = await executeChat({ ...input, reasoningEffort: 'low' }, messages, { credentialStore: credentials, onText: text => chunks.push(text), fetchImpl: async (_url, options) => { sent = options; return sse([{ type: 'response.output_text.delta', delta: '你好，' }, { type: 'response.output_text.delta', delta: '世界' }, finalResponse('你好，世界')], 1); } });

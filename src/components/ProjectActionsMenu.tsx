@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
-import { FolderOpen, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { Copy, FolderOpen, LayoutTemplate, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { ModalPortal } from './ModalPortal';
 
 interface ProjectActionsMenuProps {
@@ -11,6 +11,8 @@ interface ProjectActionsMenuProps {
   onEdit: () => void;
   onOpen: () => void;
   onTrash: () => void;
+  onCopy?: () => void;
+  onSaveTemplate?: () => void;
 }
 
 export function ProjectActionsMenu(props: ProjectActionsMenuProps) {
@@ -71,6 +73,8 @@ export function ProjectActionsMenu(props: ProjectActionsMenuProps) {
     {props.open && <ModalPortal><div ref={popup} id={id} className="op-popover op-project-actions-menu" role="menu" aria-label={`${props.projectName}操作菜单`} style={{ ...position, visibility: position ? 'visible' : 'hidden' }} onKeyDown={keydown}>
       <button type="button" role="menuitem" onClick={() => act(props.onEdit)}><Pencil size={14} />编辑名称与预算</button>
       <button type="button" role="menuitem" onClick={() => act(props.onOpen)}><FolderOpen size={14} />打开工作台</button>
+      {props.onCopy && <button type="button" role="menuitem" onClick={() => act(props.onCopy!)}><Copy size={14} />从此作品新建</button>}
+      {props.onSaveTemplate && <button type="button" role="menuitem" onClick={() => act(props.onSaveTemplate!)}><LayoutTemplate size={14} />存为项目模板</button>}
       <button type="button" role="menuitem" className="op-trash-action" disabled={!props.canTrash} title={props.canTrash ? '可恢复，历史费用保留' : '先完成或取消运行任务'} onClick={() => act(props.onTrash)}><Trash2 size={14} />移入回收站</button>
     </div></ModalPortal>}
   </div>;

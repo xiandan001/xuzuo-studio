@@ -7,7 +7,7 @@ const core = require('./business-data.runtime.cjs');
 const copy = value => structuredClone(value);
 const conflict = () => Object.assign(Error('业务资料已在另一处更新，请读取最新资料后重试。'), { code: 'BUSINESS_CONFLICT' });
 function businessProjectIds(state) {
-  return [...new Set([...state.products.map(row => row.projectId), ...state.brands.map(row => row.projectId), ...state.orders.flatMap(row => [row.sourceProjectId, ...row.projectIds, ...row.tasks.map(task => task.projectId), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.projectId))]), ...state.feedback.map(row => row.target.projectId)].filter(Boolean))];
+  return [...new Set([...state.products.map(row => row.projectId), ...state.brands.map(row => row.projectId), ...state.orders.flatMap(row => [row.sourceProjectId, ...row.projectIds, ...row.tasks.map(task => task.projectId), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.projectId))]), ...(state.costAllocations || []).map(row => row.projectId), ...state.feedback.map(row => row.target.projectId)].filter(Boolean))];
 }
 function businessArtifactIds(state) {
   return [...new Set([...state.products.flatMap(row => row.referenceArtifactIds), ...state.brands.flatMap(row => [row.logoArtifactId, ...row.approvedSampleIds]), ...state.orders.flatMap(row => [...row.outputIds, ...(row.referenceArtifactIds || []), ...row.tasks.flatMap(task => [...task.artifactIds, ...(task.referenceArtifactIds || [])]), ...(row.deliveries || []).flatMap(receipt => receipt.files.map(file => file.artifactId))]), ...state.feedback.map(row => row.target.artifactId), ...state.metrics.flatMap(row => [row.artifactId, row.evidenceArtifactId])].filter(Boolean))];
@@ -18,6 +18,11 @@ function checkFinancialHistory(before, next) {
     if (!current) throw Error('实收流水不能删除，请作废原记录后追加更正；API费用保持不变。');
     const signature = row => JSON.stringify(Object.entries(row).filter(([key, value]) => key !== 'voidedAt' && value !== undefined).sort(([a], [b]) => a.localeCompare(b)));
     if (signature(old) !== signature(current) || old.voidedAt && current.voidedAt !== old.voidedAt) throw Error('已记录的实收流水不能改写或恢复，请作废后追加更正。');
+  }
+  for (const old of before.costAllocations || []) {
+    const row = (next.costAllocations || []).find(item => item.id === old.id);
+    const stable = item => JSON.stringify(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'voidedAt')));
+    if (!row || stable(row) !== stable(old) || old.voidedAt && row.voidedAt !== old.voidedAt) throw Error('已有费用归属只能作废后追加更正，不能删除历史。');
   }
   for (const old of before.orders) {
     const current = next.orders.find(row => row.id === old.id);
@@ -80,6 +85,7 @@ function createBusinessStore({ workspaceStorage, artifactStore, onChanged, fileS
   async function write(workspaceId, found, candidate, internal = false) {
     const next = core.checkedBusinessState(candidate, workspaceId);
     if (next.revision !== found.state.revision) throw conflict();
+    if (!internal && JSON.stringify(next.costAllocations || []) !== JSON.stringify(found.state.costAllocations || [])) throw Error('费用归属请通过分摊窗口更改，原始账本不会改写。');
     if (!internal) invalidateBusinessInputs(found.state, next);
     checkFinancialHistory(found.state, next); await scope(next, found.state);
     if (!internal && next.orders.some(row => (row.deliveries || []).some(receipt => !found.state.orders.find(old => old.id === row.id)?.deliveries?.some(old => old.id === receipt.id)))) throw Error('交付回执需由后端检查文件后生成，请使用确认交付。');

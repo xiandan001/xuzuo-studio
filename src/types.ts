@@ -55,7 +55,7 @@ export interface PromptApplication {
   imagePreset?: string;
 }
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'complete' | 'paused';
-export interface Project {
+export interface Project { localOutputArtifactIds?: string[];
   purgedAt?: string;
   confirmedDelivery?: { id: string; fingerprint: string; runStateSignature: string };
   liveLedgerBaselineCents?: number;
@@ -114,6 +114,9 @@ export interface Preferences {
   reduceMotion: boolean;
 }
 export interface PageProps {
+  chatIntent?: { token: string; conversationId: string; workspaceId: string; projectId: string; artifactId: string; kind: ProjectKind; name: string };
+  onChatIntentConsumed?: (token: string) => void;
+  onDiscussArtifact?: (file: ArtifactMetadata, kind: ProjectKind) => void;
   businessIntent?: { token: string; recipe: import('./business-types').BusinessRecipe; orderId?: string };
   onBusinessIntentConsumed?: (token: string) => void;
   onOpenBusiness?: (recipe: import('./business-types').BusinessRecipe, orderId?: string) => void;
@@ -170,6 +173,8 @@ export interface PageProps {
   onUpdatePreferences: (changes: Partial<Preferences>) => void;
 }
 export interface DesktopBridge {
+  projectTemplates?: import('./project-template-types').ProjectTemplatesBridge;
+  customerProofing?: import('./proofing-types').CustomerProofingBridge;
   chat?: import('./chat-types').ChatBridge;
   animation?: import('./animation-types').AnimationBridge;
   beadMarket?: import('./bead-market-types').BeadMarketBridge;

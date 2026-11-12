@@ -97,7 +97,7 @@ function relocatedPath(value, paths, fileNames) {
 function remap(value, ids, paths = {}, fileNames = {}, field = '') {
   if (['checks', 'checkedIds', 'preparation', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot', 'facts'].includes(field)) return structuredClone(value);
   if (typeof value === 'string') {
-    if (ID_FIELDS.has(field) || ID_ARRAYS.has(field)) return Object.hasOwn(ids, value) ? ids[value] : value;
+    if (ID_FIELDS.has(field) || ID_ARRAYS.has(field) || field === 'entryId' || field === 'sheetId' || field === 'localOutputArtifactIds') return Object.hasOwn(ids, value) ? ids[value] : value;
     if (PATH_FIELDS.has(field)) return relocatedPath(value, paths, fileNames);
     if (['fileName', 'trashFileName'].includes(field)) return fileNames[value] || value;
     return value;

@@ -6,8 +6,9 @@ const { parseBatchImport } = require('./batch-import.cjs');
 const { checkedDirectory, checkedFile } = require('./workspace-paths.cjs');
 const core = require('./business-data.runtime.cjs');
 const validKinds = ['products', 'transactions', 'metrics'];
-function createBusinessData({ workspaceStorage, artifactStore, dialog, getWindow = () => undefined, getLedger = async () => [], onChanged, fileSystem = fsDefault, loadModule = require, store: providedStore }) {
+function createBusinessData({ workspaceStorage, artifactStore, dialog, getWindow = () => undefined, getLedger = async () => [], getRuns = async () => [], onChanged, fileSystem = fsDefault, loadModule = require, store: providedStore }) {
   const fs = fileSystem, store = providedStore || createBusinessStore({ workspaceStorage, artifactStore, onChanged, fileSystem }), previews = new Map(), tasks = new Set(); let closing = false;
+  const links = require('./business-links.cjs').createBusinessLinks({ store, workspaceStorage, artifactStore, getLedger, getRuns });
   const track = action => { if (closing) return Promise.reject(Error('业务资料正在保存并退出，请稍后操作。')); const task = Promise.resolve().then(action); tasks.add(task); void task.finally(() => tasks.delete(task)).catch(() => undefined); return task; };
   async function context(input, state) {
     const registry = await workspaceStorage.list();
@@ -64,6 +65,9 @@ function createBusinessData({ workspaceStorage, artifactStore, dialog, getWindow
     return { saved: true, path: filename };
   }
   return {
+    allocateCosts: input => track(() => links.allocateCosts(input)),
+    linkOutput: input => track(() => links.linkOutput(input)),
+    importProofFeedback: input => track(() => links.importProofFeedback(input)),
     snapshot: workspaceId => track(() => store.snapshot(workspaceId)),
     save: input => track(() => store.save(input)),
     mutate: (workspaceId, transform) => track(() => store.mutate(workspaceId, transform)),

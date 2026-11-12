@@ -1,3 +1,4 @@
+import { createLivePolling } from '../lib/live-polling';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkflowDefinition, WorkflowRun, WorkflowRunner } from '../configuration-types';
 import type { ArtifactMetadata, LiveRuntimeStatus, LiveSnapshot, LiveStartRequest } from '../live-types';
@@ -100,14 +101,14 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
       return applyLiveProjectState(project, latest, delta.get(project.id) || 0, liveTotals.get(project.id) || 0);
     }); return next.some((project, index) => project !== projects[index]) ? next : projects; });
   };
+  const wakePolling = useRef<() => void>(() => undefined);
   const mergeRef = useRef(merge); mergeRef.current = merge;
   const [starts] = useState(() => createLiveStartCoordinator({ storage: () => localStorage, bridge: () => window.desktop?.runtime, onRun: run => {
     if (!alive.current) return;
     if (!nativeSnapshot.current.runs.some(item => item.id === run.id)) mergeRef.current({ delta: true, runs: [run], ledger: [] });
-    const bridge = window.desktop?.runtime;
-    if (bridge) void (async () => { try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (alive.current && snapshot) mergeRef.current(snapshot); } catch { /* Acceptance is independent of a subsequent poll; regular polling will recover. */ } })();
+    wakePolling.current();
   } }));
-  useEffect(() => window.desktop?.runtime?.onProjectFilesChanged?.(projectId => { inventoryCache.invalidate(projectId); thumbnailCache.clear(); setInventoryRevision(value => value + 1); }), [inventoryCache, thumbnailCache]);
+  useEffect(() => window.desktop?.runtime?.onProjectFilesChanged?.(projectId => { inventoryCache.invalidate(projectId); thumbnailCache.clear(); setInventoryRevision(value => value + 1); wakePolling.current(); }), [inventoryCache, thumbnailCache]);
   const listProjectArtifacts = useCallback(async (projectId: string, input?: { refresh?: boolean }) => {
     const current = optionsRef.current;
     if (!current.projects.some(project => project.id === projectId && project.workspaceId === current.workspaceId && !project.trashedAt && !project.purgedAt)) throw new Error('项目不属于当前工作区。');
@@ -151,16 +152,17 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
   useEffect(() => {
     const bridge = window.desktop?.runtime;
     if (!bridge) return;
-    let stopped = false, pending = false;
-    const poll = async () => {
-      if (pending) return;
-      pending = true;
+    let stopped = false;
+    const polling = createLivePolling(async () => {
       try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(revision.current) : bridge.snapshot()); if (!stopped) { setRuntimeStatus(value => value.available ? value : { available: true }); if (snapshot) mergeRef.current(snapshot); } }
       catch { if (!stopped) setRuntimeStatus({ available: false, reason: '真实执行后台暂不可用，请保留现有数据并检查桌面版本。' }); }
-      finally { pending = false; }
-    };
-    void poll(); const timer = window.setInterval(() => void poll(), 900);
-    return () => { stopped = true; window.clearInterval(timer); };
+    }, () => nativeSnapshot.current.runs.some(run => run.mode === 'live' && run.status === 'running'), () => document.hidden);
+    const wake = polling.wake;
+    wakePolling.current = wake;
+    const removeAutomation = window.desktop?.automation?.onChanged?.(wake), removeBusiness = window.desktop?.business?.onChanged?.(wake);
+    window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
+    wake();
+    return () => { stopped = true; polling.stop(); wakePolling.current = () => undefined; removeAutomation?.(); removeBusiness?.(); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake); };
   }, []);
   const request = (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>, attachmentIds: string[], acknowledgeUnknownCost = false, replaceWaitingReviewRunId?: string): LiveStartRequest => {
     const current = optionsRef.current;
@@ -184,6 +186,7 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
       try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot && alive.current) mergeRef.current(snapshot); } catch { /* The original action error remains available even when refresh is unavailable. */ }
       current.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作未完成，请检查运行记录。', 'error');
     }
+    finally { if (alive.current) wakePolling.current(); }
   };
   const workspaceProjectIds = new Set(options.projects.filter(project => project.workspaceId === options.workspaceId && !project.purgedAt).map(project => project.id));
   const visibleRuns = useMemo(() => {

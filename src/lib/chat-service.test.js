@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const { createChatService, contextMessages } = require('../../electron/chat-service.cjs');
 const { ModelRuntimeError } = require('../../electron/provider-http.cjs');
@@ -113,6 +114,7 @@ describe('无需项目的普通聊天持久化与计费', () => {
     const filename = path.join(f.directory, 'chat-v1', base.workspaceId, `${base.conversationId}.conversation.json`), indexFile = path.join(f.directory, 'chat-v1', base.workspaceId, 'index.json');
     const data = JSON.parse(await fs.readFile(filename, 'utf8')), index = JSON.parse(await fs.readFile(indexFile, 'utf8'));
     data.turns[0].status = 'running'; data.turns[0].text = '断电前片段'; index.items[0].activeTurnId = base.id;
+    index.items[0].recordHash = createHash('sha256').update(JSON.stringify(data)).digest('hex');
     await fs.writeFile(filename, JSON.stringify(data)); await fs.writeFile(indexFile, JSON.stringify(index));
     const reopened = createChatService({ directory: f.directory, credentialStore: credentials, execute: async () => { throw Error('must not send'); } }); services.push(reopened);
     expect((await reopened.read(base)).turns[0]).toMatchObject({ status: 'interrupted', text: '断电前片段', costState: 'unknown' }); expect((await reopened.ledger())[0].status).toBe('failed');
@@ -191,7 +193,7 @@ describe('无需项目的普通聊天持久化与计费', () => {
   });
   it('index写前检查32MB边界，超限时不改旧回答或旧账本，也不发送请求', async () => {
     const f = await setup(); await f.service.start(base); await settled(f.service); const index = path.join(f.directory, 'chat-v1', base.workspaceId, 'index.json'), oldIndex = await fs.readFile(index, 'utf8');
-    const original = Buffer.byteLength; const mock = vi.spyOn(Buffer, 'byteLength').mockImplementation((value, ...args) => typeof value === 'string' && value.startsWith('{"version":1,"workspaceId"') && value.includes('"items":') ? 32 * 1024 * 1024 + 1 : original(value, ...args));
+    const original = Buffer.byteLength; const mock = vi.spyOn(Buffer, 'byteLength').mockImplementation((value, ...args) => typeof value === 'string' && /^\{\s*"version":\s*2,\s*"workspaceId"/.test(value) && value.includes('"items":') ? 32 * 1024 * 1024 + 1 : original(value, ...args));
     await expect(f.service.start({ ...base, id: 'too-big' })).rejects.toThrow(/32MB/); mock.mockRestore();
     expect(await fs.readFile(index, 'utf8')).toBe(oldIndex); expect((await f.service.ledger())[0].costCents).toBe(5); expect(f.calls).toHaveLength(1);
   });

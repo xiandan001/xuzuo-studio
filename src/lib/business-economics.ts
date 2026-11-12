@@ -1,6 +1,7 @@
 import type { BusinessEconomics, BusinessMetricSummary, BusinessState } from '../business-types';
 import type { LedgerEntry } from '../types';
 import { amountToQuoteCents, summarizeCosts } from './cost-display';
+import { allocationCosts } from './cost-allocations';
 
 const safe = (value: bigint) => { const result = Number(value); if (!Number.isSafeInteger(result)) throw Error('汇总金额超过安全计算范围。'); return result; };
 export function businessEconomics(state: BusinessState, orderId: string, ledger: readonly LedgerEntry[]): BusinessEconomics {
@@ -9,7 +10,9 @@ export function businessEconomics(state: BusinessState, orderId: string, ledger:
   const sum = (kind: string) => safe(transactions.filter(item => item.kind === kind).reduce((total, item) => total + BigInt(item.amountCents), 0n));
   const labor = transactions.filter(item => item.kind === 'labor');
   const laborCents = safe(labor.reduce((total, item) => total + (item.minutes === undefined ? BigInt(item.amountCents) : (BigInt(Math.round(item.minutes * 100)) * BigInt(item.hourlyRateCents!) + 5999n) / 6000n), 0n));
-  const runIds = new Set(order.runIds), fees = [...new Map(ledger.filter(item => item.billingMode === 'live' && item.workflowRunId && runIds.has(item.workflowRunId)).map(item => [item.id, item])).values()], costs = summarizeCosts(fees);
+  const owners = state.orders.filter(row => row.status !== 'archived').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const projectIds = [order.sourceProjectId, ...order.projectIds].filter(projectId => (owners.find(row => row.sourceProjectId === projectId || row.projectIds.includes(projectId)) || state.orders.find(row => row.sourceProjectId === projectId || row.projectIds.includes(projectId)))?.id === orderId);
+  const runIds = new Set(order.runIds), fees = [...new Map(ledger.filter(item => item.billingMode === 'live' && item.workflowRunId && runIds.has(item.workflowRunId)).map(item => [item.id, item])).values()], costs = summarizeCosts([...fees, ...allocationCosts(ledger, state.costAllocations || [], { orderId, projectIds })]);
   const apiCents = costs.quoteCents ?? amountToQuoteCents(costs.cnyAmount) ?? 0;
   if (costs.pendingCount || costs.missingFxCount) missing.push('部分API计费依据或人民币换算待补齐');
   if (costs.legacyCount) missing.push('部分历史API金额缺少精确计费明细');

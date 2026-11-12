@@ -6,6 +6,11 @@ const { prepareChatMessages, chatMessageContent } = require('./chat-message-cont
 const LIMIT = 2 * 1024 * 1024;
 const preparedRequests = new WeakMap();
 const requestBinding = input => JSON.stringify([input.workspaceId || '', input.conversationId || '', input.id || '', input.connection.id, input.connection.providerId, input.connection.protocol, input.connection.baseUrl, input.model.modelId, input.credentialId, input.reasoningEffort || 'auto', input.mode || 'chat', input.outputKind || 'image', input.text || '', input.attachmentIds || []]);
+function providerFailure(data, context, fallback) {
+  const detail = data?.error || data, quota = new Set(['insufficient_quota', 'credit_balance_exhausted', 'billing_hard_limit_reached', 'quota_exceeded']);
+  if (quota.has(detail?.code) || quota.has(detail?.type)) return failure('PROVIDER_QUOTA', '供应商提示所选账户余额或调用额度不足，请充值或切换账户后重试。已有内容和费用记录保留，未自动重发。', context);
+  return failure('PROVIDER_ERROR', fallback, context);
+}
 const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你可以读取用户随消息提供的附件内容，但没有访问其他本机文件、联网搜索或执行制作的工具，不声称已经执行这些操作。Office附件如果标记为正文纯文字，不能声称已经检查原稿图片、排版或重算公式。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
 
 function prepareChat(input, messages) {
@@ -60,7 +65,7 @@ function createChatDecoder(protocol, context, onText) {
     return normalizedUsage(data, context);
   }
   function json(data) {
-    if (!data || data.error) throw failure('PROVIDER_ERROR', '模型返回了错误，未自动重试。', context);
+    if (!data || data.error) throw providerFailure(data, context, '模型返回了错误，未自动重试。');
     context.providerRequestId ||= safeId(data.id || data.responseId, context.secret);
     rawUsage = data.usage || data.usageMetadata || rawUsage;
     if (protocol === 'openai-responses') {
@@ -82,7 +87,7 @@ function createChatDecoder(protocol, context, onText) {
     }
   }
   function event(data) {
-    if (!data || data.error || data.type === 'error') throw failure('PROVIDER_ERROR', '模型流式返回中断，已保留返回片段与用量，未自动重试。', context);
+    if (!data || data.error || data.type === 'error') throw providerFailure(data, context, '模型流式返回中断，已保留返回片段与用量，未自动重试。');
     if (protocol === 'openai-responses') {
       context.providerRequestId ||= safeId(data.response?.id, context.secret);
       if (data.type === 'response.output_text.delta') update(data.delta);

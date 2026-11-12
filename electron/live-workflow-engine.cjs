@@ -14,6 +14,7 @@ const { startFingerprint } = require('./live-start.cjs');
 const { replacementReview, assertRefinementSource } = require('./refinement-fork.cjs');
 const { validateResumeImageSources } = require('./resume-image-sources.cjs');
 const { explicitStepReferences } = require('./workflow-references.cjs');
+const { assertArtifactRefinementTarget } = require('./artifact-refinement-target.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const now = () => new Date().toISOString();
@@ -81,7 +82,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     await recalculateStored();
     await persist();
   })();
-  const validation = async (request, queryOnlyStepId, completedImageStepIds, completedStepIds) => { await ready; await assertProjectAdmission(request?.project?.id); return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds, completedStepIds, localAnimationStatus, readReferenceText }); };
+  const validation = async (request, queryOnlyStepId, completedImageStepIds, completedStepIds) => { await ready; await assertProjectAdmission(request?.project?.id); await assertArtifactRefinementTarget(request, artifactStore); return preflight(request, { credentials, modelRuntime, artifactStore, queryOnlyStepId, fxRates, completedImageStepIds, completedStepIds, localAnimationStatus, readReferenceText }); };
   const projectLedgerCost = projectId => [...records.values()].filter(record => record.run.projectId === projectId).flatMap(record => record.ledger).reduce((sum, entry) => sum + entry.costCents, 0);
   const projectCost = record => Math.max(0, ...[...records.values()].filter(item => item.run.projectId === record.run.projectId).map(item => item.legacyBaseCostCents || 0)) + projectLedgerCost(record.run.projectId);
   const update = (record, changes) => { mark(record); return Object.assign(record.run, changes, { updatedAt: now() }); };
@@ -248,6 +249,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             if (!attempt.artifacts.length) throw new Error('交付步骤没有产生文件。');
             attempt.summary = attempt.engineeringSource ? `已按主原图 ${attempt.engineeringSource.width} × ${attempt.engineeringSource.height} 保存 ${attempt.artifacts.length} 张工程图片，原图和付费编辑结果保留；请对照检查细节。` : step.wallpaperTarget ? `已在本地适配 ${attempt.artifacts.length} 张 ${step.wallpaperTarget.width} × ${step.wallpaperTarget.height} PNG壁纸，原图与调用费用保留。` : `已生成 ${attempt.artifacts.length} 份实际交付文件，请打开检查。`;
           } else {
+            if (!recovered) await assertArtifactRefinementTarget(record.request, artifactStore);
             const model = record.request.models.find(item => item.id === step.modelConfigId);
             const connection = record.request.connections.find(item => item.id === model?.connectionId);
             const recoveringQuery = recovered && ledgerFor(record, attempt)?.queryOnly;

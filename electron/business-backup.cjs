@@ -15,6 +15,7 @@ function businessForSelection(input, projectIds, artifactIds) {
     if (state.orders.some(row => row.status === 'running')) throw Error('请等待当前业务制作结束或暂停后再备份。');
     return state;
   }
+  if ((state.costAllocations || []).length) throw Error('存在聊天费用分摊历史，请按完整工作区备份，保留原聊天账本与费用归属。');
   const selected = new Set(projectIds), files = new Set(artifactIds || []), products = new Map(state.products.map(row => [row.id, row]));
   const orders = state.orders.filter(order => [order.sourceProjectId, ...order.projectIds, ...order.tasks.map(task => task.projectId)].some(id => selected.has(id)));
   for (const order of orders) {

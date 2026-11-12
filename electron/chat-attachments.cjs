@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson } = require('./workspace-paths.cjs');
 const { imageType } = require('./image-output-formats.cjs');
+const { assetProvenance } = require('./asset-provenance.cjs');
 
 const MAX_COUNT = 8, MAX_FILE = 32 * 1024 * 1024, MAX_TOTAL = 80 * 1024 * 1024;
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
@@ -10,9 +11,10 @@ const TYPES = { '.png': ['image/png', 'image'], '.jpg': ['image/jpeg', 'image'],
 const hash = value => createHash('sha256').update(value).digest('hex');
 function checkedScope(value) { if (!value || !validId(value.workspaceId) || !validId(value.conversationId)) throw Error('附件所属工作区或对话编号无效。'); return value; }
 function validMetadata(value) {
-  return value && validId(value.id) && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 240 && !/[\\/\x00-\x1f]/.test(value.name) && TYPES[path.extname(value.name).toLowerCase()]?.[0] === value.mimeType && TYPES[path.extname(value.name).toLowerCase()]?.[1] === value.kind && Number.isSafeInteger(value.bytes) && value.bytes > 0 && value.bytes <= MAX_FILE && /^[a-f0-9]{64}$/.test(value.sha256 || '') && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt));
+  if (!(value && validId(value.id) && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 240 && !/[\\/\x00-\x1f]/.test(value.name) && TYPES[path.extname(value.name).toLowerCase()]?.[0] === value.mimeType && TYPES[path.extname(value.name).toLowerCase()]?.[1] === value.kind && Number.isSafeInteger(value.bytes) && value.bytes > 0 && value.bytes <= MAX_FILE && /^[a-f0-9]{64}$/.test(value.sha256 || '') && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)))) return false;
+  try { assetProvenance(value.provenance); return true; } catch { return false; }
 }
-function validPublicMetadata(value) { return validMetadata(value) && Object.keys(value).every(key => ['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].includes(key)); }
+function validPublicMetadata(value) { return validMetadata(value) && Object.keys(value).every(key => ['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt', 'provenance'].includes(key)); }
 function inspectBytes(name, buffer) {
   const type = TYPES[path.extname(name).toLowerCase()];
   if (!type) throw Error('聊天附件支持 PNG/JPEG/WebP、PDF、Word、PPT、Excel、CSV 和 UTF-8 文字；GIF/SVG 请先转换为静态PNG。');
@@ -71,6 +73,22 @@ function createChatAttachments({ directory, fileSystem = fs, extractText } = {})
       const name = path.basename(filename); if (!name || name.length > 240) throw Error('附件文件名过长。');
       selected.push({ buffer, item: { id: randomUUID(), name, ...inspectBytes(name, buffer), bytes: buffer.length, sha256: hash(buffer), createdAt: new Date().toISOString() } });
     }
+    return saveSelected(scope, selected);
+  }
+  async function importBytes(scope, files) {
+    checkedScope(scope);
+    if (!Array.isArray(files) || !files.length || files.length > MAX_COUNT) throw Error('一次最多添加8份附件。');
+    const selected = []; let total = 0;
+    for (const file of files) {
+      if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 240 || /[\\/\x00-\x1f]/.test(file.name) || !(file.bytes instanceof Uint8Array) || !file.bytes.byteLength || file.bytes.byteLength > MAX_FILE || (total += file.bytes.byteLength) > MAX_TOTAL) throw Error('附件名称无效，或单份超过32MB、合计超过80MB。');
+      const buffer = Buffer.from(file.bytes), type = inspectBytes(file.name, buffer);
+      if (file.mimeType && file.mimeType !== type.mimeType && !(file.mimeType === 'image/jpg' && type.mimeType === 'image/jpeg')) throw Error('附件实际格式与声明不一致，请重新导出后添加。');
+      const provenance = assetProvenance(file.provenance);
+      selected.push({ buffer, item: { id: randomUUID(), name: file.name, ...type, bytes: buffer.length, sha256: hash(buffer), createdAt: new Date().toISOString(), ...(provenance ? { provenance } : {}) } });
+    }
+    return saveSelected(scope, selected);
+  }
+  async function saveSelected(scope, selected) {
     const existing = await list(scope); if (existing.length + selected.length > 2400) throw Error('这段对话的附件较多，请新建对话继续。'); await checkedDirectory(fileSystem, folder(scope), true);
     const created = [];
     try {
@@ -113,6 +131,6 @@ function createChatAttachments({ directory, fileSystem = fs, extractText } = {})
     }
     return result;
   }
-  return { list, read, importPaths, restore, copyToProject };
+  return { list, read, importPaths, importBytes, restore, copyToProject };
 }
 module.exports = { createChatAttachments, validMetadata, validPublicMetadata, inspectBytes, backupBytes, MAX_COUNT, MAX_FILE, MAX_TOTAL };

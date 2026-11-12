@@ -40,13 +40,25 @@ function remapChatBackups(snapshots, idMap, backupId) {
   return snapshots.map(snapshot => {
     if (!validId(idMap[snapshot.workspaceId])) throw Error('聊天备份缺少工作区编号映射。');
     for (const record of snapshot.conversations) { idMap[record.id] ||= randomUUID(); for (const turn of record.turns) { idMap[turn.id] ||= randomUUID(); for (const item of [...(turn.attachments || []), ...(turn.contextAttachments || [])]) idMap[item.id] ||= randomUUID(); } }
+    for (const record of snapshot.conversations) for (const turn of record.turns) {
+      const ledgerId = (workspaceId, conversationId, turnId) => 'chat-' + hash(JSON.stringify([workspaceId, conversationId, turnId])).slice(0, 40);
+      idMap[ledgerId(snapshot.workspaceId, record.id, turn.id)] = ledgerId(idMap[snapshot.workspaceId], idMap[record.id], idMap[turn.id]);
+    }
     return validateWorkspaceSnapshot({ version: 1, workspaceId: idMap[snapshot.workspaceId], ...(snapshot.attachmentFiles?.length ? { attachmentFiles: snapshot.attachmentFiles.map(file => ({ ...file, conversationId: idMap[file.conversationId], attachment: { ...file.attachment, id: idMap[file.attachment.id] } })) } : {}), conversations: snapshot.conversations.map(record => {
       const restored = structuredClone(record); restored.id = idMap[record.id]; restored.workspaceId = idMap[snapshot.workspaceId];
+      if (record.productions) restored.productions = record.productions.map(link => {
+        const mapped = idMap[link.runId] && idMap[link.target.projectId] && idMap[link.target.artifactId];
+        return { ...link, runId: idMap[link.runId] || link.runId, target: { ...link.target, projectId: idMap[link.target.projectId] || link.target.projectId, artifactId: idMap[link.target.artifactId] || link.target.artifactId }, ...(!mapped || link.sourceOnly ? { sourceOnly: true, sourceRunId: link.sourceRunId || link.runId } : {}) };
+      });
       restored._importOrigin = { backupId, sourceWorkspaceId: snapshot.workspaceId, sourceConversationId: record.id, sourceHash: hash(JSON.stringify(record)) };
       restored.turns = record.turns.map(turn => {
         const next = structuredClone(turn); next.id = idMap[turn.id]; delete next.credentialId;
         if (turn.sourceTurnId) { if (!idMap[turn.sourceTurnId]) throw Error('聊天备份的重试来源编号缺失。'); next.sourceTurnId = idMap[turn.sourceTurnId]; }
         if (turn.modelConfigId && idMap[turn.modelConfigId]) next.modelConfigId = idMap[turn.modelConfigId];
+        if (turn.target) {
+          if (idMap[turn.target.projectId] && idMap[turn.target.artifactId]) next.target = { ...turn.target, projectId: idMap[turn.target.projectId], artifactId: idMap[turn.target.artifactId] };
+          else delete next.target;
+        }
         for (const field of ['attachments', 'contextAttachments']) if (turn[field]) next[field] = turn[field].map(item => ({ ...item, id: idMap[item.id] }));
         if (turn.plan) next.plan = remap(turn.plan, idMap);
         return next;

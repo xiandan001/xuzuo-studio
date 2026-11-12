@@ -23,6 +23,9 @@ import { useProjectQuote } from '../hooks/useProjectQuote';
 import { UnassignedQuoteDrafts } from '../components/UnassignedQuoteDrafts';
 import { CustomerQuotePanel } from '../components/CustomerQuotePanel';
 import './finance.css';
+import type { BusinessState } from '../business-types';
+import { allocationCosts } from '../lib/cost-allocations';
+import { CostAllocationDialog } from '../components/CostAllocationDialog';
 
 interface Calculation {
   error: string;
@@ -113,6 +116,13 @@ function ReconcileDialog({ entry, available, onClose, onSave }: { entry: LedgerE
 export function Finance(props: PageProps) {
   const { projects, ledger, preferences, activeProject, notify, workspaceId, workflowRunner } = props;
   const [tab, setTab] = useState<'ledger' | 'quote'>('ledger');
+  const [allocationOpen, setAllocationOpen] = useState(false), [allocationState, setAllocationState] = useState<BusinessState>(), [allocationError, setAllocationError] = useState('');
+  useEffect(() => {
+    const bridge = window.desktop?.business; if (!bridge || !props.workspace?.directory) return;
+    let disposed = false;
+    const read = () => { void bridge.snapshot(props.workspaceId).then(value => { if (!disposed) { setAllocationState(value); setAllocationError(''); } }).catch(() => { if (!disposed) setAllocationError('前期费用归属暂未读取，报价不能按零前期成本计算，请重新进入此页同步。'); }); };
+    read(); const remove = bridge.onChanged?.(event => { if (event.workspaceId === props.workspaceId) read(); }); return () => { disposed = true; remove?.(); };
+  }, [props.workspaceId, props.workspace?.directory]);
   const [billingScope, setBillingScope] = useState<BillingScope>('live');
   const [query, setQuery] = useState('');
   const [action, setAction] = useState('all');
@@ -148,10 +158,10 @@ export function Finance(props: PageProps) {
   const quoteScope = quoteDraft.scope;
   const shownScope = tab === 'quote' ? quoteScope : billingScope;
   const { fields, mode: quoteMode, saved, updateField, setMode: setQuoteMode } = quoteDraft;
-  const projectEntries = useMemo(() => (quoteScope === 'live' ? realEntries : simulationEntries).filter(entry => entry.projectId === selectedProject?.id), [quoteScope, realEntries, simulationEntries, selectedProject?.id]);
+  const projectEntries = useMemo(() => [...(quoteScope === 'live' ? realEntries : simulationEntries).filter(entry => entry.projectId === selectedProject?.id), ...(quoteScope === 'live' && allocationState?.workspaceId === workspaceId ? allocationCosts(ledger, (allocationState.costAllocations || []).map(row => ({ ...row, projectId: row.projectId || allocationState.orders.find(order => order.id === row.orderId)?.sourceProjectId })), { projectId: selectedProject?.id }) : [])], [quoteScope, realEntries, simulationEntries, selectedProject?.id, ledger, allocationState, workspaceId]);
   const projectSummary = useMemo(() => summarizeCosts(projectEntries), [projectEntries]);
   const projectApiCost = projectSummary.quoteCents ?? 0;
-  const projectPendingCount = projectEntries.filter(unavailableCny).length;
+  const projectPendingCount = projectEntries.filter(unavailableCny).length + Number(quoteScope === 'live' && !!allocationError);
   const filtered = useMemo(() => !query.trim() && ledgerProject === 'all' && action === 'all' ? billingScope === 'all' ? ledger : billingScope === 'live' ? realEntries : simulationEntries : ledger.filter(entry => (billingScope === 'all' || (billingScope === 'live' ? isLive(entry) : !isLive(entry))) && (ledgerProject === 'all' || entry.projectId === ledgerProject) && (action === 'all' || entry.action === action) && `${entry.projectName} ${entry.model} ${entry.action}`.toLowerCase().includes(query.trim().toLowerCase())), [ledger, realEntries, simulationEntries, billingScope, action, query, ledgerProject]);
   const ledgerPages = Math.max(1, Math.ceil(filtered.length / 50));
   const currentLedgerPage = Math.min(ledgerPage, ledgerPages - 1);
@@ -165,12 +175,14 @@ export function Finance(props: PageProps) {
   const calculation = useMemo<Calculation>(() => {
     try {
       if (!selectedProject) throw new Error('当前工作区没有可报价项目，请先新建项目。');
+      if (quoteScope === 'live' && props.workspace?.directory && typeof window !== 'undefined' && window.desktop?.business && allocationState?.workspaceId !== workspaceId) throw new Error(allocationError || '正在同步前期费用归属，请稍候。');
+      if (quoteScope === 'live' && allocationError) throw new Error(allocationError);
       if (projectSummary.pendingCount) throw new Error(`此项目有 ${projectSummary.pendingCount} 笔费用缺少完整计费用量或适用规则，暂不能生成完整报价。可先查看费用明细。`);
       if (projectSummary.missingFxCount) throw new Error('美元费用已经计算，暂缺人民币参考汇率；汇率换算完成后即可计算人民币报价。');
       if (projectSummary.quoteCents === undefined) throw new Error('费用金额超出当前报价计算范围。');
       return { error: '', ...calculateProjectQuote(fields, projectApiCost, quoteMode) };
     } catch (error) { return { error: error instanceof Error ? error.message : '请检查成本输入' }; }
-  }, [fields, projectApiCost, projectPendingCount, projectSummary.pendingCount, projectSummary.missingFxCount, projectSummary.quoteCents, quoteMode, selectedProject]);
+  }, [fields, projectApiCost, projectPendingCount, projectSummary.pendingCount, projectSummary.missingFxCount, projectSummary.quoteCents, quoteMode, quoteScope, selectedProject, allocationError, allocationState, props.workspace?.directory, workspaceId]);
 
   function snapshot(): ProjectQuote {
     return { type: 'xuzuo-project-quote', version: 1, simulated: quoteScope === 'simulation', scope: quoteScope, workspaceId, projectId: selectedProject?.id || '', project: selectedProject?.name, mode: quoteMode,
@@ -215,6 +227,9 @@ export function Finance(props: PageProps) {
   }
 
   return <div className="fin-page">
+    {allocationOpen && <CostAllocationDialog props={props} onClose={() => setAllocationOpen(false)} onSaved={setAllocationState} />}
+    {allocationError && <p className="inline-notice" role="alert">{allocationError}</p>}
+    <div className="fin-allocation-entry"><button type="button" className="btn btn-secondary" onClick={() => setAllocationOpen(true)}>前期聊天费用归属</button><span className="muted">归属到作品或制作单；原账本和工作区总额不重复计费。</span></div>
     <div className="page-heading fin-page-heading"><div><h1 className="page-title">成本与报价</h1><p className="page-description">花了多少，卖多少钱，分开看清楚。</p></div>{tab === 'ledger' && <button className="btn btn-secondary" onClick={exportLedger}><ArrowDownToLine size={16} />导出账本</button>}</div>
     <div className="fin-tabline"><div className="tabs" role="group" aria-label="费用与报价页面"><button aria-pressed={tab === 'ledger'} className={tab === 'ledger' ? 'active' : ''} onClick={() => setTab('ledger')}><Coins size={17} />调用花费</button><button aria-pressed={tab === 'quote'} className={tab === 'quote' ? 'active' : ''} onClick={() => setTab('quote')}><Calculator size={17} />计算售价</button></div><span className="fin-tab-hint">{tab === 'ledger' ? '每次生成、精修和重试自动记账' : '选项目 → 填成本 → 得到售价'}</span></div>
     <div className="fin-billing-scope"><div className="segmented" role="group" aria-label="费用记录范围">{([{ id: 'live', label: '真实费用', count: realEntries.length }, { id: 'simulation', label: '模拟费用', count: simulationEntries.length }, ...(tab === 'ledger' ? [{ id: 'all', label: '全部记录', count: ledger.length }] : [])] as { id: BillingScope; label: string; count: number }[]).map(item => <button key={item.id} aria-pressed={shownScope === item.id} className={shownScope === item.id ? 'active' : ''} onClick={() => { setBillingScope(item.id); if (tab === 'quote' && item.id !== 'all') quoteDraft.setScope(item.id); }}>{item.label}<span>{item.count}</span></button>)}</div><small>{shownScope === 'simulation' ? '仅演示金额，不计入真实报价' : '真实与模拟分别统计'}</small></div>

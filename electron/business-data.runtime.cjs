@@ -4,7 +4,7 @@ const factories = {
 "./business-data": function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.businessRecordIdentity = exports.normalizeBusinessRows = exports.businessMetrics = exports.businessEconomics = exports.newBusinessState = exports.checkedBusinessState = exports.businessStateIssue = exports.businessId = exports.BUSINESS_STATE_BYTES = void 0;
+exports.businessRecordIdentity = exports.normalizeBusinessRows = exports.checkAllocationShares = exports.allocationCosts = exports.allocationPercent = exports.allocatedAmount = exports.businessMetrics = exports.businessEconomics = exports.newBusinessState = exports.checkedBusinessState = exports.businessStateIssue = exports.businessId = exports.BUSINESS_STATE_BYTES = void 0;
 var business_validation_1 = require("./business-validation");
 Object.defineProperty(exports, "BUSINESS_STATE_BYTES", { enumerable: true, get: function () { return business_validation_1.BUSINESS_STATE_BYTES; } });
 Object.defineProperty(exports, "businessId", { enumerable: true, get: function () { return business_validation_1.businessId; } });
@@ -14,6 +14,11 @@ Object.defineProperty(exports, "newBusinessState", { enumerable: true, get: func
 var business_economics_1 = require("./business-economics");
 Object.defineProperty(exports, "businessEconomics", { enumerable: true, get: function () { return business_economics_1.businessEconomics; } });
 Object.defineProperty(exports, "businessMetrics", { enumerable: true, get: function () { return business_economics_1.businessMetrics; } });
+var cost_allocations_1 = require("./cost-allocations");
+Object.defineProperty(exports, "allocatedAmount", { enumerable: true, get: function () { return cost_allocations_1.allocatedAmount; } });
+Object.defineProperty(exports, "allocationPercent", { enumerable: true, get: function () { return cost_allocations_1.allocationPercent; } });
+Object.defineProperty(exports, "allocationCosts", { enumerable: true, get: function () { return cost_allocations_1.allocationCosts; } });
+Object.defineProperty(exports, "checkAllocationShares", { enumerable: true, get: function () { return cost_allocations_1.checkAllocationShares; } });
 var business_import_1 = require("./business-import");
 Object.defineProperty(exports, "normalizeBusinessRows", { enumerable: true, get: function () { return business_import_1.normalizeBusinessRows; } });
 Object.defineProperty(exports, "businessRecordIdentity", { enumerable: true, get: function () { return business_import_1.businessRecordIdentity; } });
@@ -26,6 +31,7 @@ exports.businessId = exports.BUSINESS_STATE_BYTES = void 0;
 exports.newBusinessState = newBusinessState;
 exports.businessStateIssue = businessStateIssue;
 exports.checkedBusinessState = checkedBusinessState;
+const cost_allocations_1 = require("./cost-allocations");
 exports.BUSINESS_STATE_BYTES = 8 * 1024 * 1024;
 const businessId = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 exports.businessId = businessId;
@@ -44,7 +50,7 @@ const facts = (value) => plain(value) && Object.keys(value).length <= 100 && Obj
 const projectKinds = ['image', 'ppt', 'word', 'excel'];
 const timestampFields = (value) => time(value.createdAt) && time(value.updatedAt);
 function validate(input) {
-    if (!object(input, ['version', 'workspaceId', 'revision', 'brands', 'products', 'orders', 'feedback', 'transactions', 'metrics']))
+    if (!object(input, ['version', 'workspaceId', 'revision', 'brands', 'products', 'orders', 'feedback', 'transactions', 'metrics', 'costAllocations']))
         fail('业务资料包含不支持的字段，未保存。');
     const value = input;
     if (value.version !== 1 || !(0, exports.businessId)(value.workspaceId) || !integer(value.revision, Number.MAX_SAFE_INTEGER - 1))
@@ -89,8 +95,24 @@ function validate(input) {
         }
     }
     for (const f of value.feedback)
-        if (!object(f, ['id', 'orderId', 'round', 'target', 'text', 'tasks', 'status', 'runIds', 'additionalQuoteCents', 'createdAt', 'updatedAt']) || !orderIds.has(f.orderId) || !integer(f.round, 10000) || f.round < 1 || !object(f.target, ['projectId', 'artifactId', 'pageId', 'blockId', 'selectedText']) || !(0, exports.businessId)(f.target.projectId) || !optional(f.target.artifactId, exports.businessId) || !optional(f.target.pageId, row => text(row, 200)) || !optional(f.target.blockId, row => text(row, 200)) || !optional(f.target.selectedText, row => text(row, 10000)) || !text(f.text, 10000, true) || !list(f.tasks, row => text(row, 2000, true), 100) || !one(f.status, ['open', 'approved', 'applied', 'confirmed']) || !ids(f.runIds, 1000) || !optional(f.additionalQuoteCents, integer) || !timestampFields(f))
+        if (!object(f, ['id', 'orderId', 'round', 'target', 'text', 'tasks', 'status', 'runIds', 'additionalQuoteCents', 'createdAt', 'updatedAt', 'proofPackageId', 'proofAnnotationId', 'sourceSha256', 'sourceRevision']) || !orderIds.has(f.orderId) || !integer(f.round, 10000) || f.round < 1 || !object(f.target, ['projectId', 'artifactId', 'pageId', 'blockId', 'selectedText', 'sheetId', 'cellAddress', 'region']) || !(0, exports.businessId)(f.target.projectId) || !optional(f.target.artifactId, exports.businessId) || !optional(f.target.pageId, row => text(row, 200)) || !optional(f.target.blockId, row => text(row, 200)) || !optional(f.target.selectedText, row => text(row, 10000)) || !text(f.text, 10000, true) || !list(f.tasks, row => text(row, 2000, true), 100) || !one(f.status, ['open', 'approved', 'applied', 'confirmed']) || !ids(f.runIds, 1000) || !optional(f.additionalQuoteCents, integer) || !timestampFields(f))
             fail('客户返修记录格式无效。');
+    for (const f of value.feedback) {
+        if (!optional(f.sourceRevision, row => Number.isSafeInteger(row) && Number(row) > 0) || !optional(f.proofPackageId, exports.businessId) || !optional(f.proofAnnotationId, exports.businessId) || !optional(f.sourceSha256, row => typeof row === 'string' && /^[a-f0-9]{64}$/.test(row)) || [f.proofPackageId, f.proofAnnotationId, f.sourceSha256].filter(Boolean).length % 3 !== 0)
+            fail('校样反馈来源不完整。');
+        if (!optional(f.target.sheetId, row => text(row, 200, true)) || !optional(f.target.cellAddress, row => typeof row === 'string' && /^[A-Z]{1,3}[1-9]\d{0,6}$/.test(row)))
+            fail('反馈表格位置无效。');
+        const region = f.target.region;
+        if (region && (!object(region, ['x', 'y', 'width', 'height']) || !['x', 'y', 'width', 'height'].every(key => typeof region[key] === 'number' && Number.isFinite(region[key]) && region[key] >= 0 && region[key] <= 1) || !region.width || !region.height || region.x + region.width > 1.00000001 || region.y + region.height > 1.00000001))
+            fail('反馈圈选区域无效。');
+    }
+    const allocations = value.costAllocations || [];
+    if (!Array.isArray(allocations) || allocations.length > 20000 || new Set(allocations.map(row => row.id)).size !== allocations.length)
+        fail('费用归属记录重复或超过容量。');
+    for (const row of allocations)
+        if (!object(row, ['id', 'entryId', 'projectId', 'orderId', 'basisPoints', 'note', 'createdAt', 'voidedAt']) || !(0, exports.businessId)(row.id) || !(0, exports.businessId)(row.entryId) || !optional(row.projectId, exports.businessId) || !optional(row.orderId, id => (0, exports.businessId)(id) && orderIds.has(id)) || !row.projectId && !row.orderId || !Number.isInteger(row.basisPoints) || row.basisPoints < 1 || row.basisPoints > 10000 || !text(row.note, 1000) || !time(row.createdAt) || !optional(row.voidedAt, time))
+            fail('费用归属无效，比例须为0.01%至100%。');
+    (0, cost_allocations_1.checkAllocationShares)(allocations);
     for (const t of value.transactions)
         if (!object(t, ['id', 'orderId', 'productId', 'kind', 'amountCents', 'quantity', 'minutes', 'hourlyRateCents', 'occurredAt', 'note', 'source', 'externalId', 'voidedAt']) || !orderIds.has(t.orderId) || !optional(t.productId, id => (0, exports.businessId)(id) && value.orders.find(o => o.id === t.orderId).productIds.includes(id)) || !one(t.kind, ['receipt', 'refund', 'fee', 'expense', 'labor']) || !integer(t.amountCents) || !optional(t.quantity, row => integer(row) && Number(row) > 0) || t.quantity !== undefined && !['receipt', 'refund'].includes(t.kind) || !optional(t.minutes, minutes) || !optional(t.hourlyRateCents, integer) || (t.minutes === undefined) !== (t.hourlyRateCents === undefined) || t.kind !== 'labor' && t.minutes !== undefined || !time(t.occurredAt) || !text(t.note, 4000) || !optional(t.source, row => text(row, 200, true)) || !optional(t.externalId, row => text(row, 200, true)) || !optional(t.voidedAt, time))
             fail('实收或费用流水格式无效，金额必须使用非负整数分，件数仅允许收款或退款的正整数。');
@@ -126,6 +148,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.businessEconomics = businessEconomics;
 exports.businessMetrics = businessMetrics;
 const cost_display_1 = require("./cost-display");
+const cost_allocations_1 = require("./cost-allocations");
 const safe = (value) => { const result = Number(value); if (!Number.isSafeInteger(result))
     throw Error('汇总金额超过安全计算范围。'); return result; };
 function businessEconomics(state, orderId, ledger) {
@@ -136,7 +159,9 @@ function businessEconomics(state, orderId, ledger) {
     const sum = (kind) => safe(transactions.filter(item => item.kind === kind).reduce((total, item) => total + BigInt(item.amountCents), 0n));
     const labor = transactions.filter(item => item.kind === 'labor');
     const laborCents = safe(labor.reduce((total, item) => total + (item.minutes === undefined ? BigInt(item.amountCents) : (BigInt(Math.round(item.minutes * 100)) * BigInt(item.hourlyRateCents) + 5999n) / 6000n), 0n));
-    const runIds = new Set(order.runIds), fees = [...new Map(ledger.filter(item => item.billingMode === 'live' && item.workflowRunId && runIds.has(item.workflowRunId)).map(item => [item.id, item])).values()], costs = (0, cost_display_1.summarizeCosts)(fees);
+    const owners = state.orders.filter(row => row.status !== 'archived').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const projectIds = [order.sourceProjectId, ...order.projectIds].filter(projectId => (owners.find(row => row.sourceProjectId === projectId || row.projectIds.includes(projectId)) || state.orders.find(row => row.sourceProjectId === projectId || row.projectIds.includes(projectId)))?.id === orderId);
+    const runIds = new Set(order.runIds), fees = [...new Map(ledger.filter(item => item.billingMode === 'live' && item.workflowRunId && runIds.has(item.workflowRunId)).map(item => [item.id, item])).values()], costs = (0, cost_display_1.summarizeCosts)([...fees, ...(0, cost_allocations_1.allocationCosts)(ledger, state.costAllocations || [], { orderId, projectIds })]);
     const apiCents = costs.quoteCents ?? (0, cost_display_1.amountToQuoteCents)(costs.cnyAmount) ?? 0;
     if (costs.pendingCount || costs.missingFxCount)
         missing.push('部分API计费依据或人民币换算待补齐');
@@ -473,6 +498,63 @@ function runCostRecords(run, ledger) {
     const entries = ledger.filter(entry => entry.workflowRunId === run.id);
     const missing = run.attempts.filter(attempt => !entries.some(entry => entry.workflowAttemptId === attempt.id) && run.snapshot.steps.some(step => step.id === attempt.stepId && !['manual-review', 'export', 'animation-compose'].includes(step.kind)));
     return [...entries, ...missing.map(attempt => ({ ...attempt, billingMode: 'live' }))];
+}
+
+},
+"./cost-allocations": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.allocatedAmount = allocatedAmount;
+exports.allocationPercent = allocationPercent;
+exports.allocationCosts = allocationCosts;
+exports.checkAllocationShares = checkAllocationShares;
+const cost_display_1 = require("./cost-display");
+const SCALE = 10n ** 42n;
+function units(value) { if (!/^\d+(?:\.\d{1,42})?$/.test(value))
+    throw Error('费用金额格式无效。'); const [whole, fraction = ''] = value.split('.'); return BigInt(whole) * SCALE + BigInt(fraction.padEnd(42, '0')); }
+function decimal(value) { const fraction = (value % SCALE).toString().padStart(42, '0').replace(/0+$/, ''); return `${value / SCALE}${fraction ? '.' + fraction : ''}`; }
+function allocatedAmount(value, basisPoints) {
+    if (!Number.isInteger(basisPoints) || basisPoints < 1 || basisPoints > 10000)
+        throw Error('分摊比例须为0.01%至100%。');
+    return decimal(units(value) * BigInt(basisPoints) / 10000n);
+}
+function allocationPercent(value) {
+    if (!/^\d{1,3}(?:\.\d{1,2})?$/.test(value.trim()))
+        throw Error('比例最多两位小数。');
+    const [whole, fraction = ''] = value.trim().split('.'), result = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+    if (result < 1 || result > 10000)
+        throw Error('分摊比例须为0.01%至100%。');
+    return result;
+}
+function allocationCosts(ledger, allocations, target) {
+    const known = new Map(ledger.map(entry => [entry.id, entry]));
+    const offsets = new Map(), totals = new Map();
+    for (const row of allocations)
+        if (!row.voidedAt) {
+            const before = totals.get(row.entryId) || 0;
+            offsets.set(row.id, before);
+            totals.set(row.entryId, before + row.basisPoints);
+        }
+    const share = (amount, row) => { const before = offsets.get(row.id) || 0, value = units(amount); return decimal(value * BigInt(before + row.basisPoints) / 10000n - value * BigInt(before) / 10000n); };
+    return allocations.filter(row => !row.voidedAt && (target.orderId ? row.orderId === target.orderId || !row.orderId && !!row.projectId && target.projectIds?.includes(row.projectId) : row.projectId === target.projectId)).map(row => {
+        const source = known.get(row.entryId);
+        if (!source)
+            return { id: `allocated-${row.id}`, projectId: row.projectId || '', projectName: '前期费用', action: 'AI 复核', model: '原计费记录暂不可用', costCents: 0, costState: 'unknown', billingMode: 'live', time: row.createdAt, status: 'complete', costReason: '已保存费用归属，但原调用记录暂不可用，不能按零成本报价。' };
+        const display = (0, cost_display_1.displayCost)(source);
+        let calculation;
+        if (display.nativeAmount !== undefined && display.nativeCurrency)
+            calculation = { version: 1, ruleId: 'cost-allocation', ruleVersion: '1', nativeCurrency: display.nativeCurrency, nativeAmount: share(display.nativeAmount, row), ...(display.cnyAmount !== undefined ? { cnyAmount: share(display.cnyAmount, row) } : {}), fx: source.calculation?.fx, components: [], basis: `原调用 ${source.id} 的 ${row.basisPoints / 100}% 费用归属；原计费规则 ${source.calculation?.ruleId || '已保存金额'}。不产生新调用，不重复计入工作区总额。`, completeness: display.pending ? 'partial' : 'complete' };
+        return { ...source, id: `allocated-${row.id}`, projectId: row.projectId || '', projectName: `前期费用 · ${source.projectName}`, costCents: Number(BigInt(source.costCents) * BigInt(row.basisPoints) / 10000n), costState: calculation && !display.pending ? 'calculated' : 'unknown', calculation, quantity: undefined, usage: undefined };
+    });
+}
+function checkAllocationShares(rows) {
+    const totals = new Map();
+    for (const row of rows.filter(row => !row.voidedAt)) {
+        const sum = (totals.get(row.entryId) || 0) + row.basisPoints;
+        if (sum > 10000)
+            throw Error('同一笔费用的分摊合计不能超过100%。');
+        totals.set(row.entryId, sum);
+    }
 }
 
 }

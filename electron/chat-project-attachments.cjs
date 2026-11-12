@@ -1,5 +1,6 @@
 const { webcrypto } = require('node:crypto');
 const { safeName } = require('./artifact-store.cjs');
+const { assetProvenance } = require('./asset-provenance.cjs');
 
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value);
 const validHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -12,6 +13,7 @@ function createChatProjectAttachments(artifactStore) {
   function project(projectId) { if (!validId(projectId)) throw Error('请选择有效的保存项目。'); }
   async function matches(projectId, candidate, expected) {
     if (!candidate || !validId(candidate.id) || candidate.projectId !== projectId || candidate.trashedAt || candidate.name !== expected.name || candidate.mimeType !== expected.mimeType || candidate.bytes !== expected.bytes) return false;
+    if (JSON.stringify(assetProvenance(candidate.provenance)) !== JSON.stringify(assetProvenance(expected.provenance))) return false;
     if (candidate.unavailable) {
       if (/原文件不在原位置|文件大小与登记不一致/.test(candidate.unavailableReason || '')) return false;
       throw Error('项目附件暂时无法安全读取，请恢复文件或目录权限后重试；没有重复复制。');
@@ -30,7 +32,7 @@ function createChatProjectAttachments(artifactStore) {
       bytes += file.buffer.byteLength; if (bytes > 80 * 1024 * 1024) throw Error('聊天附件合计超过80MB，尚未写入项目。');
       const sha256 = await hash(file.buffer);
       if (file.sha256 !== undefined && file.sha256 !== sha256) throw Error('聊天附件内容已改变，请重新读取原附件后再制作。');
-      prepared.push({ file, name: safeName(file.name, file.mimeType), mimeType: file.mimeType, bytes: file.buffer.byteLength, sha256 });
+      prepared.push({ file, name: safeName(file.name, file.mimeType), mimeType: file.mimeType, bytes: file.buffer.byteLength, sha256, provenance: assetProvenance(file.provenance) });
     }
     const results = [];
     let registered = await artifactStore.listProject(projectId);
@@ -39,7 +41,7 @@ function createChatProjectAttachments(artifactStore) {
       let selected;
       for (const candidate of candidates) if (await matches(projectId, candidate, expected)) { selected = candidate; break; }
       if (!selected) {
-        selected = await artifactStore.write({ projectId, name: expected.name, mimeType: expected.mimeType, buffer: expected.file.buffer, preserveOriginalName: true });
+        selected = await artifactStore.write({ projectId, name: expected.name, mimeType: expected.mimeType, buffer: expected.file.buffer, preserveOriginalName: true, ...(expected.provenance ? { provenance: expected.provenance } : {}) });
         registered = [selected, ...registered];
       }
       results.push({ ...selected, sha256: expected.sha256 });
@@ -58,7 +60,7 @@ function createChatProjectAttachments(artifactStore) {
       if (!metadata || metadata.projectId !== projectId || !validId(metadata.id) || !source || typeof source.name !== 'string' || typeof source.mimeType !== 'string' || !Number.isSafeInteger(source.bytes) || source.bytes <= 0 || !validHash(source.sha256)) return false;
       if (metadata.name !== safeName(source.name, source.mimeType) || metadata.mimeType !== source.mimeType || metadata.bytes !== source.bytes || metadata.sha256 !== undefined && metadata.sha256 !== source.sha256) return false;
       const candidates = await artifactStore.listProject(projectId), registered = candidates.find(item => item.id === metadata.id);
-      return matches(projectId, registered, { name: safeName(source.name, source.mimeType), mimeType: source.mimeType, bytes: source.bytes, sha256: source.sha256 });
+      return matches(projectId, registered, { name: safeName(source.name, source.mimeType), mimeType: source.mimeType, bytes: source.bytes, sha256: source.sha256, provenance: source.provenance });
     },
   };
 }
