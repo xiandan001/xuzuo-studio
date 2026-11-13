@@ -170,7 +170,7 @@ export interface PageProps {
   onProjectDelivered?: (projectId: string, receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>;
   onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: ImageOutputOptions & { beadBaseRequestId?: string; engineeringEnabled?: boolean; engineeringReferenceId?: string; wallpaperTarget?: import('./wallpaper-types').WallpaperTarget; prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => boolean | void;
   onExport: (projectId?: string, draft?: { title: string; text: string }) => void;
-  onUpdatePreferences: (changes: Partial<Preferences>) => void;
+  onUpdatePreferences: (changes: Partial<Preferences>) => boolean | void;
 }
 export interface DesktopBridge {
   projectTemplates?: import('./project-template-types').ProjectTemplatesBridge;

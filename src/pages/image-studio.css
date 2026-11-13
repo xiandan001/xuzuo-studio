@@ -116,3 +116,47 @@
 .image-history-actions .btn{gap:5px;font-size:13px;padding:7px 9px}
 .simple-workbench-heading>.image-history-actions{margin-left:8px}
 @media(max-width:1120px){.image-history-actions .btn{padding-inline:6px}.simple-image-workbench .simple-workbench-heading{gap:5px;flex-wrap:wrap}}
+
+.image-local-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  width: 100%;
+  max-width: 1060px;
+  margin: 0 auto 18px;
+  container: image-local-tools / inline-size;
+}
+.image-local-tools:empty { display: none; }
+.image-local-tool-card {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+.image-local-tool-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ui-border);
+  border-radius: 9px;
+  background: var(--ui-surface-subtle);
+  color: var(--ui-fg-secondary);
+}
+.image-local-tool-copy { min-width: 0; }
+.image-local-tool-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.image-local-tool-heading > h3 { margin: 0; color: var(--ui-fg); font-size: 15px; line-height: 1.5; font-weight: 650; overflow-wrap: anywhere; }
+.image-local-tool-badge { padding: 1px 6px; border: 1px solid var(--ui-border); border-radius: 5px; color: var(--ui-fg-secondary); font-size: 12px; font-weight: 550; line-height: 1.5; white-space: nowrap; }
+.image-local-tool-copy > p { margin: 4px 0 0; color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.image-local-tool-card > .btn { justify-self: end; min-height: 40px; padding: 8px 11px; font-size: 13px; line-height: 1.5; white-space: nowrap; }
+.image-local-tool-card > .btn:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+@container image-local-tools (max-width: 340px) {
+  .image-local-tool-card { grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 10px; }
+  .image-local-tool-card > .btn { grid-column: 2; justify-self: start; }
+}

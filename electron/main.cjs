@@ -252,7 +252,7 @@ function registerRuntime(credentials) {
   handle('business-exportStatement', input => withBusinessWrite(input?.workspaceId, () => businessStatements.exportStatement(input)));
   handle('business-assist', input => withBusinessWrite(input?.workspaceId, () => businessAssist.assist(input)));
   handle('business-listing', input => withBusinessWrite(input?.workspaceId, () => withProjectWrite(input?.projectId, () => businessListing.export(input))));
-  for (const method of ['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery']) handle(`commerce-${method}`, input => ['read', 'history', 'cancel', 'exportRecovery'].includes(method) ? commerceImages[method](input) : withProjectWrite(input?.projectId, () => commerceImages[method](input)));
+  for (const method of ['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery', 'preview', 'cancelPreview']) handle(`commerce-${method}`, input => ['read', 'history', 'cancel', 'exportRecovery', 'preview', 'cancelPreview'].includes(method) ? commerceImages[method](input) : withProjectWrite(input?.projectId, () => commerceImages[method](input)));
   for (const method of ['read', 'save', 'query', 'cancel', 'openSource', 'captureSource', 'importLinks', 'importFile', 'extractImage', 'commitImport', 'export']) handle('bead-market-' + method, input => ['read', 'cancel'].includes(method) ? beadMarket[method](input) : withProjectWrite(input?.projectId, () => beadMarket[method](input)));
   handle('bead-market-sessions', () => marketSessions.sessions());
   handle('bead-market-login', input => { if (runtimeClosing) throw Error('应用正在保存并退出，未打开平台。'); return marketSessions.login(input); });

@@ -10,6 +10,7 @@ import { useEditorTransitions } from './hooks/useEditorTransitions';
 import { APP_VERSION } from './lib/app-version';
 import { StorageRecoveryPage, StorageRecoveryBanner } from './components/StorageRecovery';
 import { readWorkspaceState, writeWorkspaceState, resetWorkspaceState } from './lib/workspace-persistence';
+import { saveWorkspacePreferences } from './lib/settings-save';
 import { useAppearance } from './hooks/useAppearance';
 import { useAutomationContext } from './hooks/useAutomationCenter';
 import { AutomationAttention } from './components/AutomationAttention';
@@ -114,6 +115,7 @@ export default function App() {
   const [loadedWorkspace, setLoadedWorkspace] = useState(() => readWorkspaceState(() => localStorage));
   const initial = loadedWorkspace.state;
   const [workspaceStorageIssue, setWorkspaceStorageIssue] = useState<StorageIssue | undefined>(loadedWorkspace.issue);
+  const workspaceStorageIssueRef = useRef(workspaceStorageIssue); workspaceStorageIssueRef.current = workspaceStorageIssue;
   const [allProjects, setProjects] = useState(initial.projects);
   const [allLedger, setLedger] = useState(initial.ledger);
   const [workspaces, setWorkspaces] = useState(initial.workspaces);
@@ -122,6 +124,7 @@ export default function App() {
   const [preferencesByWorkspace, setPreferencesByWorkspace] = useState(initial.preferencesByWorkspace);
   const [customPrompts, setCustomPrompts] = useState(initial.customPrompts);
   const workspaceStateRef = useRef<WorkspaceState>(initial);
+  const committedPreferences = useRef<WorkspaceState | undefined>(undefined);
   workspaceStateRef.current = { projects: allProjects, ledger: allLedger, workspaces, activeWorkspaceId: workspaceId, preferencesByWorkspace, customPrompts };
   const [promptToApply, setPromptToApply] = useState<PromptApplication>();
   const [assetToApply, setAssetToApply] = useState<AssetApplication>();
@@ -178,6 +181,8 @@ export default function App() {
 
   useEffect(() => {
     if (workspaceStorageIssue) return;
+    const committed = committedPreferences.current; committedPreferences.current = undefined;
+    if (committed && (Object.keys(workspaceStateRef.current) as (keyof WorkspaceState)[]).every(key => committed[key] === workspaceStateRef.current[key])) return;
     const issue = writeWorkspaceState(() => localStorage, workspaceStateRef.current);
     if (issue) setWorkspaceStorageIssue(issue);
   }, [allProjects, allLedger, workspaces, workspaceId, preferencesByWorkspace, customPrompts, workspaceStorageIssue]);
@@ -303,7 +308,7 @@ export default function App() {
     return true;
   };
   const applyWorkspaceManagement = (next: WorkspaceState) => {
-    const issue = writeWorkspaceState(() => localStorage, next, workspaceStorageIssue);
+    const issue = writeWorkspaceState(() => localStorage, next, workspaceStorageIssueRef.current);
     if (issue) { setWorkspaceStorageIssue(issue); throw new Error(issue.message); }
     const changed = next.activeWorkspaceId !== workspaceIdRef.current;
     workspaceStateRef.current = next; workspaceIdRef.current = next.activeWorkspaceId;
@@ -318,6 +323,7 @@ export default function App() {
   const onRemoveWorkspace = async (id: string) => {
     const issue = workspaceRemoveError(workspaceStateRef.current.workspaces, id);
     if (issue) throw new Error(issue);
+    if (id === workspaceIdRef.current && !await confirmTransition()) return false;
     const ids = new Set(projectsRef.current.filter(project => project.workspaceId === id).map(project => project.id));
     if (creatingProjectRef.current || selectingProjectFolderRef.current || (exportBusy && exportId && ids.has(exportId)) || [...jobs.current.keys()].some(projectId => ids.has(projectId))) throw new Error('工作区仍有创建、导出或执行操作，请等待完成后再移除。');
     if (guardedEditorSessions({ includeDirty: true }).some(session => ids.has(session.projectId))) throw new Error('请先保存此工作区的未保存编辑或处理保存错误，再移除工作区。');
@@ -329,8 +335,13 @@ export default function App() {
     applyWorkspaceManagement(restoreWorkspaceState(workspaceStateRef.current, id)); notify('工作区已恢复，可从左侧切换。'); return true;
   };
   const onUpdatePreferences = (changes: Partial<Preferences>) => {
-    setPreferencesByWorkspace(items => ({ ...items, [workspaceId]: { ...preferences, ...changes } }));
-    if (changes.studioName) setWorkspaces(items => items.map(item => item.id === workspaceId ? { ...item, name: changes.studioName! } : item));
+    if (workspaceId !== workspaceIdRef.current) throw new Error('工作区已经切换，请在当前工作区重新保存设置。');
+    const result = saveWorkspacePreferences(() => localStorage, workspaceStateRef.current, workspaceId, changes, workspaceStorageIssueRef.current);
+    if (!result.ok) throw new Error(result.message);
+    committedPreferences.current = result.state; workspaceStateRef.current = result.state;
+    workspaceStorageIssueRef.current = undefined;
+    setPreferencesByWorkspace(result.state.preferencesByWorkspace); setWorkspaces(result.state.workspaces); setWorkspaceStorageIssue(undefined);
+    return true;
   };
   const onUpdateProject = useCallback((id: string, changes: Partial<Project>) => {
     if (!projectsRef.current.some(item => item.id === id && item.workspaceId === workspaceIdRef.current && !item.trashedAt)) return;

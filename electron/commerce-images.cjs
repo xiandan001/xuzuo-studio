@@ -10,9 +10,9 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
   const textRenderer = !renderTextLayer && BrowserWindow ? createCommerceTextRenderer({ BrowserWindow }) : undefined;
   const renderText = renderTextLayer || (textRenderer && ((layer, options) => textRenderer.render(layer, options)));
   const jobs = new Set(); let closing = false, quiescing = false;
-  function operation(input, callback) {
+  function operation(input, callback, { preview = false } = {}) {
     if (!validId(input?.projectId) || closing || quiescing) return Promise.reject(Error('图层工作台正在关闭或项目无效。'));
-    const controller = new AbortController(), job = { projectId: input.projectId, controller };
+    const controller = new AbortController(), job = { projectId: input.projectId, controller, ...(preview ? { previewRequestId: input.requestId } : {}) };
     const external = input.signal, forward = () => controller.abort(); if (external?.aborted) controller.abort(); else if (typeof external?.addEventListener === 'function') external.addEventListener('abort', forward, { once: true });
     const task = Promise.resolve().then(async () => { await workspaceStorage.projectDirectory(input.projectId); active(controller.signal); return callback(controller.signal); });
     job.task = task; jobs.add(job); void task.finally(() => { jobs.delete(job); external?.removeEventListener?.('abort', forward); }).catch(() => undefined); return task;
@@ -119,6 +119,15 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
     if (size.width > 1024 || size.height > 1024) throw Error('手工蒙版代理图每边最多1024像素。');
     await cpuTasks.run('commerce-preview', { buffer }, { signal }); active(signal); const artifact = await artifactStore.write({ projectId: input.projectId, name: '商品编辑区域蒙版.png', mimeType: 'image/png', buffer, signal }); onChanged?.(input.projectId); return artifact;
   }
+  function preview(input) {
+    const region = input?.region;
+    if (!validId(input?.artifactId) || !validId(input?.requestId) || ![768, 1280, 2048].includes(input?.maxSide) || input.expectedSha256 !== undefined && !/^[a-f0-9]{64}$/.test(input.expectedSha256) || !region || Object.keys(region).some(key => !['x', 'y', 'width', 'height'].includes(key)) || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(region[key])) || region.x < 0 || region.x >= 1 || region.y < 0 || region.y >= 1 || region.width <= 0 || region.height <= 0 || region.x + region.width > 1.000001 || region.y + region.height > 1.000001) return Promise.reject(Error('请选择有效的清晰预览区域，最大2048像素。'));
+    if ([...jobs].filter(job => job.previewRequestId && job.projectId === input.projectId).length >= 2) return Promise.reject(Error('正在准备清晰预览，请稍候重试。'));
+    return operation(input, async signal => {
+      const result = await reader.preview(input.projectId, input.artifactId, signal, input); active(signal);
+      return { artifactId: result.id, dataUrl: result.previewDataUrl, width: result.previewWidth, height: result.previewHeight, sourceWidth: result.width, sourceHeight: result.height, sha256: result.sha256, crop: result.crop };
+    }, { preview: true });
+  }
   async function exportRecovery(input) {
     const document = checkedCommerceDocument(input.document); if (document.projectId !== input.projectId || !dialog) throw Error('当前环境无法选择恢复位置。');
     const result = await dialog.showSaveDialog(getWindow(), { title: '保存图层恢复JSON', defaultPath: `图层恢复-${Date.now()}.json`, filters: [{ name: 'JSON工程', extensions: ['json'] }] }); if (result.canceled || !result.filePath) return { saved: false };
@@ -126,6 +135,8 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
     const handle = await fs.open(filename, 'wx'); try { await handle.writeFile(JSON.stringify(document, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); } return { saved: true };
   }
   const service = {
+    preview,
+    async cancelPreview(input) { if (!validId(input?.projectId) || !validId(input?.requestId)) throw Error('预览编号无效。'); const selected = [...jobs].filter(job => job.projectId === input.projectId && job.previewRequestId === input.requestId); for (const job of selected) job.controller.abort(); await Promise.allSettled(selected.map(job => job.task)); },
     read: input => operation(input, signal => read(input, signal)), save: input => operation(input, signal => save(input, signal)), render: input => operation(input, signal => render(input, signal)),
     applyAlpha: input => operation(input, signal => applyAlpha(input, signal)), protect: input => operation(input, signal => protect(input, signal)), mask: input => operation(input, signal => mask(input, signal)),
     compose: input => operation(input, signal => compose(input, signal)),
