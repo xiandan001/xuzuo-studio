@@ -30,6 +30,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Verify release version metadata
+        run: node scripts/verify-release-version.mjs
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked Electron runtime
