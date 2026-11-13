@@ -26,7 +26,8 @@ describe('真实4K原图的只读清晰预览', () => {
     const saved = await f.service.save({ projectId: 'clear-preview', sourceArtifactId: f.artifact.id, documentId: read.documentId, expectedRevision: 0, document });
     const rendered = await f.service.render({ projectId: 'clear-preview', sourceArtifactId: f.artifact.id, documentId: read.documentId, expectedRevision: saved.revision }), output = await f.f.artifactStore.read(rendered.artifacts.find(file => file.mimeType === 'image/png').id), full = PNG.sync.read(output.buffer);
     expect(full.width).toBe(3840); expect(full.height).toBe(2160); expect(full.data.equals(source.data)).toBe(true); expect(sha((await f.f.artifactStore.read(f.artifact.id)).buffer)).toBe(before); expect((await f.f.engine.snapshot()).ledger).toEqual([]);
-  });
+    // Full 4K fixture encoding and export are separate from interactive viewport latency.
+  }, 15000);
   it('拒绝越界、非有限坐标、过大档位和错误来源SHA', async () => {
     const f = await setup(image(128, 96)), input = { projectId: 'clear-preview', artifactId: f.artifact.id, requestId: 'viewport', maxSide: 1280, region: { x: 0, y: 0, width: 1, height: 1 } };
     for (const changes of [{ maxSide: 8192 }, { region: { x: 1, y: 0, width: .1, height: 1 } }, { region: { x: NaN, y: 0, width: 1, height: 1 } }, { expectedSha256: 'a'.repeat(64) }, { projectId: 'foreign' }]) await expect(f.service.preview({ ...input, ...changes })).rejects.toThrow();
