@@ -32,6 +32,7 @@ function sync() {
 function keydown(event: KeyboardEvent) {
   if (document.querySelector('[data-application-closing]')) return;
   const entry = top(); if (!entry || selectTarget(event.target) || !['Escape', 'Tab'].includes(event.key)) return;
+  if (event.key === 'Escape' && event.target instanceof Element && entry.panel.contains(event.target) && event.target.closest('[data-dialog-escape="local"]')) return;
   if (event.key === 'Escape') {
     event.preventDefault(); event.stopImmediatePropagation(); if (!entry.busy()) entry.close(); return;
   }
