@@ -7,26 +7,41 @@ const { createHash } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 const { app, BrowserWindow, ipcMain, nativeImage, nativeTheme } = require('electron');
-const { PNG } = require('pngjs');
 const root = path.resolve(__dirname, '..'), sha = bytes => createHash('sha256').update(bytes).digest('hex'), began = Date.now();
-const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, actualAccountCharges: 0, syntheticLedger: true, errors: [], steps: [], screenshots: [], layouts: [], shellLayouts: [], previewLayouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, showOpacities: [], remaining: 0 } };
-let owner, temporary, window, service, store, engine, artifacts, workspaceStorage, tool, server, context, referencePath, lastProjectZip, nextImportZip = false, finishing = false, holdNext = false, releaseResponse, visibilityRound = false;
+const report = { passed: false, commit: process.env.GITHUB_SHA, localDiagnosticBudget: false, localJobBudgetMs: null, budgetsMs: { native: 120000, wrapper: 140000, parent: 130000, perDom: 4000 }, syntheticProvider: true, actualProviderUsed: false, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, actualAccountCharges: 0, syntheticLedger: true, errors: [], steps: [], screenshots: [], layouts: [], shellLayouts: [], previewLayouts: [], processIds: [process.pid], windows: { created: 0, shown: 0, showOpacities: [], remaining: 0 } };
+let owner, temporary, window, service, store, engine, artifacts, workspaceStorage, tool, server, context, referencePath, lastProjectZip, PNG, nextImportZip = false, finishing = false, holdNext = false, releaseResponse, visibilityRound = false;
+let evaluationSequence = 0, rendererTimedOut = false;
 const channels = [], children = [], calls = [], exportedFiles = [], projectId = 'animation-ui-project', workspaceId = 'animation-ui-workspace';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const deadline = setTimeout(() => { void finish(Error('Animation studio native acceptance exceeded 120 seconds')); }, 120000);
+let deadline = setTimeout(() => { void finish(Error('Animation studio native acceptance exceeded 120 seconds')); }, 120000);
 app.on('window-all-closed', () => {});
 function ordinary(filename, directory = false) { const stat = fs.lstatSync(filename); assert(!stat.isSymbolicLink()); assert(directory ? stat.isDirectory() : stat.isFile()); assert.equal(fs.realpathSync(filename).toLowerCase(), path.resolve(filename).toLowerCase()); return stat; }
 function prepare() {
   assert.equal(process.platform, 'win32'); assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true'); assert.match(report.commit || '', /^[a-f0-9]{40}$/); assert(path.isAbsolute(process.argv[2] || ''));
   temporary = fs.realpathSync(process.argv[2]); assert.equal(path.dirname(temporary).toLowerCase(), fs.realpathSync(process.env.RUNNER_TEMP).toLowerCase()); assert.match(path.basename(temporary), /^xuzuo-animation-studio-[A-Za-z0-9-]+$/);
   owner = JSON.parse(fs.readFileSync(path.join(temporary, 'owner.json'), 'utf8')); assert.equal(owner.kind, 'xuzuo-animation-studio'); assert.equal(owner.commit, report.commit); assert.match(owner.nonce, /^[a-f0-9-]{36}$/); report.nonce = owner.nonce;
+  assert.equal(typeof owner.localRuntime, 'boolean');
+  if (owner.localRuntime) {
+    report.localDiagnosticBudget = true; report.localJobBudgetMs = 45000; report.budgetsMs = { native: 240000, wrapper: 260000, parent: 250000, perDom: 4000 };
+    clearTimeout(deadline); deadline = setTimeout(() => { void finish(Error('Animation local diagnostic acceptance exceeded 240 seconds')); }, Math.max(1, report.budgetsMs.native - (Date.now() - began)));
+  }
+  const dependencyRoot = path.join(root, ...(owner.localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
+  assert.equal(owner.dependencyRoot, dependencyRoot); ordinary(dependencyRoot, true);
+  const Module = require('node:module'); process.env.NODE_PATH = dependencyRoot; Module._initPaths();
+  const dependencyRequire = Module.createRequire(path.join(path.dirname(dependencyRoot), 'package.json'));
+  const dependencies = Object.fromEntries(['pngjs', 'image-size', 'jszip', 'docx', 'pptxgenjs', 'exceljs', 'saxes'].map(name => [name, dependencyRequire.resolve(name)]));
+  for (const filename of Object.values(dependencies)) { assert(filename.toLowerCase().startsWith(dependencyRoot.toLowerCase() + path.sep)); ordinary(filename); }
+  const resolve = Module._resolveFilename; Module._resolveFilename = function (name, parent, ...rest) { return Object.hasOwn(dependencies, name) ? dependencies[name] : resolve.call(this, name, parent, ...rest); };
+  PNG = dependencyRequire('pngjs').PNG;
+  report.dependencyMode = owner.localRuntime ? 'owned-local-build-runtime' : 'locked-ci-root';
   assert.equal(owner.dist, path.join(root, 'work/animation-studio-dist')); assert.equal(owner.output, path.join(root, 'work/animation-studio-output')); ordinary(owner.output, true); ordinary(owner.dist, true);
   for (const [name, hash] of Object.entries(owner.files)) { assert(!name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(owner.dist, name))), hash); }
   for (const [name, hash] of Object.entries(owner.sources)) { assert(/^(?:src|electron|scripts)\//.test(name) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
-  ordinary(owner.tool); assert.equal(sha(fs.readFileSync(owner.tool)), owner.toolSha256); app.setPath('userData', path.join(temporary, 'profile')); app.setPath('sessionData', path.join(temporary, 'profile')); app.disableHardwareAcceleration(); nativeTheme.themeSource = 'light';
+  assert.equal(owner.tool, path.join(root, 'work/animation-runtime/xuzuo-animation/xuzuo-animation.exe')); ordinary(owner.tool); assert.equal(sha(fs.readFileSync(owner.tool)), owner.toolSha256); app.setPath('userData', path.join(temporary, 'profile')); app.setPath('sessionData', path.join(temporary, 'profile')); app.disableHardwareAcceleration(); nativeTheme.themeSource = 'light';
 }
 async function finish(error) {
   if (finishing) return; finishing = true; clearTimeout(deadline); if (error) { report.errors.push(String(error.stack || error)); process.stderr.write(String(error.stack || error) + '\n'); }
+  report.lastWindowState = windowState();
   releaseResponse?.();
   try { await service?.shutdown(); await tool?.shutdown(); await engine?.shutdown(); await Promise.all([store?.drain(), artifacts?.drain()]); } catch (cause) { report.errors.push(String(cause)); }
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
@@ -36,22 +51,47 @@ async function finish(error) {
   report.syntheticHttpCalls = calls; report.exportedFiles = exportedFiles; report.elapsedMs = Date.now() - began; report.passed = !report.errors.length;
   if (owner) fs.writeFileSync(path.join(temporary, 'native-report.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' }); process.stdout.write(JSON.stringify({ passed: report.passed, errors: report.errors, phase: report.phase }) + '\n'); app.exit(report.passed ? 0 : 1);
 }
-async function evaluate(value) { let timer; try { return await Promise.race([window.webContents.executeJavaScript(value, true), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Animation DOM call timed out')), 4000); })]); } finally { clearTimeout(timer); } }
+function windowState() {
+  if (!window || window.isDestroyed()) return { destroyed: true };
+  return { destroyed: false, visible: window.isVisible(), minimized: window.isMinimized(), focused: window.isFocused(), opacity: window.getOpacity(), zoom: window.webContents.isDestroyed() ? undefined : window.webContents.getZoomFactor() };
+}
+async function evaluate(value) {
+  const attempt = { id: ++evaluationSequence, phase: report.phase, source: String(value).slice(0, 500), startedMs: Date.now() - began, status: 'pending' };
+  if (rendererTimedOut) throw Error('Renderer previously timed out; skipped further evaluation: ' + attempt.source);
+  report.lastEvaluation = attempt; const started = Date.now(); let timer;
+  try {
+    const result = await Promise.race([window.webContents.executeJavaScript(value, true), new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        rendererTimedOut = true; attempt.status = 'timed-out'; attempt.durationMs = Date.now() - started;
+        report.domTimeout = { ...attempt, budgetMs: 4000, lastCompleted: report.lastCompleted, lastAction: report.lastAction, window: windowState(), renderer: report.lastKnownRendererState };
+        reject(Error('Animation DOM call timed out after 4000ms; source: ' + attempt.source));
+      }, 4000);
+    })]);
+    attempt.status = 'complete'; attempt.durationMs = Date.now() - started; report.lastCompleted = { ...attempt }; return result;
+  } catch (error) { if (attempt.status === 'pending') attempt.status = 'failed'; throw error; }
+  finally { clearTimeout(timer); attempt.durationMs = Date.now() - started; }
+}
+async function action(name, operation) {
+  const attempt = { name: String(name).slice(0, 500), phase: report.phase, startedMs: Date.now() - began, status: 'pending' }, started = Date.now(); report.lastAction = attempt;
+  try { const result = await operation(); attempt.status = 'complete'; attempt.durationMs = Date.now() - started; report.lastCompletedAction = { ...attempt }; return result; }
+  catch (error) { attempt.status = 'failed'; throw error; }
+  finally { attempt.durationMs = Date.now() - started; }
+}
 async function until(check, label, ms = 10000) { const end = Date.now() + ms; while (Date.now() < end) { if (await check()) return; await delay(30); } throw Error('Animation studio timeout: ' + label); }
-async function dom(value, label) { await until(() => evaluate(`Boolean(${value})`), label); }
-async function click(selector, text) { const match = `(()=>[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'}&&!e.disabled))()`; await dom(match, text || selector); await evaluate(`(()=>{const e=${match};e.scrollIntoView({block:'center'});e.click()})()`); }
-async function fill(label, value) { await dom(`document.querySelector('[aria-label=${JSON.stringify(label)}]')`, label); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.scrollIntoView({block:'center'});e.focus();Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(String(value))});e.dispatchEvent(new Event('input',{bubbles:true}))})()`); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.blur();e.dispatchEvent(new FocusEvent('focusout',{bubbles:true,relatedTarget:null}))})()`); }
+async function dom(value, label, ms = 10000) { await until(async () => { const state = await evaluate(`({matches:Boolean(${value}),hidden:document.hidden,visibility:document.visibilityState})`); report.lastKnownRendererState = { hidden: state.hidden, visibility: state.visibility, phase: report.phase, sampledMs: Date.now() - began }; return state.matches; }, label, ms); }
+async function click(selector, text) { return action(`click ${selector} ${text || ''}`, async () => { const match = `(()=>[...document.querySelectorAll(${JSON.stringify(selector)})].find(e=>e.getClientRects().length&&${text ? `e.textContent.trim().includes(${JSON.stringify(text)})` : 'true'}&&!e.disabled))()`; await dom(match, text || selector); await evaluate(`(()=>{const e=${match};e.scrollIntoView({block:'center'});e.click()})()`); }); }
+async function fill(label, value) { return action(`fill ${label} (${String(value).length} chars)`, async () => { await dom(`document.querySelector('[aria-label=${JSON.stringify(label)}]')`, label); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.scrollIntoView({block:'center'});e.focus();Object.getOwnPropertyDescriptor(e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(String(value))});e.dispatchEvent(new Event('input',{bubbles:true}))})()`); await evaluate(`(()=>{const e=document.querySelector('[aria-label=${JSON.stringify(label)}]');e.blur();e.dispatchEvent(new FocusEvent('focusout',{bubbles:true,relatedTarget:null}))})()`); }); }
 async function select(label, value) { await click(`[aria-label="${label}"]`); await click('[role="option"]', value); }
-async function openSection(text) { const match = `(()=>[...document.querySelectorAll('summary')].find(e=>e.textContent.includes(${JSON.stringify(text)})))()`; await dom(match, text); await evaluate(`(()=>{const e=${match};e.scrollIntoView({block:'center'});if(!e.parentElement.open)e.click()})()`); await dom(`${match}?.parentElement.open`, text + ' expanded'); }
+async function openSection(text) { return action(`open section ${text}`, async () => { const match = `(()=>[...document.querySelectorAll('summary')].find(e=>e.textContent.includes(${JSON.stringify(text)})))()`; await dom(match, text); await evaluate(`(()=>{const e=${match};e.scrollIntoView({block:'center'});if(!e.parentElement.open)e.click()})()`); await dom(`${match}?.parentElement.open`, text + ' expanded'); }); }
 async function idle(expected = 'complete') {
   try {
-    await delay(50); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer request accepted');
-    await until(async () => { const value = await service.read({ projectId }); return !!value.job && value.job.status !== 'running' && !service.isProjectBusy(projectId); }, 'native job settled', 18000);
+    await delay(50); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer completed the requested job and saved it', report.localJobBudgetMs || 10000);
+    await until(async () => { const value = await service.read({ projectId }); return !!value.job && value.job.status !== 'running' && !service.isProjectBusy(projectId); }, 'native job settled', report.localJobBudgetMs || 18000);
     const value = await service.read({ projectId }); assert.equal(value.job.status, expected, value.job.error);
     await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'renderer idle'); await delay(300);
   } catch (error) {
     const [ui, snapshot] = await Promise.allSettled([
-      evaluate(`({saveStatus:document.querySelector('.animation-save-status')?.textContent,alerts:[...document.querySelectorAll('[role="alert"],.animation-notice')].map(node=>node.textContent.trim().slice(0,400)).slice(0,3),caption:document.querySelector('[aria-label="当前条目文案"]')?.value,quantity:document.querySelector('[aria-label="角色作品数量"]')?.value,hidden:document.hidden})`),
+      rendererTimedOut ? Promise.resolve({ unavailable: 'Renderer already timed out; no further DOM request', lastKnown: report.lastKnownRendererState }) : evaluate(`({saveStatus:document.querySelector('.animation-save-status')?.textContent,alerts:[...document.querySelectorAll('[role="alert"],.animation-notice')].map(node=>node.textContent.trim().slice(0,400)).slice(0,3),caption:document.querySelector('[aria-label="当前条目文案"]')?.value,quantity:document.querySelector('[aria-label="角色作品数量"]')?.value,hidden:document.hidden})`),
       service.read({ projectId })
     ]);
     const value = snapshot.status === 'fulfilled' ? snapshot.value : undefined, diagnostic = { phase: report.phase, expected, ui: ui.status === 'fulfilled' ? ui.value : String(ui.reason), revision: value?.document.revision, job: value?.job && { status: value.job.status, stage: value.job.stage, error: value.job.error } };
@@ -60,9 +100,24 @@ async function idle(expected = 'complete') {
   }
 }
 async function step(name, action) { report.phase = name; process.stdout.write('Animation studio step: ' + name + '\n'); const started = Date.now(); await action(); report.steps.push({ name, ms: Date.now() - started }); }
-async function capture(filename, selector) { if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`); await evaluate(`Promise.all([...document.images].filter(e=>e.getClientRects().length).map(e=>e.decode().catch(()=>{}))).then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`); window.webContents.invalidate(); await delay(160); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) }); }
+async function capture(filename, selector) { return action(`capture ${filename} ${selector || ''}`, async () => { if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`); await evaluate(`Promise.all([...document.images].filter(e=>e.getClientRects().length).map(e=>e.decode().catch(()=>{}))).then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`); window.webContents.invalidate(); await delay(160); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) }); }); }
+async function viewport(width, height, label) {
+  const calibration = { label, requested: { width, height }, attempts: [], passed: false };
+  (report.viewportCalibrations ||= []).push(calibration);
+  let nativeWidth = width, nativeHeight = height;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    window.setContentSize(nativeWidth, nativeHeight);
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    const actual = await evaluate('({width:innerWidth,height:innerHeight,devicePixelRatio})');
+    calibration.attempts.push({ nativeWidth, nativeHeight, actual });
+    assert.equal(window.webContents.getZoomFactor(), 1, 'Viewport calibration must not change page zoom');
+    if (actual.width === width && actual.height === height) { calibration.passed = true; return; }
+    nativeWidth += width - actual.width; nativeHeight += height - actual.height;
+  }
+  assert.fail('Native viewport did not reach the exact requested CSS dimensions: ' + JSON.stringify(calibration));
+}
 async function layout(width, mode) {
-  const started = Date.now(); window.setContentSize(width, 1000); nativeTheme.themeSource = mode; window.webContents.invalidate();
+  const started = Date.now(); await viewport(width, 1000, `theme:${mode}`); nativeTheme.themeSource = mode; window.webContents.invalidate();
   await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); let value;
   const luminance = rgb => rgb.map(number => number / 255).map(number => number <= .04045 ? number / 12.92 : ((number + .055) / 1.055) ** 2.4).reduce((sum, number, index) => sum + number * [.2126,.7152,.0722][index], 0);
   try { await until(async () => {
@@ -74,7 +129,7 @@ async function layout(width, mode) {
   value.paintMs = Date.now() - started; report.layouts.push(value); assert(value.passed);
 }
 async function shellLayout(width, height, mode, expanded) {
-  window.setContentSize(width, height);
+  await viewport(width, height, `shell:${mode}:${expanded}`);
   await evaluate(`(()=>{const button=document.querySelector('.studio-run-status-heading button[aria-controls]');if(button.getAttribute('aria-expanded')!==${JSON.stringify(String(expanded))})button.click()})()`);
   await dom(`document.querySelector('.studio-run-status-heading button[aria-controls]')?.getAttribute('aria-expanded')===${JSON.stringify(String(expanded))}`, 'actual task status expansion');
   await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -98,19 +153,27 @@ async function shellLayout(width, height, mode, expanded) {
   assert(value.studio.height >= value.content.height * .5, detail);
   assert(['auto', 'scroll'].includes(value.overflow) && value.scrollHeight > value.clientHeight + 20, 'Animation studio must own its vertical overflow: ' + detail);
   assert(value.scrollWidth <= value.clientWidth + 1 && value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Workspace must not overflow horizontally: ' + detail);
+  if (!await evaluate("document.querySelector('.animation-export-options').open")) await openSection('更多导出与工程');
   value.bottom = await evaluate(`(()=>{
     const studio=document.querySelector('.animation-studio'),content=document.querySelector('.content-images'),workspace=content.querySelector('.workspace-panel');
     studio.scrollTop=studio.scrollHeight;
     const bounds=studio.getBoundingClientRect(),footer=document.querySelector('.statusbar').getBoundingClientRect();
-    const buttons=[...document.querySelectorAll('.animation-export>.animation-button-row button')].map(button=>{const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {label:button.textContent.trim(),top:r.top,bottom:r.bottom,left:r.left,right:r.right,visible:r.width>0&&r.height>0&&r.top>=bounds.top&&r.bottom<=Math.min(bounds.bottom,footer.top)&&r.left>=bounds.left&&r.right<=bounds.right,hit:!!hit&&(button===hit||button.contains(hit))}});
+    const buttons=[...document.querySelectorAll('.animation-export-options>.animation-button-row button')].map(button=>{const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {label:button.textContent.trim(),top:r.top,bottom:r.bottom,left:r.left,right:r.right,visible:r.width>0&&r.height>0&&r.top>=bounds.top&&r.bottom<=Math.min(bounds.bottom,footer.top)&&r.left>=bounds.left&&r.right<=bounds.right,hit:!!hit&&(button===hit||button.contains(hit))}});
     return {scrollTop:studio.scrollTop,maximum:studio.scrollHeight-studio.clientHeight,documentScrollTop:document.scrollingElement.scrollTop,contentScrollTop:content.scrollTop,workspaceScrollTop:workspace.scrollTop,buttons};
   })()`);
   assert(value.bottom.scrollTop > 0 && Math.abs(value.bottom.scrollTop - value.bottom.maximum) <= 1, JSON.stringify(value));
   assert.equal(value.bottom.documentScrollTop, 0, JSON.stringify(value)); assert.equal(value.bottom.contentScrollTop, 0, JSON.stringify(value)); assert.equal(value.bottom.workspaceScrollTop, 0, JSON.stringify(value));
-  assert.deepEqual(value.bottom.buttons.map(button => button.label), ['拆分图片 ZIP', '导出整套 ZIP', '可编辑工程 ZIP', '保存当前样片流程']);
+  assert.deepEqual(value.bottom.buttons.map(button => button.label), ['图集原稿', '拆分图片 ZIP', '导出整套 ZIP', '可编辑工程 ZIP', '保存当前样片流程']);
   assert(value.bottom.buttons.every(button => button.visible && button.hit), 'Every actual bottom export control must be reachable through studio scrolling: ' + JSON.stringify(value));
   value.passed = true;
+  report.advancedExportGroupVerified = true;
   await evaluate("document.querySelector('.animation-studio').scrollTop=0");
+}
+async function mainExportAction(mode) {
+  const value = await evaluate(`(()=>{const buttons=[...document.querySelectorAll('.animation-studio button')].filter(button=>['导出此 GIF','导出当前 PNG'].includes(button.textContent.trim())),creation=document.querySelector('.animation-primary-actions>button:first-child');return {buttons:buttons.map(button=>({label:button.textContent.trim(),besidePreview:!!button.closest('.animation-preview-footer'),primary:button.classList.contains('btn-primary')})),creation:{label:creation.textContent.trim(),secondary:creation.classList.contains('btn-secondary')}}})()`);
+  assert.deepEqual(value.buttons, [{ label: mode === 'gif' ? '导出此 GIF' : '导出当前 PNG', besidePreview: true, primary: true }]);
+  assert.deepEqual(value.creation, { label: '更新预览', secondary: true });
+  (report.mainExportActions ||= []).push({ mode, ...value }); report.singlePreviewExportAction = true;
 }
 async function shellLayoutMatrix() {
   const before = calls.length;
@@ -124,14 +187,18 @@ async function shellLayoutMatrix() {
   assert.equal(calls.length, before);
   for (const mode of ['atlas', 'gif']) {
     await click('[role="tab"]', mode === 'atlas' ? '角色图集' : 'GIF 动画工坊');
+    const exportGroupWasOpen = await evaluate("document.querySelector('.animation-export-options').open");
     for (const [width, height] of [[1440, 1000], [960, 1000], [1440, 720], [960, 720]]) for (const expanded of [false, true]) await shellLayout(width, height, mode, expanded);
+    if (!exportGroupWasOpen) await click('.animation-export-options>summary', '更多导出与工程');
   }
   assert.equal(report.shellLayouts.length, 16); assert.equal(calls.length, before);
+  const exportGroupWasOpen = await evaluate("document.querySelector('.animation-export-options').open");
   await click('[role="tab"]', '角色图集'); await shellLayout(1440, 1000, 'atlas', false);
+  if (!exportGroupWasOpen) await click('.animation-export-options>summary', '更多导出与工程');
   report.shellLayoutChecksWithoutHttp = true;
 }
 async function previewLayout(width, theme, mode, caption, description, playing) {
-  window.setContentSize(width, 1000); nativeTheme.themeSource = theme;
+  await viewport(width, 1000, `preview:${mode}:${theme}`); nativeTheme.themeSource = theme;
   if (await evaluate('document.documentElement.dataset.appTheme') !== theme) await click('button', theme === 'dark' ? '切到黑夜' : '切到白天');
   await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(theme)}`, 'preview matrix actual appearance');
   if (mode === 'gif') {
@@ -222,10 +289,10 @@ async function scenario() {
   await step('atlas-reference-model-key-sample', async () => {
     await shellLayoutMatrix(); await layout(1440, 'light'); await openSection('制图模型与 Key'); await select('动画制图模型', '合成 PNG 模型'); await select('动画制图Key', '虚构测试 Key'); await fill('角色作品数量', '3'); await click('button', '上传参考图');
     await dom(`(()=>{const cards=document.querySelectorAll('.animation-reference-list article');return cards.length===1&&cards[0].getClientRects().length>0&&[...document.querySelectorAll('.animation-references button')].some(button=>button.textContent.trim()==='上传参考图'&&!button.disabled)})()`, 'uploaded reference visible and picker settled');
-    await fill('动画创作需求', '原创几何吉祥物，角色一致，先做一份样片。'); await click('.animation-creation button', '制作第一份'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries[0].status, 'ready'); assert.equal(value.document.referenceArtifactIds.length, 1); assert.equal(calls.length, 1); await capture('01-atlas-light-1440.png', '.animation-preview');
+    await fill('动画创作需求', '原创几何吉祥物，角色一致，先做一份样片。'); await click('.animation-creation button', '制作第一份'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries[0].status, 'ready'); assert.equal(value.document.referenceArtifactIds.length, 1); assert.equal(calls.length, 1); await mainExportAction('atlas'); await capture('01-atlas-light-1440.png', '.animation-preview');
   });
   await step('sample-approval-and-two-item-expansion', async () => { await click('button', '认可样片'); await dom(`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('按样片扩展')&&!e.disabled)`, 'sample accepted'); await click('button', '按样片扩展'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.entries.filter(entry => entry.status === 'ready').length, 3); assert.equal(calls.length, 2); });
-  await step('existing-atlas-to-local-gif-and-playback', async () => { const before = calls.length; await click('[role="tab"]', 'GIF 动画工坊'); await click('.animation-preview-actions button', '更新预览'); await idle(); assert.equal(calls.length, before); await click('button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'only selected GIF playing'); await capture('02-gif-light-1440.png', '.animation-preview'); await click('button', '暂停预览'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'static covers after pause'); report.singlePlaybackVerified = true; });
+  await step('existing-atlas-to-local-gif-and-playback', async () => { const before = calls.length, ledger = structuredClone((await engine.snapshot()).ledger); await click('[role="tab"]', 'GIF 动画工坊'); await click('.animation-primary-actions>button:first-child', '更新预览'); await idle(); assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger); report.creationActionsRemainLocal = true; await mainExportAction('gif'); await click('button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'only selected GIF playing'); await capture('02-gif-light-1440.png', '.animation-preview'); await click('button', '暂停预览'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'static covers after pause'); report.singlePlaybackVerified = true; });
   await step('free-caption-speed-undo-redo', async () => { const before = calls.length, ledger = structuredClone((await engine.snapshot()).ledger); await openSection('修改当前作品'); await fill('当前条目文案', '继续加油'); await click('[aria-label="撤销动画编辑"]'); await click('[aria-label="重做动画编辑"]'); await click('summary', '画布、速度与图集设置'); await fill('播放帧率', '20'); await fill('循环时长（毫秒）', '400'); await click('.animation-preview-actions button', '更新预览'); await idle(); const value = await service.read({ projectId }); assert.equal(value.document.loopMs, 400); assert.equal(value.document.entries[0].inspection.loopMs, 400); assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger); report.localCaptionAndSpeedWithoutHttp = true; });
   await step('keyframe-generation-crop-and-single-frame-ai-repair', async () => { await select('动画视觉风格', '像素完整动作'); await click('.animation-creation button', 'AI 重新制作'); await idle(); await click('button', '认可样片'); await click('button', '按样片扩展'); await idle(); await openSection('修改当前作品'); await openSection('关键帧与裁切'); await click('[aria-label="选择关键帧 2"]'); await dom(`document.querySelector('[aria-label="选中图集第 2 格"]')`, 'actual source-cell highlight'); await fill('原图集左边界', '280'); await fill('原图集上边界', '20'); await fill('原图集右边界', '460'); await fill('原图集下边界', '220'); await click('button', '应用裁切'); await dom(`document.querySelector('[aria-label="选中原图集绝对裁切区域"]')`, 'actual absolute crop highlight'); await click('button', '保存编辑'); await delay(50); await dom(`document.querySelector('.animation-save-status')?.textContent==='已保存到项目'`, 'crop persisted'); const before = await service.read({ projectId }), frames = structuredClone(before.document.entries[0].frames), count = calls.length; assert.deepEqual(frames[1].crop, [280,20,460,220]); await click('summary', 'AI 局部修复'); await fill('动画局部修改要求', '仅修复所选帧举手动作，保留其它姿态。'); await click('button', '只修选中帧'); await idle(); const after = await service.read({ projectId }); assert.equal(calls.length, count + 1); assert.notEqual(after.document.entries[0].frames[1].atlasArtifactId, frames[1].atlasArtifactId); assert.equal(after.document.entries[0].frames[1].crop, undefined); assert.deepEqual(after.document.entries[0].frames.filter((_, index) => index !== 1), frames.filter((_, index) => index !== 1)); report.partialAiRepairOnlyOneRequest = true; await click('button', '切到黑夜'); await layout(960, 'dark'); await capture('03-editor-dark-960.png', '.animation-entry-editor'); });
   await step('saved-version-and-local-history-do-not-refund-ledger', async () => {
@@ -238,7 +305,7 @@ async function scenario() {
   });
   await step('real-gif-zip-project-export-and-import', async () => {
     const count = calls.length;
-    await click('button', '导出此 GIF'); await idle(); await click('button', '拆分图片 ZIP'); await idle(); await click('button', '导出整套 ZIP'); await idle(); await click('button', '可编辑工程 ZIP'); await idle(); assert(lastProjectZip);
+    await click('.animation-preview-footer button', '导出此 GIF'); await idle(); await openSection('更多导出与工程'); await click('.animation-export-options button', '拆分图片 ZIP'); await idle(); await click('button', '导出整套 ZIP'); await idle(); await click('button', '可编辑工程 ZIP'); await idle(); assert(lastProjectZip);
     const ledger = structuredClone((await engine.snapshot()).ledger); nextImportZip = true; await click('[aria-label="导入可编辑动画工程"]'); await idle();
     const imported = await service.read({ projectId }), first = imported.document.entries[0], output = imported.artifacts.find(file => file.id === first.outputArtifactId);
     assert.equal(first.status, 'ready'); assert.equal(output?.mimeType, 'image/gif'); assert.equal(imported.document.entries.length, 3); assert(imported.document.entries.slice(1).every(entry => entry.status === 'stale'));
@@ -268,7 +335,8 @@ async function scenario() {
     await click('[role="tab"]', 'GIF 动画工坊'); await click('.animation-preview-actions button', '更新预览'); await idle();
     assert.equal(calls.length, before); assert.deepEqual((await engine.snapshot()).ledger, ledger);
     await click('.animation-preview-actions button', '播放 GIF'); await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===1`, 'workflow GIF playing before hide');
-    visibilityRound = true; window.setOpacity(0); window.webContents.setBackgroundThrottling(true); window.showInactive(); await dom(`document.hidden===false`, 'native visibility round active'); window.hide(); await dom(`document.hidden===true`, 'actual hidden document'); await delay(150); window.webContents.setBackgroundThrottling(false); window.setOpacity(1); visibilityRound = false;
+    assert.equal(window.isVisible(), true); assert.equal(window.getOpacity(), 0); assert.equal(report.windows.shown, 1);
+    window.webContents.setBackgroundThrottling(true); await dom(`document.hidden===false`, 'native visibility round active'); window.hide(); await dom(`document.hidden===true`, 'actual hidden document'); await delay(150); window.webContents.setBackgroundThrottling(false); window.setOpacity(1); window.setIgnoreMouseEvents(false); visibilityRound = false;
     await dom(`document.querySelectorAll('img[src^="data:image/gif"]').length===0`, 'hidden preview paused'); report.singlePlaybackAndHiddenPause = true;
   });
   assert.equal(sha(await fsp.readFile(referencePath)), report.originalReferenceSha256); report.originalReferenceUnchanged = true; assert.equal(Object.keys(require.cache).some(filename => filename === path.join(root, 'electron/main.cjs')), false);
@@ -278,6 +346,11 @@ async function run() {
   window = new BrowserWindow({ show: false, frame: false, skipTaskbar: true, width: 1440, height: 1000, useContentSize: true, webPreferences: { preload: path.join(root, 'electron/preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } }); report.windows.created++;
   window.on('show', () => { report.windows.shown++; const opacity = window.getOpacity(); report.windows.showOpacities.push(opacity); if (!visibilityRound || opacity !== 0) void finish(Error('Only a zero-opacity native visibility transition is permitted')); }); window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault()); window.webContents.on('will-redirect', event => event.preventDefault()); window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.webContents.session.webRequest.onBeforeRequest((details, callback) => { const allowed = details.url.startsWith(pathToFileURL(owner.dist + path.sep).href) || details.url.startsWith('data:image/'); if (!allowed) report.externalRequests++; callback({ cancel: !allowed }); });
-  await window.loadFile(path.join(owner.dist, 'animation-studio.html')); report.processIds.push(window.webContents.getOSProcessId()); await scenario(); await finish();
+  await window.loadFile(path.join(owner.dist, 'animation-studio.html')); report.processIds.push(window.webContents.getOSProcessId());
+  visibilityRound = true; window.setOpacity(0); window.setIgnoreMouseEvents(true); window.showInactive();
+  await dom(`document.hidden===false`, 'single zero-opacity visibility round active before layout matrices');
+  assert.equal(window.isFocused(), false, 'The invisible native fixture must not steal focus');
+  report.matrixVisibility = { singleZeroOpacityShow: report.windows.shown === 1, opacity: window.getOpacity(), ignoreMouseEvents: true, focused: window.isFocused(), documentVisible: true };
+  await scenario(); await finish();
 }
 process.on('uncaughtException', error => { void finish(error); }); process.on('unhandledRejection', error => { void finish(error); }); run().catch(error => { void finish(error); });

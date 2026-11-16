@@ -156,6 +156,15 @@
 .image-local-tool-copy > p { margin: 4px 0 0; color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .image-local-tool-card > .btn { justify-self: end; min-height: 40px; padding: 8px 11px; font-size: 13px; line-height: 1.5; white-space: nowrap; }
 .image-local-tool-card > .btn:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.sw-panel .image-assist-action { display: grid; gap: 7px; min-width: 0; margin: 12px 0; }
+.sw-panel .image-assist-action > .btn { justify-content: flex-start; width: 100%; min-height: 36px; font-size: 14px; }
+.sw-panel .image-assist-action > small { color: var(--ui-fg-secondary); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.image-assist-action > small > span { display: block; }
+.sw-image-properties > h3,.ig-next-generation > h3 { margin: 0 0 9px; font-size: 15px; font-weight: 650; }
+.sw-image-properties > strong { display: block; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.ig-next-generation { margin: 20px 0; padding-top: 18px; border-top: 1px solid var(--ui-border); }
+.ig-next-generation > .btn { justify-content: center; width: 100%; font-size: 14px; }
+.ig-generation-settings summary:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
 @container image-local-tools (max-width: 340px) {
   .image-local-tool-card { grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 10px; }
   .image-local-tool-card > .btn { grid-column: 2; justify-self: start; }

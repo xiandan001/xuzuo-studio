@@ -28,6 +28,7 @@ describe('紧凑文档AI保留用户操作', () => {
     const f = fixture(kind);
     try {
       const html = renderToStaticMarkup(kind === 'excel' ? <SpreadsheetStudio {...f.props} /> : <EditableDocumentStudio {...f.props} />);
+      expect(html).toMatch(/aria-label="打开 AI 创作与修改"[^>]*>[\s\S]*?AI 创作<\/button>/);
       expect(html).toContain(kind === 'excel' ? '表格创作需求' : '文档创作需求'); expect(html).toContain(kind === 'excel' ? '表格实际模型' : '文档实际模型');
       expect(html).toContain('本次文本模型'); expect(html).toContain('本次账户'); expect(html).toContain('提示词模板'); expect(html).toContain('更多工具');
       expect(html.match(new RegExp('>' + (kind === 'excel' ? '生成表格' : '生成内容') + '</button>', 'g'))).toHaveLength(1);

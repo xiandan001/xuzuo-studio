@@ -4,7 +4,7 @@ import type { WorkflowRun } from '../configuration-types';
 import type { Project, ViewId } from '../types';
 
 export interface AppNavigationItem { id: ViewId; label: string; icon: LucideIcon; }
-export interface NavigationTaskSummary { running: number; paused: number; review: number; }
+export interface NavigationTaskSummary { running: number; paused: number; review: number; failed?: number; interrupted?: number; }
 export type PrimaryNavigationView = 'overview' | 'projects' | 'assets' | 'automation' | null;
 
 // The full catalog remains available to search and existing deep links.
@@ -17,10 +17,10 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
   { id: 'project', label: '项目概览', icon: FolderOpen },
   { id: 'assets', label: '素材库', icon: Sparkles },
   { id: 'prompts', label: '提示词模板', icon: BookOpenText },
-  { id: 'categories', label: '我的分类', icon: Layers3 },
+  { id: 'categories', label: '业务分类', icon: Layers3 },
   { id: 'workflows', label: '我的工作流', icon: Workflow },
   { id: 'automation', label: '自动化中心', icon: GitBranch },
-  { id: 'models', label: '模型中心', icon: KeyRound },
+  { id: 'models', label: '模型与账户', icon: KeyRound },
   { id: 'activity', label: '任务中心', icon: ListTodo },
   { id: 'finance', label: '成本与报价', icon: Wallet },
   { id: 'settings', label: '偏好设置', icon: Settings },
@@ -57,12 +57,14 @@ export function appViewLabel(view: ViewId) { return PRIMARY_NAVIGATION.find(item
 
 export function navigationTaskSummary(runs: WorkflowRun[], workspaceId: string, projects?: Pick<Project, 'id' | 'workspaceId' | 'trashedAt'>[]): NavigationTaskSummary {
   const allowed = projects && new Set(projects.filter(project => project.workspaceId === workspaceId && !project.trashedAt).map(project => project.id));
-  const summary: NavigationTaskSummary = { running: 0, paused: 0, review: 0 };
+  const summary = { running: 0, paused: 0, review: 0, failed: 0, interrupted: 0 };
   for (const run of runs) {
     if (run.workspaceId !== workspaceId || run.hiddenAt || run.trashedAt || (allowed && !allowed.has(run.projectId))) continue;
     if (run.status === 'running') summary.running++;
     else if (run.status === 'paused') summary.paused++;
     else if (run.status === 'waiting-review') summary.review++;
+    else if (run.status === 'failed') summary.failed++;
+    else if (run.status === 'interrupted') summary.interrupted++;
   }
   return summary;
 }

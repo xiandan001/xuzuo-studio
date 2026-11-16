@@ -41,6 +41,7 @@ async function evaluate(source) {
   finally { clearTimeout(timer); }
 }
 const query = selector => `document.querySelector(${JSON.stringify(selector)})`;
+const queryAll = selector => `document.querySelectorAll(${JSON.stringify(selector)})`;
 async function until(label, source, timeout = 7000) { const end = performance.now() + timeout; do { if (await evaluate(source)) return; await delay(40); } while (performance.now() < end && !finished); throw Error('DOM condition not reached: ' + label); }
 function domAction(input) {
   const readable = node => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).display !== 'none';
@@ -111,6 +112,19 @@ async function capture(name, selector) {
 async function scenario() {
   await step('image-local-tools-compact-light-dark-and-narrow-canvas', async () => {
     await until('two actual local tools', 'document.querySelectorAll(".image-local-tool-card").length===2');
+    const draftStorageKey = JSON.stringify(`xuzuo-image-draft-v1-${data.project.id}`);
+    const generationBefore = await evaluate(`({draft:JSON.parse(localStorage.getItem(${draftStorageKey})),prompt:${query('.ig-prompt')}.value,settingsOpen:${query('.ig-generation-settings details')}.open,snapshot:window.imageSettingsBrowserFixture.snapshot()})`);
+    await click('[aria-label="打开格式与属性"]'); await until('current result properties separated from next generation', `${query('[aria-label="当前图片属性"]')}&&${query('[aria-label="下一次生成设置"]')}&&!${query('.ig-generation-settings')}`);
+    assert.equal(await evaluate(`${queryAll('.sw-panel input,.sw-panel textarea,.sw-panel [role=combobox]')}.length`), 0, 'Current-result properties must not duplicate editable generation parameters');
+    assert((await evaluate(`${query('[aria-label="当前图片属性"]')}.textContent`)).includes(data.source.name));
+    await click('.ig-next-generation button', '调整生成设置');
+    await until('single authoritative AI generation settings revealed', `${query('.ig-generation-settings details')}?.open&&${queryAll('[aria-label="图像生成数量"]')}.length===1`);
+    assert.equal(await evaluate(`!!${query('.ig-generation-settings [aria-label="图像生成数量"]')}`), true);
+    assert.equal(await evaluate(`${query('.ig-prompt')}.value`), generationBefore.prompt);
+    assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem(${draftStorageKey}))`), generationBefore.draft);
+    const generationAfter = await evaluate('window.imageSettingsBrowserFixture.snapshot()'); assert.deepEqual(generationAfter.calls, generationBefore.snapshot.calls); assert.deepEqual(generationAfter.state.ledger, generationBefore.snapshot.state.ledger); assert.equal(generationAfter.stored, generationBefore.snapshot.stored);
+    if (!generationBefore.settingsOpen) await click('.ig-generation-settings summary');
+    report.generationSettings = { currentPropertiesReadOnly: true, oneAuthoritativeEditor: true, draftRetained: true, noCallsOrWrites: true };
     await viewport(1440, 'light'); await layout('image-tools-1440-light', '.image-local-tools'); await capture('image-tools-light-1440', '.image-local-tools');
     await viewport(1440, 'dark'); await layout('image-tools-1440-dark', '.image-local-tools'); await capture('image-tools-dark-1440', '.image-local-tools');
     await viewport(1080, 'dark'); await layout('image-tools-1080-dark', '.image-local-tools');
@@ -169,6 +183,19 @@ async function scenario() {
     await recordPointerDiagnostic('default-view-pan');
     await until('trusted pan moves the view, not a layer', `document.querySelector('[aria-label="图片编辑视口"]').scrollLeft>${panPoint.scrollLeft + 30}`);
     const after = await data.commerce.read({ projectId: data.project.id, sourceArtifactId: data.clearSource.id }); assert.deepEqual(after.document, before.document); assert.equal(await layers(), originalLayers); assert.equal(data.calls.commerceSaves, saves); assert.equal(window.webContents.getZoomFactor(), 1);
+    const paneHistory = await data.commerce.history({ projectId: data.project.id, sourceArtifactId: data.clearSource.id }), paneLedger = await evaluate('window.imageSettingsBrowserFixture.snapshot().state.ledger');
+    const canvasWidth = () => evaluate(`${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width`);
+    const expandedWidth = await canvasWidth();
+    await click('[aria-label="收起图层面板"]'); await until('folding layers gives the canvas more room', `${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width>${expandedWidth + 40}`);
+    const layersFoldedWidth = await canvasWidth(); assert.equal(await evaluate(`!!${query('[aria-label="收起属性面板"]')}`), true);
+    await click('[aria-label="展开图层面板"]'); await until('layers restore independently', `Math.abs(${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width-${expandedWidth})<1`);
+    await click('[aria-label="收起属性面板"]'); await until('folding properties gives the canvas more room', `${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width>${expandedWidth + 40}`);
+    const propertiesFoldedWidth = await canvasWidth(); assert.equal(await evaluate(`!!${query('[aria-label="收起图层面板"]')}`), true);
+    await click('[aria-label="收起图层面板"]'); await until('both panes can fold together', `${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width>${propertiesFoldedWidth + 40}`);
+    const bothFoldedWidth = await canvasWidth(); await click('[aria-label="展开属性面板"]'); assert.equal(await evaluate(`!!${query('[aria-label="展开图层面板"]')}`), true);
+    await click('[aria-label="展开图层面板"]'); await until('restoring both panes restores the canvas width', `Math.abs(${query('[aria-label="图片编辑视口"]')}.getBoundingClientRect().width-${expandedWidth})<1`);
+    assert.deepEqual((await data.commerce.read({ projectId: data.project.id, sourceArtifactId: data.clearSource.id })).document, before.document); assert.deepEqual(await data.commerce.history({ projectId: data.project.id, sourceArtifactId: data.clearSource.id }), paneHistory); assert.deepEqual(await evaluate('window.imageSettingsBrowserFixture.snapshot().state.ledger'), paneLedger); assert.equal(await layers(), originalLayers); assert.equal(data.calls.commerceSaves, saves); assert.equal(hash((await data.artifactStore.read(data.clearSource.id)).buffer), tile.sha256); assert.equal(window.webContents.getZoomFactor(), 1);
+    report.panelCollapse = { independentlyCollapsed: true, canvasRoomIncreased: true, bothRestored: true, documentAndHistoryUnchanged: true, sourceBytesUnchanged: true, feesUnchanged: true, noSaveForViewChanges: true, widths: { expanded: expandedWidth, layersFolded: layersFoldedWidth, propertiesFolded: propertiesFoldedWidth, bothFolded: bothFoldedWidth } };
     await layout('clear-canvas-1080-dark', '.commerce-layer-editor'); await capture('clear-preview-zoom-dark-1080', '[aria-label="图片编辑视口"]');
     report.clearZoom = { actualManaged4KSource: true, actualViewportCrop: true, tileMatchesNativeResponse: true, sourceSha256: tile.sha256, crop: tile.crop, tileWidth: tile.naturalWidth, tileHeight: tile.naturalHeight, trustedPlainWheel: true, trustedCtrlWheel: true, zoomInAndOut: true, fixedEditorShell: true, fixedShell, outsideWheelUntouched: true, defaultPan: true, pageZoomFactor: window.webContents.getZoomFactor(), trustedPan: true, layerPositionsUnchanged: true, documentUnchanged: true, noSaveForViewChanges: true, providerCalls: 0 };
     await verifyDirectCanvasEditing();
@@ -266,7 +293,8 @@ async function finish(error) {
   if (owner && directory) fs.writeFileSync(path.join(directory, 'native-report.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
   process.stdout.write(JSON.stringify({ passed: report.passed, phase: report.phase, errors: report.errors }) + '\n'); app.exit(report.passed ? 0 : 1);
 }
-const deadline = setTimeout(() => { void finish(Error('IMAGE_SETTINGS_BROWSER_90_SECOND_DEADLINE')); }, 90000);
+// The expanded settings and panel scenarios share a bounded two-minute UI round.
+const deadline = setTimeout(() => { void finish(Error('IMAGE_SETTINGS_BROWSER_110_SECOND_DEADLINE')); }, 110000);
 app.on('window-all-closed', () => {}); process.on('uncaughtException', error => { void finish(error); }); process.on('unhandledRejection', error => { void finish(error); });
 async function run() {
   await app.whenReady();

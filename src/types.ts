@@ -121,6 +121,9 @@ export interface PageProps {
   onBusinessIntentConsumed?: (token: string) => void;
   onOpenBusiness?: (recipe: import('./business-types').BusinessRecipe, orderId?: string) => void;
   activeView?: ViewId;
+  onOpenTask?: (runId: string, projectId: string) => void;
+  taskIntent?: { token: string; workspaceId: string; projectId: string; runId: string };
+  onTaskIntentConsumed?: (token: string) => void;
   automationIntent?: import('./automation-types').AutomationIntent;
   onAutomationIntentConsumed?: (token: string) => void;
   onAutomateWorkflow?: (workflowId: string) => void;

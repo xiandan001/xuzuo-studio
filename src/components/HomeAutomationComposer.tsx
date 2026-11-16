@@ -1,3 +1,4 @@
+import { useAutoSizeTextarea } from '../hooks/useAutoSizeTextarea';
 import type { ReactNode, RefObject } from 'react';
 import { ArrowUp, FileSpreadsheet, FileText, Image, LoaderCircle, Plus, Presentation } from 'lucide-react';
 import type { PageProps, ProjectKind } from '../types';
@@ -16,6 +17,7 @@ interface HomeAutomationComposerProps {
   productionOpen?: boolean; onProductionOpen?: (open: boolean) => void; needsFolder?: boolean;
 }
 export function HomeAutomationComposer({ props, session, blocked, input, onText, textareaRef, onSend, cost, costPending, onSyncCosts, children, destination, kind, onKind, onReferences, referenceCount = 0, productionOpen, onProductionOpen, needsFolder }: HomeAutomationComposerProps) {
+  useAutoSizeTextarea(textareaRef, input);
   return <div className="creation-input-section">
     {kind && !session.draft.plan && <div className="creation-format-tabs" role="group" aria-label="选择作品类型">{HOME_CREATION_KINDS.map(item => { const Icon = icons[item.kind]; return <button type="button" key={item.kind} aria-pressed={kind === item.kind} disabled={blocked} onClick={() => onKind?.(item.kind)}><Icon size={17} />{item.label}</button>; })}</div>}
     <form className="home-chat-composer" aria-label="创作输入" onSubmit={event => { event.preventDefault(); void onSend(); }}>

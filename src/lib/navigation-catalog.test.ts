@@ -24,11 +24,11 @@ describe('聚焦主导航与高级路由目录', () => {
   });
   it('任务摘要按真实运行状态统计，包含规划任务，隔离外区、已回收项目与隐藏记录', () => {
     const run = (id: string, status: WorkflowRun['status'], extra: Partial<WorkflowRun> = {}) => ({ id, status, projectId: 'one', workspaceId: 'workspace', ...extra } as WorkflowRun);
-    const runs = [run('production', 'running'), run('planning', 'running', { purpose: 'automation-plan' }), run('paused', 'paused'), run('review', 'waiting-review'), run('finished', 'complete'), run('failed', 'failed'), run('foreign', 'running', { workspaceId: 'other' }), run('hidden', 'paused', { hiddenAt: 'now' }), run('trashed', 'waiting-review', { trashedAt: 'now' }), run('trashed-project', 'running', { projectId: 'gone' }), run('missing-project', 'running', { projectId: 'missing' })];
+    const runs = [run('production', 'running'), run('planning', 'running', { purpose: 'automation-plan' }), run('paused', 'paused'), run('review', 'waiting-review'), run('finished', 'complete'), run('failed', 'failed'), run('interrupted', 'interrupted'), run('foreign', 'failed', { workspaceId: 'other' }), run('hidden', 'failed', { hiddenAt: 'now' }), run('trashed', 'interrupted', { trashedAt: 'now' }), run('trashed-project', 'running', { projectId: 'gone' }), run('missing-project', 'running', { projectId: 'missing' })];
     const before = JSON.stringify(runs);
-    expect(navigationTaskSummary(runs, 'workspace', [{ id: 'one', workspaceId: 'workspace' }, { id: 'gone', workspaceId: 'workspace', trashedAt: 'now' }])).toEqual({ running: 2, paused: 1, review: 1 });
-    expect(navigationTaskSummary(runs, 'workspace', [])).toEqual({ running: 0, paused: 0, review: 0 });
-    expect(navigationTaskSummary([], 'workspace')).toEqual({ running: 0, paused: 0, review: 0 });
+    expect(navigationTaskSummary(runs, 'workspace', [{ id: 'one', workspaceId: 'workspace' }, { id: 'gone', workspaceId: 'workspace', trashedAt: 'now' }])).toEqual({ running: 2, paused: 1, review: 1, failed: 1, interrupted: 1 });
+    expect(navigationTaskSummary(runs, 'workspace', [])).toEqual({ running: 0, paused: 0, review: 0, failed: 0, interrupted: 0 });
+    expect(navigationTaskSummary([], 'workspace')).toEqual({ running: 0, paused: 0, review: 0, failed: 0, interrupted: 0 });
     expect(JSON.stringify(runs)).toBe(before);
   });
 });

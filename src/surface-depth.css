@@ -31,3 +31,20 @@ html[data-app-theme="dark"]{
 .studio-app-shell .fin-input-group+.fin-input-group{margin-top:20px}
 .studio-app-shell .asset-library-card{background:var(--ui-surface)}
 @media(prefers-reduced-motion:reduce){.studio-app-shell :is(.project-card,.op-project-card,.asset-library-card,.wf-flow-row){transition:none}}
+
+/* Shared interface hierarchy; authored document and image typography is unchanged. */
+:is(.studio-app-shell,.next-interface){--ui-type-body:16px;--ui-type-label:14px;--ui-type-caption:13px}
+:is(.studio-app-shell,.next-interface) .page-description{font-size:15px;line-height:1.7;color:var(--ui-fg-secondary)}
+:is(.studio-app-shell,.next-interface) :is(.btn,.field,.select-trigger,.form-label){font-size:var(--ui-type-label);line-height:1.5}
+:is(.studio-app-shell,.next-interface) .btn{min-height:36px;border-radius:9px}
+:is(.studio-app-shell,.next-interface) :is(.page-heading,.project-hub-heading){gap:16px;margin-bottom:24px}
+:is(.studio-app-shell,.next-interface) :is(.page-title,.project-hub-heading h1){font-weight:700;letter-spacing:-.5px}
+:is(.studio-app-shell,.next-interface) :is(.page-heading,.app-header,.management-section-navigation,.sidebar) small{font-size:var(--ui-type-caption)}
+:is(.studio-app-shell,.next-interface) :is(.panel,.project-hub-card,.asset-library-card,.wf-flow-row){border-color:var(--ui-card-border);box-shadow:var(--ui-card-shadow)}
+:is(.studio-app-shell,.next-interface) :is(.panel,.project-hub-card) .panel{box-shadow:none}
+:is(.studio-app-shell,.next-interface) :is(.workspace-chat-bubble,.home-chat-message){font-size:var(--ui-type-body);line-height:1.8}
+:is(.studio-app-shell,.next-interface) :is(.home-chat-footnote,.workspace-chat-note,.workspace-chat-composer-footer,.as-library-description,.asset-library-card small,.ct-description,.wf-flow-meta,.activity-task-meta,.project-hub-files li span,.project-hub-eyebrow){font-size:var(--ui-type-caption);line-height:1.65}
+:is(.studio-app-shell,.next-interface) .management-section-navigation{gap:8px;flex-wrap:wrap}
+:is(.studio-app-shell,.next-interface) .management-section-navigation button{font-size:14px;min-height:40px;padding-inline:16px;border-radius:9px 9px 0 0}
+:is(.studio-app-shell,.next-interface) .header-new-project{box-shadow:none}
+@media(max-width:1100px){:is(.studio-app-shell,.next-interface) :is(.sw-toolbar,.cle-toolbar,.cle-view-toolbar) .btn{font-size:13px;min-height:34px}:is(.studio-app-shell,.next-interface) :is(.page-heading,.project-hub-heading){margin-bottom:18px}}

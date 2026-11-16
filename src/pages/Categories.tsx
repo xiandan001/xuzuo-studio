@@ -47,7 +47,7 @@ export function Categories(props: PageProps) {
     if (tab === 'workflows') { const workflow = workflows.find(item => item.id === id); if (workflow) configuration.saveWorkflow({ ...workflow, businessCategoryId }, id); }
   };
   return <div className="ct-page page-enter">
-    <div className="page-heading"><div><p className="resource-eyebrow">KEEP YOUR WORK IN ORDER</p><h1 className="page-title">我的分类</h1><p className="page-description">按客户、业务或用途整理项目、提示词和工作流。分类不会移动本地文件。</p></div><button className="btn btn-primary" onClick={() => openEditor()}><FolderPlus size={16} />新建分类</button></div>
+    <div className="page-heading"><div><p className="resource-eyebrow">KEEP YOUR WORK IN ORDER</p><h1 className="page-title">业务分类</h1><p className="page-description">按客户、业务或用途整理项目、提示词和工作流。分类不会移动本地文件。</p></div><button className="btn btn-primary" onClick={() => openEditor()}><FolderPlus size={16} />新建分类</button></div>
     <div className="ct-library-layout">
       <aside className="panel ct-directory" aria-label="业务分类目录"><header><Layers3 size={18} /><strong>{workspace.name}</strong><span>{activeOptions.length}</span></header>
         <label className="ct-search"><Search size={16} /><input aria-label="搜索业务分类" placeholder="搜索分类…" value={query} onChange={event => setQuery(event.target.value)} />{query && <button aria-label="清除分类搜索" onClick={() => setQuery('')}><X size={14} /></button>}</label>

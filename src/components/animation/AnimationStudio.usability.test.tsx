@@ -13,7 +13,8 @@ afterEach(async () => { await animationCleanup(); vi.useRealTimers(); vi.restore
 
 type Backend = ReturnType<typeof animationBackend>;
 const attach = (backend: Backend) => Object.defineProperty(window, 'desktop', { configurable: true, value: { animation: backend.bridge } });
-const primary = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.animation-primary-actions>.btn-primary')!;
+const primary = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.animation-primary-actions>.btn:first-child')!;
+const mainExport = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.animation-preview-footer .btn-primary')!;
 const editing = (host: HTMLElement) => host.querySelector<HTMLDetailsElement>('.animation-entry-tools')!;
 async function openEditing(host: HTMLElement) { if (!editing(host).open) await click(editing(host).querySelector('summary')!); }
 const noAi = (backend: Backend) => { expect(backend.bridge.generate).not.toHaveBeenCalled(); expect(backend.bridge.refine).not.toHaveBeenCalled(); };
@@ -29,6 +30,29 @@ function prepareImportedDocument(backend: Backend, count = 3) {
 }
 
 describe('角色与GIF工坊首次使用和本地操作', () => {
+  it('制作与导出入口职责分开，更多格式按项目记忆且不自动调用模型', async () => {
+    const backend = animationBackend({ ready: true, count: 2 }); attach(backend);
+    const { host, root } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />);
+    const exports = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent?.trim() === '导出此 GIF');
+    expect(exports).toHaveLength(1); expect(exports[0].closest('.animation-preview-footer')).not.toBeNull();
+    expect([...host.querySelectorAll('.btn-primary')].map(item => item.textContent?.trim())).toEqual(['导出此 GIF']);
+    expect(primary(host).textContent).toContain('更新预览');
+    await click(primary(host)); expect(backend.bridge.compose).toHaveBeenCalledTimes(1); expect(backend.bridge.export).not.toHaveBeenCalled();
+    expect(backend.document.acceptedSampleId).toBeUndefined();
+    const formats = host.querySelector<HTMLDetailsElement>('.animation-export-options')!; expect(formats.open).toBe(false);
+    await click(formats.querySelector('summary')!); expect(formats.open).toBe(true);
+    expect(button(host, '导出整套 ZIP').classList.contains('btn-primary')).toBe(false);
+    await click(button(host, '图集原稿')); expect(backend.bridge.export).toHaveBeenCalledWith({ projectId: backend.project.id, format: 'atlas', entryIds: [backend.document.entries[0].id] });
+    noAi(backend);
+    await act(async () => root.render(<></>));
+    await act(async () => root.render(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />));
+    expect(host.querySelector<HTMLDetailsElement>('.animation-export-options')!.open).toBe(true);
+    const other = animationBackend({ projectId: 'other-export-project', ready: true }); attach(other);
+    await act(async () => root.render(<AnimationStudio props={other.props} project={other.project} initialMode="gif" />));
+    expect(host.querySelector<HTMLDetailsElement>('.animation-export-options')!.open).toBe(false);
+    expect(backend.props.ledger[0].costCents).toBe(51);
+  });
+
   it('空工程有步骤和示例，填入示例只改变草稿且不启动制图', async () => {
     const backend = animationBackend({ revision: 0 }); attach(backend);
     const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="atlas" />);
@@ -68,16 +92,17 @@ describe('角色与GIF工坊首次使用和本地操作', () => {
     noAi(backend);
     expect(JSON.stringify(backend.props.ledger)).toBe(ledger);
     expect(host.textContent).toContain('¥0.51');
-    expect(primary(host).textContent).toContain('导出此 GIF');
+    expect(primary(host).textContent).toContain('更新预览');
+    expect(backend.bridge.export).not.toHaveBeenCalled();
   });
 
-  it('已有GIF没有模型Key也可从主按钮导出，不会隐式重新生成', async () => {
+  it('已有GIF没有模型Key也可从预览旁导出，不会隐式重新生成', async () => {
     const backend = animationBackend({ ready: true });
     delete backend.document.entries[0].sourceHash;
     backend.props.configuration.models = []; backend.props.configuration.credentials = []; attach(backend);
     const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />);
-    expect(primary(host).disabled).toBe(false);
-    await click(primary(host));
+    expect(mainExport(host).disabled).toBe(false);
+    await click(mainExport(host));
     expect(backend.bridge.compose).toHaveBeenCalledTimes(1);
     expect(backend.bridge.export).toHaveBeenCalledWith({ projectId: backend.project.id, format: 'gif', entryIds: [backend.document.entries[0].id] });
     expect(backend.props.workflowRunner.saveArtifact).toHaveBeenCalledWith('export-one');
@@ -117,7 +142,7 @@ describe('角色与GIF工坊首次使用和本地操作', () => {
     });
     const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="atlas" />);
     await click(host.querySelector('[aria-label="选择角色条目 2"]')!);
-    await click(primary(host));
+    await click(mainExport(host));
     expect(backend.props.workflowRunner.saveArtifact).toHaveBeenCalledWith('latest-selected-png');
     expect(backend.bridge.export).not.toHaveBeenCalled();
     noAi(backend);
@@ -181,7 +206,7 @@ describe('角色与GIF工坊首次使用和本地操作', () => {
     const { host } = await animationMount(<AnimationStudio props={backend.props} project={backend.project} initialMode="gif" />);
     expect([...host.querySelectorAll('button')].some(item => item.textContent?.includes('认可样片'))).toBe(false);
     expect(backend.document.acceptedSampleId).toBeUndefined();
-    await click(primary(host));
+    await click(mainExport(host));
     expect(backend.props.workflowRunner.saveArtifact).toHaveBeenCalledWith('export-one');
     noAi(backend);
   });

@@ -5,8 +5,8 @@ import type { ViewId } from '../types';
 import './tools-hub.css';
 
 export function ToolsHub({ navigate, taskSummary }: { navigate: (view: ViewId) => void; taskSummary?: NavigationTaskSummary }) {
-  const taskCount = taskSummary ? taskSummary.running + taskSummary.paused + taskSummary.review : 0;
-  const taskDescription = taskSummary && [taskSummary.running ? `${taskSummary.running} 项进行中` : '', taskSummary.paused ? `${taskSummary.paused} 项已暂停` : '', taskSummary.review ? `${taskSummary.review} 项待检查` : ''].filter(Boolean).join(' · ');
+  const taskCount = taskSummary ? taskSummary.running + taskSummary.paused + taskSummary.review + (taskSummary.failed || 0) + (taskSummary.interrupted || 0) : 0;
+  const taskDescription = taskSummary && [taskSummary.running ? `${taskSummary.running} 项进行中` : '', taskSummary.paused ? `${taskSummary.paused} 项已暂停` : '', taskSummary.review ? `${taskSummary.review} 项待检查` : '', taskSummary.failed ? `${taskSummary.failed} 项失败待处理` : '', taskSummary.interrupted ? `${taskSummary.interrupted} 项已中断` : ''].filter(Boolean).join(' · ');
   return <div className="tools-hub page-enter">
     <div className="page-heading"><div><h1 className="page-title">工具</h1><p className="page-description">流程、模型和费用，在这里管理。</p></div></div>
     <div className="tools-hub-groups">{TOOL_GROUPS.map(group => <section className="tools-hub-group" key={group.id} aria-labelledby={`tools-group-${group.id}`}>

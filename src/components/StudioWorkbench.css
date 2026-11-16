@@ -26,3 +26,5 @@
 .sw-panel-content .sap-embedded>.sap-footer{position:static;flex:0 0 auto;padding:10px 0 0!important;gap:7px;min-height:0}
 .sw-panel-content .sap-embedded>.sap-footer>div p{font-size:12px;line-height:1.6;margin:0}
 .sw-panel-content .sap-embedded>.sap-footer>.btn-primary{font-size:14px;min-height:36px}
+.studio-workbench .sw-heading { min-height: 64px; padding-top: 10px; padding-bottom: 10px; }
+.studio-workbench .sw-toolbar { min-height: 45px; }

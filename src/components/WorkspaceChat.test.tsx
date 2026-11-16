@@ -167,7 +167,7 @@ describe('普通聊天的真实组件交互', () => {
   });
   it('未知模型只提供自动，账户摘要代替单Key下拉', async () => {
     const f = await fixture('unknown-model'); const reasoning = host.querySelector<HTMLButtonElement>('[aria-label="推理强度"]')!;
-    expect(reasoning.disabled).toBe(true); expect(reasoning.textContent).toContain('自动'); expect(host.querySelector('[aria-label="对话Key"]')).toBeNull(); expect(host.textContent).toContain('自己的账户');
+    expect(reasoning.disabled).toBe(true); expect(reasoning.textContent).toContain('自动'); expect(host.querySelector('[aria-label="对话Key"]')).toBeNull(); expect(host.querySelector('[aria-label="模型与账户详情"]')?.getAttribute('title')).toContain('自己的账户');
     await input('普通问题'); await click('发送聊天消息'); expect(f.start.mock.calls[0][0].reasoningEffort).toBe('auto');
   });
   it('中文输入法确认不误发，Enter发送，Shift+Enter保留换行', async () => {

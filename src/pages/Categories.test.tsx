@@ -12,6 +12,7 @@ describe('业务分类工作区', () => {
     expect(html).toContain('业务分类目录'); expect(html).toContain('图文提案');
     expect(html).toContain('调整图文提案的分类'); expect(html).toContain('我的提示词'); expect(html).toContain('工作流');
     expect(html).toContain('分类不会移动本地文件'); expect(html).not.toContain('<select');
+    expect(html).toContain('class="page-title">业务分类'); expect(html).not.toContain('class="page-title">我的分类');
     expect(html).not.toContain('内置模板');
   });
 });
