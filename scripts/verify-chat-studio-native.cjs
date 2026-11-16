@@ -144,11 +144,15 @@ async function scenario() {
     assert.equal(await evaluate(`!!document.querySelector('[aria-label="对话Key"]')`), false, 'A single known account needs no redundant Key chooser');
     await click('[aria-label="关闭模型与账户详情"]'); await dom(`!document.querySelector('.conversation-model-dialog')`, 'account details closed before normal chat');
     assert.equal(await evaluate(`localStorage.getItem('xuzuo-chat-model-v1:${workspaceId}')`), bindingBefore); assert.equal(calls.length, 0); report.accountDetailsBeforeSendVerified = true;
-    const textareaSize = () => evaluate(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]'),s=getComputedStyle(e);return {height:e.getBoundingClientRect().height,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflow:s.overflowY,fontSize:s.fontSize}})()`);
+    const textareaSize = () => evaluate(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]'),s=getComputedStyle(e);return {height:e.getBoundingClientRect().height,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflow:s.overflowY,fontSize:s.fontSize,valueLength:e.value.length,inlineHeight:e.style.height,minHeight:s.minHeight,boxSizing:s.boxSizing,padding:s.padding,lineHeight:s.lineHeight}})()`);
     const emptySize = await textareaSize(); await fill('仅验证输入框自然增长，不发送消息。\n'.repeat(40));
     await dom(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]');return e.getBoundingClientRect().height>${emptySize.height + 20}&&e.scrollHeight>e.clientHeight&&getComputedStyle(e).overflowY==='auto'})()`, 'long draft grows to a bounded scrollable input');
     const longSize = await textareaSize(); assert(longSize.height <= 201 && longSize.height > emptySize.height + 20); assert.equal(longSize.fontSize, emptySize.fontSize); assert.equal(window.webContents.getZoomFactor(), 1);
-    await fill(''); await dom(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]');return !e.value&&e.getBoundingClientRect().height<=${emptySize.height + 1}&&e.scrollTop===0&&getComputedStyle(e).overflowY==='hidden'})()`, 'clearing the draft restores the compact input');
+    report.composerClearMeasurement = { empty: emptySize, long: longSize };
+    await fill(''); await until(async () => {
+      const sample = await textareaSize(); report.composerClearMeasurement.afterClear = sample;
+      return sample.valueLength === 0 && sample.height <= emptySize.height + 1 && sample.scrollTop === 0 && sample.overflow === 'hidden';
+    }, 'clearing the draft restores the compact input');
     assert.equal(calls.length, 0); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
     report.composerSizing = { boundedNaturalGrowth: true, clearsToCompact: true, noCallsOrProjects: true, pageZoomFactor: window.webContents.getZoomFactor(), empty: emptySize, long: longSize, cleared: await textareaSize() };
     await select('推理强度', '轻度'); await fill('记住：这次讨论的主角是橘猫。'); await click('[aria-label="发送聊天消息"]'); await settled(1); assert.equal(calls.length, 1); assert.equal(calls[0].body.reasoning_effort, 'low'); assert.equal(calls[0].body.messages[0].role, 'system'); assert(calls[0].body.messages[0].content.includes('不把每条消息强行变成自动化方案'));

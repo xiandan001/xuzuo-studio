@@ -3,6 +3,9 @@ import type { RefObject } from 'react';
 
 function resizeTextarea(element: HTMLTextAreaElement, maximum: number) {
   const style = getComputedStyle(element), minimum = parseFloat(style.minHeight) || 56, scroll = element.scrollTop;
+  if (element.value === '') {
+    element.style.height = `${minimum}px`; element.style.overflowY = 'hidden'; element.scrollTop = 0; return;
+  }
   const border = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
   element.style.height = '0px';
   const natural = element.scrollHeight + border, height = Math.max(minimum, Math.min(maximum, natural));

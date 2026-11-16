@@ -35,6 +35,10 @@ it('窗口宽度改变重新测量，同一宽度的高度通知不循环重排'
   await act(async () => { resize([{ contentRect: { width: 450 } } as ResizeObserverEntry], {} as ResizeObserver); await new Promise(resolve => setTimeout(resolve, 30)); });
   expect(field.style.height).toBe('130px'); expect(observers).toBe(1);
 });
+it('清空后不沿用浏览器尚未复位的长内容测量与滚动位置', async () => {
+  natural = 320; const field = await show('长内容'.repeat(100)); field.scrollTop = 90;
+  await show(''); expect(field.style.height).toBe('56px'); expect(field.style.overflowY).toBe('hidden'); expect(field.scrollTop).toBe(0); expect(field.value).toBe('');
+});
 it('超长输入保留内部滚动位置，卸载时移除观察器', async () => {
   natural = 400; const field = await show('保留文字'); field.scrollTop = 85;
   await show('保留文字与新增内容'); expect(field.scrollTop).toBe(85); expect(field.value).toBe('保留文字与新增内容');
