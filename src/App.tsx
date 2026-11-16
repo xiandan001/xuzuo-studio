@@ -11,6 +11,7 @@ import { useEditorTransitions } from './hooks/useEditorTransitions';
 import { APP_VERSION } from './lib/app-version';
 import { StorageRecoveryPage, StorageRecoveryBanner } from './components/StorageRecovery';
 import { readWorkspaceState, writeWorkspaceState, resetWorkspaceState } from './lib/workspace-persistence';
+import { saveWorkspacePreferences } from './lib/settings-save';
 import { useAppearance } from './hooks/useAppearance';
 import { useAutomationContext } from './hooks/useAutomationCenter';
 import { AutomationAttention } from './components/AutomationAttention';
@@ -76,6 +77,7 @@ const Overview = lazy(() => import('./pages/Overview').then(module => ({ default
 const DocumentStudio = lazy(() => import('./pages/DocumentStudio').then(module => ({ default: module.DocumentStudio })));
 const ImageStudio = lazy(() => import('./pages/ImageStudio').then(module => ({ default: module.ImageStudio })));
 const Projects = lazy(() => import('./pages/Projects').then(module => ({ default: module.Projects })));
+const ProjectHub = lazy(() => import('./pages/ProjectHub').then(module => ({ default: module.ProjectHub })));
 const Assets = lazy(() => import('./pages/Assets').then(module => ({ default: module.Assets })));
 const Activity = lazy(() => import('./pages/Activity').then(module => ({ default: module.Activity })));
 const Finance = lazy(() => import('./pages/Finance').then(module => ({ default: module.Finance })));
@@ -94,12 +96,14 @@ function documentDraft(projectId: string) {
   try { return JSON.parse(localStorage.getItem(`xuzuo.document.${projectId}`) || 'null') as unknown; }
   catch { return null; }
 }
-type PromptIntent = { template: PromptTemplate; content: string };
+type PromptIntent = { template: PromptTemplate; content: string; referenceFiles?: import('./asset-types').ProjectReference[] };
 type ProjectStartOptions = NonNullable<Parameters<PageProps['onCreateProject']>[1]>;
 type ProjectConnectionRecovery = { workspaceId: string; directory: string; message: string; connected: boolean; action: 'new' | 'change' | 'commit'; kind: ProjectKind; promptIntent?: PromptIntent; selectionId?: string; draft?: RecoveryProjectFields };
 const projectCreationError = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : fallback;
 
 export default function App() {
+  const [chatIntent, setChatIntent] = useState<PageProps['chatIntent']>();
+  const [taskIntent, setTaskIntent] = useState<PageProps['taskIntent']>();
   const [businessIntent, setBusinessIntent] = useState<PageProps['businessIntent']>();
   const { layout, resolved, palette } = useAppearance();
   useWindowActivity();
@@ -113,14 +117,17 @@ export default function App() {
   const [loadedWorkspace, setLoadedWorkspace] = useState(() => readWorkspaceState(() => localStorage));
   const initial = loadedWorkspace.state;
   const [workspaceStorageIssue, setWorkspaceStorageIssue] = useState<StorageIssue | undefined>(loadedWorkspace.issue);
+  const workspaceStorageIssueRef = useRef(workspaceStorageIssue); workspaceStorageIssueRef.current = workspaceStorageIssue;
   const [allProjects, setProjects] = useState(initial.projects);
   const [allLedger, setLedger] = useState(initial.ledger);
   const [workspaces, setWorkspaces] = useState(initial.workspaces);
   const visibleWorkspaceList = useMemo(() => visibleWorkspaces(workspaces), [workspaces]);
   const [workspaceId, setWorkspaceId] = useState(initial.activeWorkspaceId);
+  useEffect(() => { setTaskIntent(undefined); }, [workspaceId]);
   const [preferencesByWorkspace, setPreferencesByWorkspace] = useState(initial.preferencesByWorkspace);
   const [customPrompts, setCustomPrompts] = useState(initial.customPrompts);
   const workspaceStateRef = useRef<WorkspaceState>(initial);
+  const committedPreferences = useRef<WorkspaceState | undefined>(undefined);
   workspaceStateRef.current = { projects: allProjects, ledger: allLedger, workspaces, activeWorkspaceId: workspaceId, preferencesByWorkspace, customPrompts };
   const [promptToApply, setPromptToApply] = useState<PromptApplication>();
   const [assetToApply, setAssetToApply] = useState<AssetApplication>();
@@ -177,6 +184,8 @@ export default function App() {
 
   useEffect(() => {
     if (workspaceStorageIssue) return;
+    const committed = committedPreferences.current; committedPreferences.current = undefined;
+    if (committed && (Object.keys(workspaceStateRef.current) as (keyof WorkspaceState)[]).every(key => committed[key] === workspaceStateRef.current[key])) return;
     const issue = writeWorkspaceState(() => localStorage, workspaceStateRef.current);
     if (issue) setWorkspaceStorageIssue(issue);
   }, [allProjects, allLedger, workspaces, workspaceId, preferencesByWorkspace, customPrompts, workspaceStorageIssue]);
@@ -230,7 +239,7 @@ export default function App() {
     setWorkspaces(items => items.some(item => item.id === targetWorkspaceId && item.lastProjectId !== (id || undefined)) ? items.map(item => item.id === targetWorkspaceId ? { ...item, lastProjectId: id || undefined } : item) : items);
   }, []);
   const navigateNow = useCallback((next: ViewId, projectId?: string) => {
-    assetApplicationRequest.current++; setAssetToApply(undefined); setSearchTarget(undefined); setAutomationIntent(undefined);
+    assetApplicationRequest.current++; setAssetToApply(undefined); setSearchTarget(undefined); setAutomationIntent(undefined); setTaskIntent(undefined);
     const candidates = projectsRef.current.filter(item => item.workspaceId === workspaceId && !item.trashedAt);
     if (projectId && projectsRef.current.some(item => item.id === projectId && item.workspaceId === workspaceId && item.purgedAt)) {
       setView(next === 'finance' || next === 'activity' ? next : 'projects'); setSearchOpen(false); setNotificationOpen(false); setPendingGeneration(null); setGenerationIntent(undefined);
@@ -251,6 +260,17 @@ export default function App() {
   useEffect(() => { setAssetToApply(current => current && (current.workspaceId !== workspaceId || current.projectId !== activeId || !['documents', 'images'].includes(view)) ? undefined : current); }, [workspaceId, activeId, view]);
 
   const navigate = useCallback((next: ViewId, projectId?: string) => { setSearchOpen(false); setNotificationOpen(false); void confirmTransition().then(allowed => { if (allowed) navigateNow(next, projectId); }); }, [confirmTransition, navigateNow]);
+  const onOpenTask = useCallback((runId: string, projectId: string) => {
+    const source = workspaceIdRef.current;
+    const available = () => projectsRef.current.some(project => project.id === projectId && project.workspaceId === source && !project.trashedAt && !project.purgedAt) && workflowRunnerRef.current?.runs.some(run => run.id === runId && run.projectId === projectId && run.workspaceId === source && !run.hiddenAt && !run.trashedAt);
+    if (!available()) { notify('此任务已移出当前列表，请检查项目或任务回收站。', 'info'); return; }
+    void confirmTransition().then(allowed => {
+      if (!allowed || source !== workspaceIdRef.current) return;
+      if (!available()) { notify('此任务已移出当前列表，请检查项目或任务回收站。', 'info'); return; }
+      navigateNow('activity', projectId);
+      setTaskIntent({ token: crypto.randomUUID(), workspaceId: source, projectId, runId });
+    });
+  }, [confirmTransition, navigateNow, notify]);
   const onAutomateWorkflow = (workflowId: string) => {
     const workflow = configuration.workflows.find(workflow => workflow.id === workflowId), source = workspaceIdRef.current;
     if (!workflow) return;
@@ -302,7 +322,7 @@ export default function App() {
     return true;
   };
   const applyWorkspaceManagement = (next: WorkspaceState) => {
-    const issue = writeWorkspaceState(() => localStorage, next, workspaceStorageIssue);
+    const issue = writeWorkspaceState(() => localStorage, next, workspaceStorageIssueRef.current);
     if (issue) { setWorkspaceStorageIssue(issue); throw new Error(issue.message); }
     const changed = next.activeWorkspaceId !== workspaceIdRef.current;
     workspaceStateRef.current = next; workspaceIdRef.current = next.activeWorkspaceId;
@@ -317,6 +337,7 @@ export default function App() {
   const onRemoveWorkspace = async (id: string) => {
     const issue = workspaceRemoveError(workspaceStateRef.current.workspaces, id);
     if (issue) throw new Error(issue);
+    if (id === workspaceIdRef.current && !await confirmTransition()) return false;
     const ids = new Set(projectsRef.current.filter(project => project.workspaceId === id).map(project => project.id));
     if (creatingProjectRef.current || selectingProjectFolderRef.current || (exportBusy && exportId && ids.has(exportId)) || [...jobs.current.keys()].some(projectId => ids.has(projectId))) throw new Error('工作区仍有创建、导出或执行操作，请等待完成后再移除。');
     if (guardedEditorSessions({ includeDirty: true }).some(session => ids.has(session.projectId))) throw new Error('请先保存此工作区的未保存编辑或处理保存错误，再移除工作区。');
@@ -328,8 +349,13 @@ export default function App() {
     applyWorkspaceManagement(restoreWorkspaceState(workspaceStateRef.current, id)); notify('工作区已恢复，可从左侧切换。'); return true;
   };
   const onUpdatePreferences = (changes: Partial<Preferences>) => {
-    setPreferencesByWorkspace(items => ({ ...items, [workspaceId]: { ...preferences, ...changes } }));
-    if (changes.studioName) setWorkspaces(items => items.map(item => item.id === workspaceId ? { ...item, name: changes.studioName! } : item));
+    if (workspaceId !== workspaceIdRef.current) throw new Error('工作区已经切换，请在当前工作区重新保存设置。');
+    const result = saveWorkspacePreferences(() => localStorage, workspaceStateRef.current, workspaceId, changes, workspaceStorageIssueRef.current);
+    if (!result.ok) throw new Error(result.message);
+    committedPreferences.current = result.state; workspaceStateRef.current = result.state;
+    workspaceStorageIssueRef.current = undefined;
+    setPreferencesByWorkspace(result.state.preferencesByWorkspace); setWorkspaces(result.state.workspaces); setWorkspaceStorageIssue(undefined);
+    return true;
   };
   const onUpdateProject = useCallback((id: string, changes: Partial<Project>) => {
     if (!projectsRef.current.some(item => item.id === id && item.workspaceId === workspaceIdRef.current && !item.trashedAt)) return;
@@ -631,15 +657,15 @@ export default function App() {
   const applyPrompt = (project: Project, intent: PromptIntent) => {
     setAssetToApply(undefined); assetApplicationRequest.current++;
     setActiveId(project.id); setView(project.kind === 'image' ? 'images' : 'documents');
-    setPromptToApply({ token: crypto.randomUUID(), projectId: project.id, category: intent.template.category, content: intent.content, mode: intent.template.mode, imagePreset: intent.template.imagePreset });
+    setPromptToApply({ token: crypto.randomUUID(), projectId: project.id, category: intent.template.category, content: intent.content, mode: intent.template.mode, imagePreset: intent.template.imagePreset, ...(intent.referenceFiles ? { referenceFiles: intent.referenceFiles } : {}) });
   };
-  const onUsePrompt: PageProps['onUsePrompt'] = (template, content, targetProjectId) => {
+  const onUsePrompt: PageProps['onUsePrompt'] = (template, content, targetProjectId, options) => {
     if (!template.builtin) setCustomPrompts(items => items.map(item => item.id === template.id && item.workspaceId === workspaceId ? { ...item, lastUsedAt: new Date().toISOString() } : item));
     const kind = template.category === 'general' ? projects.find(item => item.id === activeId)?.kind || 'ppt' : template.category;
     const project = targetProjectId ? projectsRef.current.find(item => item.id === targetProjectId && item.workspaceId === workspaceIdRef.current && item.kind === kind && !item.trashedAt) : projects.find(item => item.id === activeId && item.kind === kind) || projects.find(item => item.kind === kind);
     if (targetProjectId && !project) { notify('目标项目已不可用，请重新选择当前工作区中的项目。', 'error'); return; }
-    if (project) { applyPrompt(project, { template, content }); notify('提示词已填入工作台，可继续修改；尚未生成或计费。'); }
-    else { void beginProject(kind, { template, content }); }
+    if (project) { applyPrompt(project, { template, content, ...options }); notify('用途和参考资料已带入工作台，可继续修改；尚未生成或计费。'); }
+    else { void beginProject(kind, { template, content, ...options }); }
   };
   const onUseAsset = async (projectId: string, file: ArtifactMetadata) => {
     const sourceWorkspaceId = workspaceIdRef.current, request = ++assetApplicationRequest.current;
@@ -728,7 +754,8 @@ export default function App() {
   };
   const displayProgress = { ...taskProgress, ...Object.fromEntries(workflowRunner.runs.filter(activeRun).map(run => [run.projectId, Math.round(run.stepIndex / Math.max(1, run.snapshot.steps.length) * 100)])) };
   const onBatchProjectsCreated = (created: Project[]) => setProjects(existing => { const known = new Set(existing.map(project => project.id)); const added = created.filter(project => !known.has(project.id)).map(project => ({ ...project, liveLedgerBaselineCents: project.costCents })); return added.length ? [...added, ...existing] : existing; });
-  const props: PageProps = { activeView: view, onBatchProjectsCreated, automationIntent, onAutomationIntentConsumed: token => setAutomationIntent(value => value?.token === token ? undefined : value), onAutomateWorkflow, dataManagement, onBindWorkspace: () => workspaceFiles.bind(workspaceId), searchTarget, onSearchTargetConsumed: token => setSearchTarget(value => value?.token === token ? undefined : value), generationIntent, onGenerationIntentConsumed: token => setGenerationIntent(value => value?.token === token ? undefined : value), onUseStudioAction, configuration, workflowRunner, workspaceId, workspace, workspaces: visibleWorkspaceList, prompts, promptToApply, assetToApply, onUseAsset, onAssetApplied: token => setAssetToApply(value => value?.token === token ? undefined : value), onPromptApplied: token => setPromptToApply(value => value?.token === token ? undefined : value), onSavePrompt, onManagePrompt, onUsePrompt, onMoveProject, projects, trashedProjects, purgedProjects, projectPurgeLoading: projectPurge.loading, projectPurgeError: projectPurge.error, pendingProjectPurges: projectPurge.pending, onPurgeProjects: projectPurge.execute, onRetryProjectPurge: projectPurge.retry, onRefreshProjectPurges: projectPurge.refresh, onTrashProject, onRestoreProject, onBulkProjectAction, ledger, preferences, activeProject, taskProgress: displayProgress, navigate, notify, onCreateProject, onUpdateProject, onProjectDelivered, onGenerate, onExport, onUpdatePreferences };
+  const onDiscussArtifact: NonNullable<PageProps['onDiscussArtifact']> = (file, kind) => { const workspaceId = workspaceIdRef.current; const project = projectsRef.current.find(project => project.id === file.projectId && project.workspaceId === workspaceId && !project.trashedAt && !project.purgedAt); if (!project || project.kind !== kind) { notify('成品不属于当前可用项目。', 'error'); return; } void confirmTransition().then(allowed => { if (!allowed || workspaceIdRef.current !== workspaceId) return; setChatIntent({ token: crypto.randomUUID(), conversationId: crypto.randomUUID(), workspaceId, projectId: project.id, artifactId: file.id, kind, name: file.name }); setActiveId(project.id); setView('overview'); }); };
+  const props: PageProps = { activeView: view, taskIntent, onOpenTask, onTaskIntentConsumed: token => setTaskIntent(value => value?.token === token ? undefined : value), chatIntent, onChatIntentConsumed: token => setChatIntent(value => value?.token === token ? undefined : value), onDiscussArtifact, onBatchProjectsCreated, automationIntent, onAutomationIntentConsumed: token => setAutomationIntent(value => value?.token === token ? undefined : value), onAutomateWorkflow, dataManagement, onBindWorkspace: () => workspaceFiles.bind(workspaceId), searchTarget, onSearchTargetConsumed: token => setSearchTarget(value => value?.token === token ? undefined : value), generationIntent, onGenerationIntentConsumed: token => setGenerationIntent(value => value?.token === token ? undefined : value), onUseStudioAction, configuration, workflowRunner, workspaceId, workspace, workspaces: visibleWorkspaceList, prompts, promptToApply, assetToApply, onUseAsset, onAssetApplied: token => setAssetToApply(value => value?.token === token ? undefined : value), onPromptApplied: token => setPromptToApply(value => value?.token === token ? undefined : value), onSavePrompt, onManagePrompt, onUsePrompt, onMoveProject, projects, trashedProjects, purgedProjects, projectPurgeLoading: projectPurge.loading, projectPurgeError: projectPurge.error, pendingProjectPurges: projectPurge.pending, onPurgeProjects: projectPurge.execute, onRetryProjectPurge: projectPurge.retry, onRefreshProjectPurges: projectPurge.refresh, onTrashProject, onRestoreProject, onBulkProjectAction, ledger, preferences, activeProject, taskProgress: displayProgress, navigate, notify, onCreateProject, onUpdateProject, onProjectDelivered, onGenerate, onExport, onUpdatePreferences };
   Object.assign(props, { businessIntent, onBusinessIntentConsumed: (token: string) => setBusinessIntent(value => value?.token === token ? undefined : value), onOpenBusiness: (recipe: import('./business-types').BusinessRecipe, orderId?: string) => { setBusinessIntent({ token: crypto.randomUUID(), recipe, orderId }); navigate('business'); } });
   const liveCost = useMemo(() => summarizeCosts(ledger.filter(item => item.billingMode === 'live')), [ledger]);
   const navigationTasks = navigationTaskSummary(workflowRunner.runs, workspaceId, projects);
@@ -737,6 +764,7 @@ export default function App() {
   const pendingCostCents = pendingProject && pendingGeneration ? demoCost(pendingProject.kind, pendingGeneration.action, pendingGeneration.count) : 0;
   const panels: Record<ViewId, () => ReactNode> = {
     business: () => <BusinessStudio {...props} />,
+    project: () => <ProjectHub {...props} />,
     tools: () => <ToolsHub navigate={navigate} taskSummary={navigationTasks} />,
     overview: () => <Overview {...props} />, documents: () => <DocumentStudio {...props} />, images: () => <ImageStudio {...props} />, projects: () => <Projects {...props} />, assets: () => <Assets {...props} />, prompts: () => <Prompts {...props} />, categories: () => <Categories {...props} />, workflows: () => <Workflows {...props} />, models: () => <Models {...props} />, activity: () => <Activity {...props} />, finance: () => <Finance {...props} />, automation: () => <AutomationCenter {...props} />, settings: () => <Settings {...props} />,
   };
@@ -774,7 +802,7 @@ export default function App() {
     <div className="app-body"><aside className="sidebar"><Brand /><WorkspaceSwitcher workspaces={workspaces} activeWorkspaceId={workspaceId} projects={allProjects.filter(project => !project.trashedAt)} onSelect={onSelectWorkspace} onRemove={onRemoveWorkspace} onRestore={onRestoreWorkspace} onCreate={onCreateWorkspace} onBind={id => workspaceFiles.bind(id)} onOpen={id => { void workspaceFiles.open(id); }} />
       <AppNavigation view={view} onNavigate={navigate} />
       <div className="sidebar-bottom"><button className="sidebar-budget sidebar-budget-compact" aria-label="真实调用账本" title={`真实调用账本 · ${costSummaryPrimary(liveCost)}${costSummarySecondary(liveCost) ? ` · ${costSummarySecondary(liveCost)}` : ''} · 本区月度预算 ${budgetLabel(preferences.monthlyBudget == null ? undefined : Math.round(preferences.monthlyBudget * 100))}`} onClick={() => navigate('finance')}><Wallet size={15} /><span>费用与报价</span><strong><CostTotal summary={liveCost} /></strong>{liveCost.pendingCount > 0 && <em title="软件会自动复算，无需填写费用；点击查看具体缺项。">+{liveCost.pendingCount} 待补齐</em>}<ChevronRight size={13} /></button><button className="profile-button focused-settings-button" aria-label="模型与设置" onClick={() => navigate('models')}><SettingsIcon size={17} /><span>模型与设置</span></button></div>
-    </aside><div className="app-main"><header className="app-header"><div className="breadcrumb"><button type="button" className="breadcrumb-workspace" aria-label={`返回${workspace.name}创作对话`} onClick={() => navigate('overview')}>{workspace.name}</button><ChevronRight size={13} /><strong>{['documents', 'images'].includes(view) && activeProject.id ? activeProject.name : appViewLabel(view)}</strong></div><AppHeaderActions summary={navigationTasks} onNavigate={navigate} onSearch={showSearch} onNotifications={() => setNotificationOpen(value => !value)} onHelp={() => setHelpOpen(true)} onCreateProject={() => onCreateProject()} onOpenFolder={window.desktop?.workspaceFiles && workspace.directory ? () => { void workspaceFiles.open(workspaceId, ['documents', 'images'].includes(view) && activeProject.directory ? activeProject.id : undefined); } : undefined} notify={notify}><AutomationAttention workspaceId={workspaceId} onOpen={() => navigate('automation')} representedReviewRunIds={workflowRunner.runs.filter(run => run.workspaceId === workspaceId && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && projects.some(project => project.id === run.projectId)).map(run => run.id)} /></AppHeaderActions></header>
+    </aside><div className="app-main"><header className="app-header"><div className="breadcrumb"><button type="button" className="breadcrumb-workspace" aria-label={`返回${workspace.name}创作对话`} onClick={() => navigate('overview')}>{workspace.name}</button><ChevronRight size={13} /><strong>{['project', 'documents', 'images'].includes(view) && activeProject.id ? activeProject.name : appViewLabel(view)}</strong></div><AppHeaderActions summary={navigationTasks} onNavigate={navigate} onSearch={showSearch} onNotifications={() => setNotificationOpen(value => !value)} onHelp={() => setHelpOpen(true)} onCreateProject={() => onCreateProject()} onOpenFolder={window.desktop?.workspaceFiles && workspace.directory ? () => { void workspaceFiles.open(workspaceId, ['project', 'documents', 'images'].includes(view) && activeProject.directory ? activeProject.id : undefined); } : undefined} notify={notify}><AutomationAttention workspaceId={workspaceId} onOpen={() => navigate('automation')} representedReviewRunIds={workflowRunner.runs.filter(run => run.workspaceId === workspaceId && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && projects.some(project => project.id === run.projectId)).map(run => run.id)} /></AppHeaderActions></header>
       <main className={`app-content content-${view}`}><>{chatLedger.error && <div className="inline-notice" role="alert">{chatLedger.error}<button type="button" className="text-button" onClick={chatLedger.refresh}>重新同步费用</button></div>}</>{workflowRunner.simulationStorage?.issue && <StorageRecoveryBanner title="模拟任务历史" issue={workflowRunner.simulationStorage.issue} onExport={workflowRunner.simulationStorage.exportOriginal} onReload={workflowRunner.simulationStorage.reload} onReset={workflowRunner.simulationStorage.reset} />}{configuration.storageIssue && <StorageRecoveryBanner title="模型与工作流配置" issue={configuration.storageIssue} onExport={configuration.exportOriginalStorage} onReload={configuration.reloadStorage} onReset={configuration.resetStorage} />}{['documents', 'images'].includes(view) && !workspace.directory && <WorkspaceFolderBar workspace={workspace} project={['documents', 'images'].includes(view) && activeProject.id ? activeProject : undefined} onBind={() => { void workspaceFiles.bind(workspaceId); }} onOpen={projectId => { void workspaceFiles.open(workspaceId, projectId); }} />}{(projects.length === 0 && !['overview', 'projects', 'finance', 'assets', 'settings', 'prompts', 'categories', 'workflows', 'models', 'automation', 'tools', 'activity', 'business'].includes(view)) || (view === 'images' && !projects.some(item => item.kind === 'image')) || (view === 'documents' && !projects.some(item => item.kind !== 'image')) ? <EmptyWorkspace workspace={workspace} projectCount={projects.length} trashedProjectCount={trashedProjects.length} onOpenTrash={() => navigate('projects')} kind={view === 'images' ? 'image' : 'ppt'} onCreateProject={() => onCreateProject(view === 'images' ? 'image' : 'ppt')} onOpenPrompts={() => navigate('prompts')} /> : <div key={workspaceId} className="workspace-panel"><ManagementNavigation view={view} navigate={navigate} />{(view === 'documents' || view === 'images') && <Suspense fallback={null}><StudioRunStatus key={`${workspaceId}-${activeProject.id}`} props={props} /></Suspense>}<Suspense fallback={<div className="empty-state" role="status">正在打开页面…</div>}>{panels[view]()}</Suspense></div>}</main><footer className="statusbar"><span><ShieldCheck size={12} /> 数据仅存于本机浏览器 / 桌面应用</span><span>工作台 v{APP_VERSION} {window.desktop?.validationProfile && <span className="validation-profile-badge">独立测试窗口 · 非正式工作区</span>}<i /> 真实与模拟分开记录</span></footer>
     </div></div>
 

@@ -23,6 +23,7 @@ afterEach(async () => {
 async function mount(vaultStatus: VaultStatus) {
   const refreshCredentials = vi.fn(async () => undefined), saveCredential = vi.fn(), setCredentialEnabled = vi.fn();
   const props = {
+    workspaceId: 'vault-authorization-fixture',
     configuration: {
       vaultStatus, connections: [{ id: 'fixture-connection', name: '仅界面测试', providerId: 'custom', protocol: 'openai-chat', baseUrl: 'https://example.invalid/v1', enabled: true, status: 'configured' }],
       models: [], credentials: [], refreshCredentials, saveCredential, setCredentialEnabled,
@@ -31,6 +32,7 @@ async function mount(vaultStatus: VaultStatus) {
   } as unknown as PageProps;
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host); mounted.push({ host, root });
   await act(async () => root.render(<Models {...props} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="高级模型管理"]')!.click());
   await act(async () => host.querySelector<HTMLButtonElement>('.mdl-tabs button:last-child')!.click());
   return { host, root, props, refreshCredentials, saveCredential, setCredentialEnabled };
 }

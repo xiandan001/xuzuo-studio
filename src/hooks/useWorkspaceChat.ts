@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatConversation, ChatConversationSummary, ChatStartRequest, ChatTurn } from '../chat-types';
+import { applyChatChange } from '../lib/chat-stream-state';
 
 export function stableChatTurns(previous: ChatTurn[], next: ChatTurn[]): ChatTurn[] {
   const known = new Map(previous.map(turn => [turn.id, turn]));
   return next.map(turn => {
     const old = known.get(turn.id);
     if (!old) return turn;
-    if (old.status !== 'running' && turn.status === 'running' || Date.parse(old.updatedAt) > Date.parse(turn.updatedAt) || old.status === 'running' && turn.status === 'running' && old.text.length > turn.text.length) return old;
-    return old.updatedAt === turn.updatedAt && old.status === turn.status && old.text === turn.text && old.saveIssue === turn.saveIssue && old.error === turn.error && old.costState === turn.costState && old.costCents === turn.costCents && JSON.stringify(old.calculation) === JSON.stringify(turn.calculation) ? old : turn;
+    if (old.status === 'running' && turn.status !== 'running') return turn;
+    if (old.status !== 'running' && turn.status === 'running' || Date.parse(old.updatedAt) > Date.parse(turn.updatedAt) || old.status === 'running' && turn.status === 'running' && (old.text.length > turn.text.length || (old.streamSequence || 0) > (turn.streamSequence || 0))) return old;
+    return old.updatedAt === turn.updatedAt && old.status === turn.status && old.text === turn.text && old.streamSequence === turn.streamSequence && old.saveIssue === turn.saveIssue && old.error === turn.error && old.costState === turn.costState && old.costCents === turn.costCents && JSON.stringify(old.calculation) === JSON.stringify(turn.calculation) ? old : turn;
   });
 }
 export function useWorkspaceChat(workspaceId: string, conversationId: string) {
@@ -16,11 +18,12 @@ export function useWorkspaceChat(workspaceId: string, conversationId: string) {
   const [error, setError] = useState(''), [pending, setPending] = useState(false);
   const bridge = window.desktop?.chat, scope = `${workspaceId}/${conversationId}`;
   const current = useRef(scope), flight = useRef(false), mounted = useRef(true); current.current = scope;
+  const snapshot = useRef<ChatConversation | undefined>(undefined); snapshot.current = conversation;
   const reload = useRef<() => void>(() => undefined);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const accept = useCallback((value: ChatConversation) => {
     if (!mounted.current || current.current !== `${value.workspaceId}/${value.id}`) return;
-    setConversation(previous => { const turns = stableChatTurns(previous?.id === value.id ? previous.turns : [], value.turns); return { ...value, turns, activeTurnId: turns.find(turn => turn.status === 'running')?.id }; });
+    setConversation(previous => { const turns = stableChatTurns(previous?.id === value.id ? previous.turns : [], value.turns); const next = { ...value, turns, activeTurnId: turns.find(turn => turn.status === 'running')?.id }; snapshot.current = next; return next; });
   }, []);
   useEffect(() => {
     if (!bridge) return;
@@ -32,22 +35,17 @@ export function useWorkspaceChat(workspaceId: string, conversationId: string) {
       catch (cause) { if (!disposed) setError(cause instanceof Error ? cause.message : '对话暂时无法读取，请保留当前窗口后重试。'); }
       finally { reading = false; if (again && !disposed) { again = false; void read(); } }
     };
-    const list = () => { void bridge.list(workspaceId).then(items => { if (!disposed) setHistory(items); }).catch(() => undefined); };
+    const list = () => { const request = bridge.search ? bridge.search({ workspaceId, limit: 30 }).then(page => page.items) : bridge.list(workspaceId); void request.then(items => { if (!disposed) setHistory(items); }).catch(() => undefined); };
     reload.current = () => { void read(); list(); };
     void read(); list();
     const remove = bridge.onChanged(event => {
       if (event.workspaceId !== workspaceId) return;
       if (event.conversationId === conversationId) {
-        if (event.turn) {
-          const changed = event.turn;
-          setConversation(previous => {
-            if (!previous || previous.workspaceId !== workspaceId || previous.id !== conversationId) return previous;
-            const turns = previous.turns.some(turn => turn.id === changed.id) ? previous.turns.map(turn => turn.id === changed.id ? changed : turn) : [...previous.turns, changed];
-            return { ...previous, turns, turnCount: turns.length, title: event.title || previous.title, updatedAt: event.updatedAt || changed.updatedAt, activeTurnId: turns.find(turn => turn.status === 'running')?.id };
-          });
-        } else void read();
+        const result = applyChatChange(snapshot.current, event);
+        if (result.needsRead) void read();
+        else if (result.value !== snapshot.current) { snapshot.current = result.value; setConversation(result.value); }
       }
-      if (event.ledgerChanged) list();
+      if (event.ledgerChanged || event.historyChanged) list();
     });
     return () => { disposed = true; remove(); reload.current = () => undefined; };
   }, [bridge, workspaceId, conversationId, accept]);

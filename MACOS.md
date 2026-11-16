@@ -1,5 +1,20 @@
 # macOS 开发与验收
 
+## 2.9.0 同步 develop-owner（2026-11-16）
+
+完整合并 `develop-owner` 至 `4bc23f7bf7c5ea1e42f4ea8529892a0a343db302`，补齐上次完整合并 `4bd387f` 后的 15 个提交。与仅参考布局的 2.6.4 不同，本次同步上游的业务逻辑、接口与回归测试。
+
+- 聊天统一场景入口；增加截图粘贴、拖放、素材库和项目文件来源，附件预览、多轮引用、历史整理、场景收藏与最近使用，以及 Markdown 渲染和可读复制。
+- 聊天回复导出为 Word/PPT/Excel；成品继续修改、独立修订、版本对比、另存项目与模板、费用分摊、离线客户校样与反馈导入。
+- 同步需求确认、收款计划、交付检查，以及任务状态定位和按需展开的模型、设置与工作台面板。
+- 图片画布支持局部缩放和平移、拖拽控制点缩放图层、就地文字编辑；聊天输入随内容增高，清空后复位。
+
+保留 macOS 原生标题栏、Command 快捷键、系统路径别名、跨平台备份、LibreOffice 应用查找、DMG 更新和钥匙串按需授权。新附件存储兼容旧版 Mac 的已发消息、未发草稿和备份，验证哈希与原始字节后迁移，读取不覆盖旧文件；兼容旧场景编号。首页保持自然高度、独立历史滚动和左右留白，输入卡与最近作品按顺序布局。
+
+全量源码回归 3459 项通过、0 项失败，4 项 Windows 专用用例跳过；随后附件容量边界修复及旧版迁移定向回归 27 项通过。Python 26 项、独立动画工具实际导出 16 场景、实际 App 的 34 项 Mac 壳层与页面检查，以及图集/GIF 的 16 组壳层布局、32 组长标题与 5 项交互检查通过。聊天新增流程 23 项功能检查、128 组真实首页与 App 布局检查全部通过，覆盖浅深主题、900–1852px 窗口、等效缩放、多账户、附件与历史；1120×760 下发送按钮处于可视范围，弹窗可达，最近作品无重叠。2.9.0 安装包的 549 个源码文件、50 个动画资源、完整签名和 DMG/ZIP 内容核验通过。
+
+本轮使用隔离浏览器、模拟桌面桥接与临时文件验证，不启动 Electron GUI、不读取真实钥匙串或调用供应商 API。原生窗口/IPC 用模拟主进程测试覆盖，未将离线结果表述为所有供应商或外部 Office 已实测。Intel 和 Developer ID 公证的限制同下文。完整结果见 `outputs/develop-owner-sync-validation-report.json`。
+
 ## 2.6.4 参考 develop-owner 的对话框（2026-11-10）
 
 参考 `develop-owner` 的 `842d76a` 及对应截图调整前端布局：顶部工具栏依次排列聊天/制作、
@@ -123,7 +138,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.6.4/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.9.0/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -144,7 +159,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.6.4/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.9.0/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

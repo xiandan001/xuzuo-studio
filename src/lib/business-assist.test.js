@@ -36,6 +36,14 @@ async function setup() {
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 describe('业务辅助：真实引擎与仅本地HTTP适配器', () => {
+  it('需求卡请求身份固定，重试或重启读取已发生结果，不再次HTTP计费', async () => {
+    const f = await setup(), input = { ...f.input, purpose: 'intake', requestId: 'intake-request', text: JSON.stringify({ sources: [] }) };
+    const first = await f.assist.assist(input); expect(f.calls).toHaveLength(1);
+    f.context.project.budgetCents = 0;
+    const second = await f.assist.assist(input); expect(second).toEqual(first); expect(f.calls).toHaveLength(1);
+    const restarted = createBusinessAssist(f.options), third = await restarted.assist(input); expect(third).toEqual(first); expect(f.calls).toHaveLength(1); await restarted.shutdown();
+    expect((await f.engine.snapshot()).ledger.filter(row => row.workflowRunId === first.runId)).toHaveLength(1);
+  });
   it('生产等待人工检查时可辅助，保留原生产任务、人工文稿、正式输出与一次费用归集', async () => {
     const f = await setup(), production = await f.engine.start({ ...request(), project: f.project, connections: [f.connection], models: [f.model] });
     await until(() => f.engine.runDetail(production.id), run => run.status === 'waiting-review');
@@ -84,5 +92,17 @@ describe('业务辅助：真实引擎与仅本地HTTP适配器', () => {
     const f = await setup(); let release; f.hold = new Promise(resolve => { release = resolve; });
     try { const pending = f.assist.assist(f.input); await until(async () => f.calls.length, count => count === 1); release(); await until(() => f.engine.snapshot(), snapshot => snapshot.runs[0]?.status === 'complete'); await expect(f.assist.prepareClose()).resolves.toBeUndefined(); expect((await pending).runId).toBeTruthy(); expect(f.calls).toHaveLength(1); expect((await f.engine.snapshot()).ledger).toHaveLength(1); }
     finally { release(); }
+  });
+  it('只把主动退出取消的需求识读标为AbortError，供应商失败仍是实际失败', async () => {
+    const f = await setup(); let release; f.hold = new Promise(resolve => { release = resolve; });
+    try {
+      const pending = f.assist.assist({ ...f.input, purpose: 'intake', requestId: 'close-request' }).then(() => undefined, error => error);
+      await until(async () => f.calls.length, count => count === 1);
+      const close = f.assist.prepareClose(); await until(() => f.engine.snapshot(), snapshot => snapshot.runs[0]?.status === 'cancelled'); release(); await close;
+      expect(await pending).toMatchObject({ name: 'AbortError', code: 'BUSINESS_ASSIST_CANCELLED_ON_CLOSE' });
+      f.hold = undefined; f.drop = true;
+      const providerError = await f.assist.assist({ ...f.input, purpose: 'intake', requestId: 'provider-failure' }).then(() => undefined, error => error);
+      expect(providerError).toBeInstanceOf(Error); expect(providerError.name).not.toBe('AbortError'); expect(f.calls).toHaveLength(2);
+    } finally { release(); }
   });
 });

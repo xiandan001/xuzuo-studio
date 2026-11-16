@@ -9,6 +9,7 @@ import type { DesktopBridge, LedgerEntry, PageProps, Project } from '../types';
 import type { EditorBridge, EditorDocument, EditorRecord, PresentationEditorDocument, WordBlock, WordEditorDocument } from '../editor-types';
 import { INITIAL_PREFERENCES } from '../data';
 import { readRecovery } from '../lib/editor-recovery';
+import { emptyEditorDocument } from '../lib/editor-document';
 import { EditableDocumentStudio } from './EditableDocumentStudio';
 
 const stamp = '2026-11-07T00:00:00Z';
@@ -18,6 +19,7 @@ let frameId = 0;
 const frames = new Map<number, FrameRequestCallback>();
 let stored: [string, string][] = [];
 let desktopDescriptor: PropertyDescriptor | undefined;
+let scrollDescriptor: PropertyDescriptor | undefined;
 
 function forbidden(name: string) {
   const spy = vi.fn(() => { throw Error(`Selection event fixture must not call ${name}`); });
@@ -47,6 +49,8 @@ beforeEach(() => {
   // editing algorithm is replaced. JSDOM supplies no usable layout measurements.
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { const id = ++frameId; frames.set(id, callback); return id; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
+  scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   vi.stubGlobal('fetch', forbidden('network fetch'));
   const resource = forbidden('network resource');
   vi.stubGlobal('XMLHttpRequest', class { constructor() { resource(); } });
@@ -63,6 +67,7 @@ afterEach(async () => {
   } finally {
     frames.clear();
     if (desktopDescriptor) Object.defineProperty(window, 'desktop', desktopDescriptor); else delete window.desktop;
+    if (scrollDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scrollDescriptor); else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
     vi.unstubAllGlobals(); vi.restoreAllMocks();
     localStorage.clear(); for (const [key, value] of stored) localStorage.setItem(key, value);
     deniedCalls.length = 0;
@@ -82,7 +87,7 @@ function presentation(body: string): PresentationEditorDocument {
   ] };
 }
 
-async function mountStudio(seed: EditorDocument) {
+async function mountStudio(seed: EditorDocument, allowReferenceImport = false) {
   const project: Project = { id: `dom-${seed.kind}-project`, workspaceId: 'dom-workspace', name: seed.title, kind: seed.kind, status: 'draft', description: '仅本地DOM事件，不能发起生成', updatedAt: stamp, costCents: 5, version: 1, accent: 'purple' };
   const workspace = { id: project.workspaceId, name: '隔离事件工作区', description: '', createdAt: stamp };
   const ledger = deepFreeze<LedgerEntry[]>([{ id: 'existing-fee', projectId: project.id, projectName: project.name, action: 'AI 精修', model: 'Synthetic historical model', costCents: 5, billingMode: 'live', costState: 'calculated', status: 'complete', time: stamp, workflowRunId: 'existing-run', workflowStepId: 'existing-step', workflowAttemptId: 'existing-attempt', usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, providerRequestId: 'synthetic-existing-request' }, calculation: { version: 1, ruleId: 'synthetic-frozen', ruleVersion: '1', nativeCurrency: 'USD', nativeAmount: '0.00603', cnyAmount: '0.04016966037735978', components: [{ code: 'request', label: 'Synthetic historical fee', quantity: 1, unit: 'request', unitPrice: '0.00603', amount: '0.00603', currency: 'USD' }], completeness: 'complete', basis: 'Synthetic nonempty fee fixture, not a new account charge' } }]);
@@ -117,7 +122,7 @@ async function mountStudio(seed: EditorDocument) {
     workflowRunner: {
       runs: [], trashedArtifacts: [], runtimeStatus: { available: false, reason: 'Only local editing is permitted' }, listProjectArtifacts: vi.fn(async () => []),
       startLive: forbidden('runner.startLive'), start: forbidden('runner.start'), preflight: forbidden('runner.preflight'), readStartResult: forbidden('runner.readStartResult'), pause: forbidden('runner.pause'), resume: forbidden('runner.resume'), cancel: forbidden('runner.cancel'), retry: forbidden('runner.retry'),
-      importFiles: forbidden('runner.importFiles'), previewArtifact: forbidden('runner.previewArtifact'), openArtifact: forbidden('runner.openArtifact'), saveArtifact: forbidden('runner.saveArtifact'),
+      importFiles: allowReferenceImport ? vi.fn(async () => []) : forbidden('runner.importFiles'), previewArtifact: forbidden('runner.previewArtifact'), openArtifact: forbidden('runner.openArtifact'), saveArtifact: forbidden('runner.saveArtifact'),
       trashArtifact: forbidden('runner.trashArtifact'), restoreArtifact: forbidden('runner.restoreArtifact'), listTrashedArtifacts: forbidden('runner.listTrashedArtifacts'), reconcileCost: forbidden('runner.reconcileCost'),
     },
     notify: vi.fn(), onUpdateProject: vi.fn(), onGenerate: forbidden('onGenerate'), onExport: forbidden('onExport'), navigate: forbidden('navigate'), onCreateProject: forbidden('onCreateProject'), onMoveProject: forbidden('onMoveProject'),
@@ -140,7 +145,7 @@ async function mountStudio(seed: EditorDocument) {
     expect(Object.isFrozen(ledger) && Object.isFrozen(row) && Object.isFrozen(calculation) && Object.isFrozen(calculation?.components) && Object.isFrozen(usage)).toBe(true);
     expect(JSON.stringify(ledger)).toBe(ledgerBefore); expect(container.querySelector('.sw-status')?.textContent).toBe(costBefore); assertNoDispatch();
   };
-  assertExpenses(); return { container, draft, assertExpenses };
+  assertExpenses(); return { container, draft, assertExpenses, importFiles: props.workflowRunner.importFiles };
 }
 type Fixture = Awaited<ReturnType<typeof mountStudio>>;
 
@@ -192,6 +197,30 @@ async function localAction(fixture: Fixture, element: HTMLTextAreaElement, direc
 }
 
 describe('真实文档字段与局部历史工具栏的React DOM事件链（非Native UI）', () => {
+  it.each(['word', 'ppt'] as const)('%s空白稿入口复用需求、模板和参考导入，输入正文后切换AI修改且费用保留', async kind => {
+    const seed = emptyEditorDocument(kind, '空白文稿'), fixture = await mountStudio(seed, true);
+    const button = (text: string) => {
+      const element = [...fixture.container.querySelectorAll<HTMLButtonElement>('.ed-start-actions button')].find(item => item.textContent?.trim() === text);
+      expect(element).toBeDefined(); expect(element!.disabled).toBe(false); return element!;
+    };
+    expect(fixture.container.querySelector('[aria-label="打开 AI 创作与修改"]')?.textContent).toBe('AI 创作');
+    expect(fixture.container.querySelector('[aria-label="开始文档创作"]')?.textContent).toContain('生成时读取正文');
+    await act(async () => button('写创作需求').click()); await frame();
+    const request = field(fixture, '文档创作需求'); expect(document.activeElement).toBe(request);
+    await input(request, '保留这份未发送的需求');
+    await act(async () => button('选择提示词模板').click()); await frame();
+    const dialog = document.querySelector('[role="dialog"][aria-label="选择提示词模板"]'); expect(dialog).not.toBeNull();
+    await act(async () => dialog!.querySelector<HTMLButtonElement>('[aria-label="关闭选择提示词模板"]')!.click());
+    expect(field(fixture, '文档创作需求').value).toBe('保留这份未发送的需求');
+    await act(async () => button('添加参考文件').click());
+    expect(fixture.importFiles).toHaveBeenCalledExactlyOnceWith(`dom-${kind}-project`);
+    expect(fixture.draft()).toEqual(seed); fixture.assertExpenses();
+    await input(field(fixture, kind === 'word' ? '段落 1 内容' : '当前幻灯片正文'), '手工写下第一段正文');
+    expect(fixture.container.querySelector('[aria-label="开始文档创作"]')).toBeNull();
+    expect(fixture.container.querySelector('[aria-label="打开 AI 创作与修改"]')?.textContent).toBe('AI 修改');
+    expect(field(fixture, '文档创作需求').value).toBe('保留这份未发送的需求'); fixture.assertExpenses();
+  });
+
   it('Word鼠标选中甲句，toolbar失焦撤销与重做只改变甲句并恢复选区', async () => {
     const seed = word(), fixture = await mountStudio(seed), first = field(fixture, '段落 1 内容'), second = field(fixture, '段落 2 内容');
     await input(first, '甲精修稿；乙原句'); await input(second, '另一段后改'); await input(first, '甲精修稿；乙用户后改');

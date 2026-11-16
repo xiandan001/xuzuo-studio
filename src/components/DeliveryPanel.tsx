@@ -2,16 +2,17 @@ import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 import { RememberedDetails } from './RememberedDetails';
 import { useEffect, useId, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, Download, History, LoaderCircle, RefreshCw } from 'lucide-react';
-import type { DeliveryInspection, DeliveryReceipt, DeliverySelection } from '../delivery-types';
+import type { DeliveryInspection, DeliveryPreflightFinding, DeliveryReceipt, DeliverySelection } from '../delivery-types';
 import type { DeliveryCheck } from '../lib/delivery-quality';
 import type { ProjectKind } from '../types';
 import { DeliveryChecklist } from './DeliveryChecklist';
 import './delivery-batch.css';
 import { StudioDrawer } from './StudioDrawer';
+import { DeliveryPreflightPanel } from './DeliveryPreflightPanel';
 
-export interface DeliveryPanelProps { projectId: string; kind: ProjectKind; artifactIds?: string[]; sourceRevision: number | string; deliveryContext?: string; dirty?: boolean; checks: DeliveryCheck[]; visible?: boolean; inline?: boolean; onClose?: () => void; onDelivered?: (receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>; onInvalidated?: () => void; }
+export interface DeliveryPanelProps { projectId: string; kind: ProjectKind; artifactIds?: string[]; sourceRevision: number | string; deliveryContext?: string; dirty?: boolean; checks: DeliveryCheck[]; visible?: boolean; inline?: boolean; onClose?: () => void; onDelivered?: (receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>; onInvalidated?: () => void; onOpenIssue?: (finding: DeliveryPreflightFinding) => void | Promise<void>; }
 const message = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '交付操作未完成，原记录仍保留。';
-export function DeliveryPanel({ projectId, kind, artifactIds = [], sourceRevision, deliveryContext = '', dirty = false, checks, visible = true, inline = false, onClose, onDelivered, onInvalidated }: DeliveryPanelProps) {
+export function DeliveryPanel({ projectId, kind, artifactIds = [], sourceRevision, deliveryContext = '', dirty = false, checks, visible = true, inline = false, onClose, onDelivered, onInvalidated, onOpenIssue }: DeliveryPanelProps) {
   const bridge = typeof window === 'undefined' ? undefined : window.desktop?.delivery;
   const selection: DeliverySelection = { projectId, kind, artifactIds, sourceRevision, checks };
   const signature = JSON.stringify(selection), epoch = useRef(0), current = useRef(selection); current.current = selection;
@@ -80,6 +81,7 @@ export function DeliveryPanel({ projectId, kind, artifactIds = [], sourceRevisio
       {!bridge ? <><DeliveryChecklist projectId={projectId} kind={kind} sourceRevision={sourceRevision} artifactId={artifactIds.join('|')} checks={checks} /><p className="delivery-panel-note">在新版桌面应用中可确认版本交付并导出客户成品ZIP。</p></> : <>
         <div className="delivery-inspection-toolbar"><span>{inspection?.revision.startsWith('editor:') ? `编辑版本 v${inspection.revision.slice(7)}` : kind === 'image' ? '当前所选成品' : '当前生成成品'}</span><button className="btn btn-ghost" disabled={!!busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} />刷新检查</button></div>
         {dirty && <p role="status">当前有未保存修改，请保存并导出后验收。旧交付记录保留。</p>}{error && <p className="form-error" role="alert">{error}</p>}{inspection?.errors.map((item, index) => <p className="form-error" key={index}>{item}</p>)}{busy === 'inspect' && <p><LoaderCircle className="spin" size={16} />正在核对实际文件与保存版本…</p>}
+        <DeliveryPreflightPanel projectId={projectId} kind={kind} artifactIds={artifactIds} sourceRevision={sourceRevision} dirty={dirty} onOpenIssue={onOpenIssue} />
         <DeliveryChecklist projectId={projectId} kind={kind} sourceRevision={sourceRevision} artifactId={artifactIds.join('|')} checks={visibleChecks} controlledReview={{ checkedIds: inspection?.checkedIds || [], persisted: !!inspection?.reviewSavedAt && !dirty, busy: !!busy || dirty || !inspection, error }} onCheckedChange={ids => { void saveReview(ids); }} />
         {inspection?.files.length ? <ul className="delivery-file-list">{inspection.files.map(file => <li key={file.id}><span>{file.name}</span><small>{(file.bytes / 1024).toFixed(0)} KB · SHA256 {file.sha256.slice(0, 12)}</small></li>)}</ul> : null}<div className="delivery-panel-actions"><button className="btn btn-primary" disabled={!inspection?.ready || !!busy || dirty || !!error || !!delivered} onClick={() => { void confirm(); }}><CheckCircle2 size={16} />{delivered ? '已确认交付' : '确认交付当前版本'}</button>{delivered && <button className="btn btn-secondary" disabled={!!busy} onClick={() => { void zip(delivered); }}><Download size={16} />客户成品ZIP</button>}</div>{feedback && <p role="status">{feedback}</p>}<p className="delivery-panel-note">客户ZIP只包含选定成品和文件说明，不包含Key、提示词、费用账本或原始参考资料。</p>{history.length > 0 && <RememberedDetails rememberKey={`project:${projectId}:delivery-history`} className="delivery-history"><summary><History size={15} />历史交付 · {history.length} 次</summary>{history.map(receipt => <article key={receipt.id}><div><strong>{receipt.revision.startsWith('editor:') ? `编辑版本 v${receipt.revision.slice(7)}` : '生成成品'}</strong><span>{new Date(receipt.confirmedAt).toLocaleString('zh-CN')} · {receipt.files.length} 份</span></div><button className="btn btn-ghost" disabled={!!busy} onClick={() => { void zip(receipt); }}><Download size={14} />导出此版ZIP</button></article>)}</RememberedDetails>}
       </>}

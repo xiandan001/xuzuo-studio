@@ -7,6 +7,13 @@ const time = '2026-11-08T00:00:00Z';
 const order = (): BusinessOrder => ({ id: 'order', name: '新品物料', recipe: 'merchant', sourceProjectId: 'project', brief: '', productIds: [], projectIds: ['project'], runIds: [], outputIds: [], includedRevisions: 1, status: 'draft', factsRevision: 1, facts: {}, outputKinds: ['image'], imageCount: 1, sizes: [], tasks: [], bindings: {}, createdAt: time, updatedAt: time });
 function state(): BusinessState { return { ...newBusinessState('workspace'), orders: [order()] }; }
 describe('business data and actual revenue accounting', () => {
+  it('手工反馈可独立绑定原文件SHA，校样导入仍要求完整包与批注来源', () => {
+    const value = state(); value.feedback = [{ id: 'feedback', orderId: 'order', round: 1, target: { projectId: 'project', artifactId: 'original' }, sourceSha256: 'a'.repeat(64), sourceRevision: 2, text: '修改标题', tasks: ['修改标题'], status: 'approved', runIds: [], createdAt: time, updatedAt: time }];
+    expect(businessStateIssue(value)).toBe('');
+    value.feedback[0].proofPackageId = 'proof-package'; expect(businessStateIssue(value)).toContain('来源不完整');
+    value.feedback[0].proofAnnotationId = 'proof-annotation'; expect(businessStateIssue(value)).toBe('');
+    delete value.feedback[0].sourceSha256; expect(businessStateIssue(value)).toContain('来源不完整');
+  });
   it('creates isolated metadata and rejects duplicate IDs, unknown fields and foreign ownership', () => {
     const value = state(); expect(businessStateIssue(value)).toBe('');
     expect(businessStateIssue({ ...value, apiKey: 'do-not-store' })).not.toBe('');

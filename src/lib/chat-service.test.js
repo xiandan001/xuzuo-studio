@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const { createChatService, contextMessages } = require('../../electron/chat-service.cjs');
 const { ModelRuntimeError } = require('../../electron/provider-http.cjs');
@@ -30,59 +31,22 @@ afterEach(async () => {
   for (const directory of owned.splice(0)) { if (!path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'xuzuo-chat-test-')) throw Error('Unowned cleanup'); await fs.rm(directory, { recursive: true, force: true }); }
 });
 describe('无需项目的普通聊天持久化与计费', () => {
-  it('无项目附件真实进入本轮和后续上下文，公开消息仅包含元数据', async () => {
-    const f = await setup(), selected = path.join(f.directory, '品牌.txt'); await fs.writeFile(selected, '蓝色小熊品牌资料');
-    const attachments = await f.service.importAttachments(base, [selected]), request = { ...base, attachmentIds: attachments.map(file => file.id) };
-    await f.service.start(request); let value = await settled(f.service);
-    expect(value.turns[0].attachments).toEqual(attachments); expect(JSON.stringify(value)).not.toContain('蓝色小熊品牌资料'); expect(JSON.stringify(value)).not.toContain(f.directory);
-    expect(f.calls[0].messages[0].attachments).toMatchObject([{ text: '蓝色小熊品牌资料' }]);
-    await f.service.start({ ...base, id: 'followup-with-file', text: '请再说明品牌资料' }); value = await settled(f.service);
-    expect(f.calls[1].messages[0].attachments).toMatchObject([{ text: '蓝色小熊品牌资料' }]); expect(value.turns).toHaveLength(2);
-    expect((await f.service.attachmentFiles(base, base.id))[0].buffer.toString()).toBe('蓝色小熊品牌资料');
-  });
-  it('带附件请求编号仍幂等，重新回答继承原附件且不依赖已删除的选择缓存', async () => {
-    const f = await setup(), selected = path.join(f.directory, '资料.txt'); await fs.writeFile(selected, '原始资料');
-    const [attachment] = await f.service.importAttachments(base, [selected]), request = { ...base, attachmentIds: [attachment.id] };
-    await f.service.start(request); await settled(f.service); await fs.rm(path.join(f.directory, 'chat-attachments-v1'), { recursive: true }); await fs.unlink(selected);
-    await f.service.start(request); expect(f.calls).toHaveLength(1);
-    await expect(f.service.start({ ...request, attachmentIds: ['another-file'] })).rejects.toThrow(/编号已用于不同内容/);
-    await f.service.start({ ...base, id: 'retry-with-file', sourceTurnId: base.id }); const value = await settled(f.service);
-    expect(value.turns[1].attachments).toEqual([attachment]); expect(f.calls[1].messages.at(-1).attachments[0].text).toBe('原始资料');
-    expect(await f.service.ledger()).toHaveLength(2);
-  });
-  it('跨对话附件和不支持视觉的模型在发送前阻止，不新增账本记录', async () => {
-    const f = await setup(), text = path.join(f.directory, '资料.txt'); await fs.writeFile(text, '正文');
-    const [attachment] = await f.service.importAttachments(base, [text]);
-    await expect(f.service.start({ ...base, conversationId: 'other-chat', attachmentIds: [attachment.id] })).rejects.toThrow(/不属于当前对话/);
-    const pdf = path.join(f.directory, '参考.pdf'); await fs.writeFile(pdf, '%PDF-1.4\n1 0 obj <<>> endobj\n%%EOF');
-    const [document] = await f.service.importAttachments(base, [pdf]);
-    await expect(f.service.start({ ...base, attachmentIds: [document.id] })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
-    expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toHaveLength(0);
-    await f.service.start({ ...base, attachmentIds: [document.id], model: { ...model, capabilities: ['text', 'vision'] } }); await settled(f.service);
-    await expect(f.service.start({ ...base, id: 'followup-text-model' })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
-    expect(f.calls).toHaveLength(1); expect(await f.service.ledger()).toHaveLength(1);
-  });
-  it('聊天备份自包含附件正文与原文件，恢复后可继续读取和制作引用', async () => {
-    const f = await setup(), selected = path.join(f.directory, '资料.txt'); await fs.writeFile(selected, '备份应保留的正文');
-    const attachments = await f.service.importAttachments(base, [selected]);
-    await f.service.start({ ...base, attachmentIds: attachments.map(file => file.id) }); await settled(f.service);
-    const snapshot = await f.service.exportWorkspace(base.workspaceId), restored = await setup();
-    await restored.service.restoreWorkspace(snapshot);
-    expect((await restored.service.attachmentFiles(base, base.id))[0].buffer.toString()).toBe('备份应保留的正文');
-    await restored.service.start({ ...base, id: 'after-restore', text: '继续讨论附件' }); await settled(restored.service);
-    expect(restored.calls[0].messages[0].attachments[0].text).toBe('备份应保留的正文');
-    const damaged = structuredClone(snapshot); damaged.conversations[0].turns[0]._attachments[0].data = 'AAAA';
-    await expect(f.service.validateWorkspaceSnapshot(damaged)).rejects.toThrow(/聊天备份/);
-  });
-  it('未发送附件可供专属制作工作台使用，只允许当前对话的有效编号', async () => {
-    const f = await setup(), selected = path.join(f.directory, '原始参考.txt'); await fs.writeFile(selected, '待制作资料');
-    const [attachment] = await f.service.importAttachments(base, [selected]);
-    const files = await f.service.attachmentFiles(base, undefined, [attachment.id]); expect(files[0].buffer.toString()).toBe('待制作资料');
-    await expect(f.service.attachmentFiles({ ...base, conversationId: 'other' }, undefined, [attachment.id])).rejects.toThrow(/不属于当前对话/);
-    await expect(f.service.attachmentFiles(base, undefined, ['../escape'])).rejects.toThrow(/选择无效/);
-    await expect(f.service.attachmentFiles(base, undefined, [])).rejects.toThrow(/请选择/);
-    await expect(f.service.attachmentFiles(base, 'turn-id', [attachment.id])).rejects.toThrow(/选择方式无效/);
-    expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toHaveLength(0);
+  it('本地文件关联可重复核对并持久化，来源/费用不变，错回复和模型任务不能冒充本地保存', async () => {
+    let run;
+    const f = await setup({ readRun: async () => structuredClone(run) });
+    await f.service.start(base); const before = await settled(f.service), fees = await f.service.ledger();
+    const sourceSha256 = createHash('sha256').update(before.turns[0].text).digest('hex');
+    const input = { ...base, runId: 'local-export', turnId: base.id, kind: 'word', sourceSha256 };
+    run = { id: input.runId, workspaceId: base.workspaceId, projectId: 'file-project', mode: 'live', createdAt: new Date().toISOString(), snapshot: { outputKind: 'word', sourceChat: { conversationId: base.conversationId, turnId: base.id, sha256: sourceSha256 }, steps: [{ id: 'save-file', kind: 'export', enabled: true }] } };
+    const saved = await f.service.linkExport(input); await f.service.linkExport(input);
+    expect(saved.exports).toHaveLength(1); expect((await f.service.read(base)).exports).toEqual(saved.exports);
+    expect((await f.service.read(base)).turns).toEqual(before.turns); expect(await f.service.ledger()).toEqual(fees); expect(f.calls).toHaveLength(1);
+    await expect(f.service.linkExport({ ...input, sourceSha256: 'a'.repeat(64) })).rejects.toThrow(/原回复/);
+    run.snapshot.steps[0].kind = 'text'; await expect(f.service.linkExport(input)).rejects.toThrow(/绑定当前回复/);
+    run.snapshot.steps[0].kind = 'export'; await f.service.shutdown();
+    const reopened = createChatService({ directory: f.directory, credentialStore: credentials }); services.push(reopened);
+    expect((await reopened.read(base)).exports).toEqual(saved.exports); expect(await reopened.ledger()).toEqual(fees);
+    expect((await reopened.exportWorkspace(base.workspaceId)).conversations[0].exports).toEqual(saved.exports);
   });
   it('直接发送首条消息，不创建Project或工作区文件夹，仅写应用会话目录', async () => {
     const f = await setup(); const started = await f.service.start(base); expect(started.turns[0].status).toBe('running');
@@ -137,7 +101,23 @@ describe('无需项目的普通聊天持久化与计费', () => {
   it('流式通知节流，不能每个token触发费用总览刷新', async () => {
     const f = await setup({ execute: async (_input, _messages, control) => { for (let n = 0; n < 1000; n++) control.onText(`片段${n}`); return receipt; } });
     await f.service.start(base); await settled(f.service);
+    await vi.waitFor(() => expect(f.events.some(event => event.ledgerChanged && event.turn?.status === 'complete')).toBe(true), { timeout: 1000, interval: 10 });
     expect(f.events.filter(event => !event.ledgerChanged).length).toBeLessThanOrEqual(2); expect(f.events.filter(event => event.ledgerChanged)).toHaveLength(2);
+    expect(f.events.filter(event => event.ledgerChanged).map(event => event.turn.status)).toEqual(['running', 'complete']);
+    expect(f.events.at(-1).turn).toMatchObject({ status: 'complete', costState: 'calculated', costCents: 5 });
+  });
+  it('终态缓存可先于事务清理可见，清理完成后仍准确发布一次费用终态通知', async () => {
+    let removals = 0, entered, release;
+    const reached = new Promise(resolve => { entered = resolve; }), paused = new Promise(resolve => { release = resolve; });
+    const f = await setup({ fileSystem: { ...fs, unlink: async filename => { if (filename.endsWith('pending.json') && ++removals === 2) { entered(); await paused; } return fs.unlink(filename); } } });
+    await f.service.start(base);
+    try {
+      await reached;
+      expect((await settled(f.service)).turns[0]).toMatchObject({ status: 'complete', costState: 'calculated', costCents: 5 });
+      expect(f.events.filter(event => event.ledgerChanged)).toHaveLength(1);
+    } finally { release(); }
+    await vi.waitFor(() => expect(f.events.filter(event => event.ledgerChanged).map(event => event.turn.status)).toEqual(['running', 'complete']), { timeout: 1000, interval: 10 });
+    expect(f.calls).toHaveLength(1); expect((await f.service.ledger())[0]).toMatchObject({ costState: 'calculated', costCents: 5 });
   });
   it('关闭服务取消请求并等保存完成，重新打开能继续读且不会重新收费请求', async () => {
     const f = await setup({ execute: async (_input, _messages, control) => new Promise((_resolve, reject) => control.signal.addEventListener('abort', () => reject(new ModelRuntimeError('CANCELLED', '关闭', { requestStarted: true, partialText: '保留回答', usage: receipt.usage })), { once: true })) });
@@ -151,6 +131,7 @@ describe('无需项目的普通聊天持久化与计费', () => {
     const filename = path.join(f.directory, 'chat-v1', base.workspaceId, `${base.conversationId}.conversation.json`), indexFile = path.join(f.directory, 'chat-v1', base.workspaceId, 'index.json');
     const data = JSON.parse(await fs.readFile(filename, 'utf8')), index = JSON.parse(await fs.readFile(indexFile, 'utf8'));
     data.turns[0].status = 'running'; data.turns[0].text = '断电前片段'; index.items[0].activeTurnId = base.id;
+    index.items[0].recordHash = createHash('sha256').update(JSON.stringify(data)).digest('hex');
     await fs.writeFile(filename, JSON.stringify(data)); await fs.writeFile(indexFile, JSON.stringify(index));
     const reopened = createChatService({ directory: f.directory, credentialStore: credentials, execute: async () => { throw Error('must not send'); } }); services.push(reopened);
     expect((await reopened.read(base)).turns[0]).toMatchObject({ status: 'interrupted', text: '断电前片段', costState: 'unknown' }); expect((await reopened.ledger())[0].status).toBe('failed');
@@ -229,7 +210,7 @@ describe('无需项目的普通聊天持久化与计费', () => {
   });
   it('index写前检查32MB边界，超限时不改旧回答或旧账本，也不发送请求', async () => {
     const f = await setup(); await f.service.start(base); await settled(f.service); const index = path.join(f.directory, 'chat-v1', base.workspaceId, 'index.json'), oldIndex = await fs.readFile(index, 'utf8');
-    const original = Buffer.byteLength; const mock = vi.spyOn(Buffer, 'byteLength').mockImplementation((value, ...args) => typeof value === 'string' && value.startsWith('{"version":1,"workspaceId"') && value.includes('"items":') ? 32 * 1024 * 1024 + 1 : original(value, ...args));
+    const original = Buffer.byteLength; const mock = vi.spyOn(Buffer, 'byteLength').mockImplementation((value, ...args) => typeof value === 'string' && /^\{\s*"version":\s*2,\s*"workspaceId"/.test(value) && value.includes('"items":') ? 32 * 1024 * 1024 + 1 : original(value, ...args));
     await expect(f.service.start({ ...base, id: 'too-big' })).rejects.toThrow(/32MB/); mock.mockRestore();
     expect(await fs.readFile(index, 'utf8')).toBe(oldIndex); expect((await f.service.ledger())[0].costCents).toBe(5); expect(f.calls).toHaveLength(1);
   });

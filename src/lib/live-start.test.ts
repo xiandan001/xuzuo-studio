@@ -17,6 +17,16 @@ function fixture() {
 }
 
 describe('真实启动回执与冻结请求', () => {
+  it('keeps selected version, exact references, reasoning and local sizing through the real admission boundary', async () => {
+    const f = fixture(), input = request();
+    input.workflow.sourceArtifactTarget = { id: 'source', sha256: 'a'.repeat(64) };
+    Object.assign(input.workflow.steps[0], { referenceArtifactIds: ['source'], reasoningEffort: 'high' });
+    input.workflow.steps.push({ id: 'export', name: '保存原尺寸', kind: 'export', prompt: '', inputSource: 'previous', enabled: true, engineeringReferenceId: 'source', contentSourceStepIds: ['edit'] });
+    await f.coordinator().start(input);
+    expect(f.payloads[0].workflow.sourceArtifactTarget).toEqual(input.workflow.sourceArtifactTarget);
+    expect(f.payloads[0].workflow.steps[0]).toMatchObject({ referenceArtifactIds: ['source'], reasoningEffort: 'high' });
+    expect(f.payloads[0].workflow.steps[1]).toMatchObject({ engineeringReferenceId: 'source', contentSourceStepIds: ['edit'] });
+  });
   it('已知拒绝保留具体原因，不假称未知，也不做重试或读取', async () => {
     const f = fixture(); f.startChecked.mockResolvedValue({ status: 'rejected', code: 'PROJECT_BUSY', error: '当前项目确实仍在执行。' });
     expect(await f.coordinator().start(request())).toEqual({ status: 'rejected', code: 'PROJECT_BUSY', error: '当前项目确实仍在执行。' });

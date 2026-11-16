@@ -392,6 +392,16 @@ namespace Xuzuo.Setup
             NoReparse(root); var owner = SetupJson.File<Dictionary<string, object>>(Path.Combine(root, name));
             if (Convert.ToInt32(owner["format"]) != 1 || Convert.ToString(owner["appId"]) != metadata.appId || Convert.ToString(owner["installGuid"]) != metadata.installGuid || Convert.ToString(owner["nonce"]) != nonce) throw new InvalidDataException("暂存目录身份无法确认，未删除任何内容。");
         }
+        private void MoveOwnedDirectory(SetupJournal journal, string source, string destination, string marker)
+        {
+            SetupDirectoryMove.Move(source, destination, delegate
+            {
+                ValidateJournal(journal); NoReparse(source); NoReparse(destination);
+                if (!Directory.Exists(source)) throw new DirectoryNotFoundException("受管应用目录已不可用，操作记录保留。");
+                if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("切换目标已被其它内容占用，未覆盖或删除。");
+                ValidateOwner(source, journal.nonce, marker);
+            }, delegate { Report("等待系统释放目录", "系统暂时占用应用文件，正在短时重试…", null); });
+        }
         private void ValidateJournal(SetupJournal journal)
         {
             if (journal == null || journal.format != 1 || journal.appId != metadata.appId || journal.installGuid != metadata.installGuid || !Regex.IsMatch(journal.nonce ?? "", "^[a-f0-9]{32}$")) throw new InvalidDataException("上次操作恢复记录身份无效，所有文件保持原状。");
@@ -481,13 +491,14 @@ namespace Xuzuo.Setup
                     {
                         ValidateOwner(journal.root, journal.nonce, OwnerFile);
                         if (Directory.Exists(journal.stage)) throw new IOException("恢复暂存目录已被占用，已保留全部副本。");
-                        Directory.Move(journal.root, journal.stage);
+                        MoveOwnedDirectory(journal, journal.root, journal.stage, OwnerFile);
                     }
                 }
                 if (Directory.Exists(journal.backup))
                 {
                     if (!String.IsNullOrEmpty(journal.legacyDisabled)) { var original = At(journal.backup, journal.legacyDisabled); var disabled = original + ".disabled.bin"; if (File.Exists(disabled)) { if (File.Exists(original)) throw new IOException("旧维护入口恢复位置已被占用。"); File.Move(disabled, original); } }
-                    if (Directory.Exists(journal.root)) throw new IOException("原目录已被其它内容占用，已保留备份，请先检查。"); File.Delete(Path.Combine(journal.backup, OperationFile)); Directory.Move(journal.backup, journal.root);
+                    if (Directory.Exists(journal.root)) throw new IOException("原目录已被其它内容占用，已保留备份，请先检查。");
+                    MoveOwnedDirectory(journal, journal.backup, journal.root, OperationFile); File.Delete(Path.Combine(journal.root, OperationFile));
                 }
                 else if (File.Exists(Path.Combine(journal.root, OperationFile))) { ValidateOwner(journal.root, journal.nonce, OperationFile); File.Delete(Path.Combine(journal.root, OperationFile)); }
                 if (Directory.Exists(journal.stage)) { ValidateOwner(journal.stage, journal.nonce, OwnerFile); DeleteOwned(journal.stage, journal.newManifest, false); }
@@ -605,13 +616,13 @@ namespace Xuzuo.Setup
                 RejectOtherRunningCopies(root);
                 Report("正在完成安装", "正在切换应用并更新当前用户入口…", 93, true);
                 journal.phase = "switching"; SaveJournal(journal);
-                if (Directory.Exists(root)) { SetupJson.Write(Path.Combine(root, OperationFile), new { format = 1, appId = metadata.appId, installGuid = metadata.installGuid, nonce = nonce }); Directory.Move(root, journal.backup); }
+                if (Directory.Exists(root)) { SetupJson.Write(Path.Combine(root, OperationFile), new { format = 1, appId = metadata.appId, installGuid = metadata.installGuid, nonce = nonce }); MoveOwnedDirectory(journal, root, journal.backup, OperationFile); }
                 if (registration != null && old == null && !String.IsNullOrEmpty(registration.LegacyUninstaller) && Inside(root, registration.LegacyUninstaller))
                 {
                     var relative = Full(registration.LegacyUninstaller).Substring(root.Length + 1).Replace('\\', '/'); var legacy = At(journal.backup, relative);
                     if (File.Exists(legacy)) { journal.legacyDisabled = relative; SaveJournal(journal); File.Move(legacy, legacy + ".disabled.bin"); }
                 }
-                Directory.Move(journal.stage, root); Register(root, desktop, manifest);
+                MoveOwnedDirectory(journal, journal.stage, root, OwnerFile); Register(root, desktop, manifest);
                 journal.phase = "committed"; SaveJournal(journal);
                 var retained = "";
                 if (Directory.Exists(journal.backup))

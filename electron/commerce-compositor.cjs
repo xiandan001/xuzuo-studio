@@ -110,7 +110,17 @@ function composeCommerceImage(input, loadModule = require) {
   return { width: final.width, height: final.height, buffer: encode(final, loadModule), protectedPixelsVerified };
 }
 function previewCommerceRaster(input, loadModule = require) {
-  const raster = rgbaRaster(input, loadModule), maximum = input.maxSide === 1280 ? 1280 : 512, ratio = Math.min(1, maximum / raster.width, maximum / raster.height), preview = ratio < 1 ? resized(raster, Math.max(1, Math.round(raster.width * ratio)), Math.max(1, Math.round(raster.height * ratio))) : raster;
-  return { width: raster.width, height: raster.height, buffer: encode(preview, loadModule) };
+  const raster = rgbaRaster(input, loadModule), maximum = [768, 1280, 2048].includes(input.maxSide) ? input.maxSide : 512;
+  let selected = raster, crop = { x: 0, y: 0, width: 1, height: 1 };
+  if (input.region !== undefined) {
+    const region = input.region;
+    if (!region || Object.keys(region).some(key => !['x', 'y', 'width', 'height'].includes(key)) || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(region[key])) || region.x < 0 || region.x >= 1 || region.y < 0 || region.y >= 1 || region.width <= 0 || region.height <= 0 || region.x + region.width > 1.000001 || region.y + region.height > 1.000001) throw Error('清晰预览区域无效。');
+    const x = Math.max(0, Math.floor(region.x * raster.width)), y = Math.max(0, Math.floor(region.y * raster.height)), width = Math.max(1, Math.min(raster.width, Math.ceil((region.x + region.width) * raster.width)) - x), height = Math.max(1, Math.min(raster.height, Math.ceil((region.y + region.height) * raster.height)) - y);
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let row = 0; row < height; row++) raster.pixels.copy(pixels, row * width * 4, ((y + row) * raster.width + x) * 4, ((y + row) * raster.width + x + width) * 4);
+    selected = { width, height, pixels }; crop = { x: x / raster.width, y: y / raster.height, width: width / raster.width, height: height / raster.height };
+  }
+  const ratio = Math.min(1, maximum / selected.width, maximum / selected.height, Math.sqrt(2000000 / (selected.width * selected.height))), preview = ratio < 1 ? resized(selected, Math.max(1, Math.floor(selected.width * ratio)), Math.max(1, Math.floor(selected.height * ratio))) : selected;
+  return { width: raster.width, height: raster.height, previewWidth: preview.width, previewHeight: preview.height, crop, buffer: encode(preview, loadModule) };
 }
 module.exports = { rgbaRaster, composeCommerceImage, applyCommerceAlpha, protectCommercePixels, previewCommerceRaster };

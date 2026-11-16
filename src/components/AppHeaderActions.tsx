@@ -29,10 +29,10 @@ export function AppHeaderActions({ summary, onNavigate, onSearch, onNotification
     <button type="button" className="btn-icon header-notifications" aria-label="通知与最近动态" onClick={onNotifications}><Bell size={18} /></button>
     {onOpenFolder && <button type="button" className="btn-icon header-folder" aria-label="打开当前文件夹" onClick={onOpenFolder}><FolderOpen size={18} /></button>}
     <div className="focused-header-more"><Select aria-label="更多应用操作" value="" placeholder="更多" onValueChange={action} options={[
-      { value: 'settings', label: '外观、界面与设置' }, { value: 'models', label: '模型与 API Key' },
+      { value: 'settings', label: '外观、界面与设置' }, { value: 'models', label: '模型与账户' },
       { value: 'folder', label: '打开当前文件夹', disabled: !onOpenFolder },
       { value: 'notifications', label: '通知与最近动态' }, { value: 'help', label: '使用帮助' },
     ]} /></div>
-    {onCreateProject && <button type="button" className="btn btn-primary header-new-project" onClick={onCreateProject}><Plus size={17} />新建项目</button>}
+    {onCreateProject && <button type="button" className="btn btn-secondary header-new-project" onClick={onCreateProject}><Plus size={17} />新建项目</button>}
   </div>;
 }

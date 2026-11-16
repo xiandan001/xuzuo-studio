@@ -4,6 +4,7 @@ const { nativeBusinessProjects, BUSINESS_OFFICE_MIME } = require('./business-pro
 const planner = require('./business-production.runtime.cjs');
 const { validateBusinessFormalArtifact } = require('./business-formal.cjs');
 const { unclaimedBusinessRuns } = require('./business-production-lineage.cjs');
+const { createBusinessRevisionAdopter } = require('./business-revision-adoption.cjs');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stamp = () => new Date().toISOString();
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -291,6 +292,7 @@ function createBusinessProduction(options) {
   }
   const api = {
     prepare, start, control, deliver, adopt,
+    adoptRevision: createBusinessRevisionAdopter({ ...options, deliveryFiles, allProjects, writable, busy: key => jobs.has(key) || starting.has(key) || preparing.has(key) }),
     isProjectBusy: projectId => [...jobs.values()].some(job => job.projectIds.has(projectId)) || [...preparingScopes.values()].some(ids => ids.has(projectId)),
     isWorkspaceBusy: workspaceId => [...jobs.keys(), ...starting.keys(), ...preparing.keys()].some(key => key.startsWith(workspaceId + '/')),
     async drain() { await Promise.allSettled([...starting.values(), ...preparing.values(), ...[...jobs.values()].map(job => job.task)]); },

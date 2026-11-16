@@ -19,7 +19,7 @@ function wiredRuntime() {
   const commerce = generic('commerce-images'); commerce.save = vi.fn(async () => 'saved');
   const marketBusy = new Set(), market = generic('bead-market'); market.isProjectBusy = id => marketBusy.has(id); market.isWorkspaceBusy = id => id === 'workspace' && marketBusy.size > 0; market.read = vi.fn(async input => ({ state: { projectId: input.projectId } })); market.save = vi.fn(async input => input); market.query = vi.fn(async () => ({ jobId: 'query' })); market.cancel = vi.fn(pending);
   const animation = generic('animation-service'); animation.isProjectBusy = () => false; animation.isWorkspaceBusy = () => false;
-  const chat = generic('chat-service'); chat.importAttachments = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text' }]); chat.attachmentFiles = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text', buffer: Buffer.from('资料') }]);
+  const chat = generic('chat-service'); chat.attachToProject = vi.fn(async () => [{ id: 'project-file', name: 'notes.txt' }]); chat.importAttachments = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text' }]); chat.attachmentFiles = vi.fn(async () => [{ id: 'chat-file', name: 'notes.txt', mimeType: 'text/plain', bytes: 6, kind: 'text', buffer: Buffer.from('资料') }]);
   const artifacts = generic('artifact-store'); artifacts.listProject = vi.fn(async () => []); artifacts.write = vi.fn(async input => ({ id: 'project-file', name: input.name, mimeType: input.mimeType, bytes: input.buffer.length, kind: 'text' }));
   const marketSessions = generic('bead-market-sessions'); marketSessions.sessions = vi.fn(async () => [{ platform: 'taobao', status: 'not-opened' }]); marketSessions.login = vi.fn(async () => ({ opened: true })); marketSessions.confirmLogin = vi.fn(async () => [{ platform: 'taobao', status: 'confirmed' }]); marketSessions.markNeedsLogin = vi.fn(pending);
   const marketSources = generic('bead-market-sources'); marketSources.search = vi.fn(async () => ({ platform: 'taobao', status: 'needs-login', capturedAt: '2026-11-08T00:00:00.000Z', offers: [] }));
@@ -40,30 +40,35 @@ function wiredRuntime() {
   vm.runInContext(fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8') + '\n;globalThis.testRuntime={registerRuntime,setClosing:value=>{runtimeClosing=value;},drain:()=>drainRuntime(),writeFailed:()=>closingWriteFailed};', context);
   context.testRuntime.registerRuntime({ list: async () => ['key-meta'] });
   const invoke = (name, input) => Promise.resolve().then(() => handlers.get('runtime:' + name)({}, input));
-  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions, chat, artifacts };
+  return { invoke, context, captures, busy, events, data, production, assist, listing, commerce, live, storage, automation, backup, dialog, market, marketBusy, marketSessions, services, chat, artifacts };
 }
 describe('真实main注册的业务IPC与生命周期接线（无Electron进程）', () => {
   it('无项目聊天附件经真实main注册和主进程选文件后传给聊天服务', async () => {
     const f = wiredRuntime(), scope = { workspaceId: 'workspace', conversationId: 'conversation' };
     f.dialog.showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ['C:\\selected\\notes.txt'] }));
-    await expect(f.invoke('chat-importAttachments', scope)).resolves.toMatchObject([{ id: 'chat-file', name: 'notes.txt' }]);
+    await expect(f.invoke('chat-import-attachments', scope)).resolves.toMatchObject([{ id: 'chat-file', name: 'notes.txt' }]);
     expect(f.dialog.showOpenDialog).toHaveBeenCalledOnce();
-    expect(f.chat.importAttachments).toHaveBeenCalledWith(scope, ['C:\\selected\\notes.txt']);
+    expect(f.chat.importAttachments).toHaveBeenCalledWith({ ...scope, paths: ['C:\\selected\\notes.txt'] });
     expect(f.storage.assertNotPurged).not.toHaveBeenCalled();
     expect(f.artifacts.write).not.toHaveBeenCalled();
   });
-  it('聊天附件复制项目时通过延后初始化的项目校验并传递原始字节', async () => {
-    const f = wiredRuntime(), input = { workspaceId: 'workspace', conversationId: 'conversation', turnId: 'turn', projectId: 'project' };
-    await expect(f.invoke('chat-transferAttachments', input)).resolves.toMatchObject([{ id: 'project-file', name: 'notes.txt' }]);
+  it.each([{ workspaceId: 'workspace', conversationId: 'conversation', paths: ['/renderer/private.txt'] }, { workspaceId: '../workspace', conversationId: 'conversation' }])('原生附件入口拒绝渲染端本机路径与无效工作区，不打开文件框：%j', async input => {
+    const f = wiredRuntime(); f.dialog.showOpenDialog = vi.fn();
+    await expect(f.invoke('chat-import-attachments', input)).rejects.toThrow('聊天附件所属');
+    expect(f.dialog.showOpenDialog).not.toHaveBeenCalled(); expect(f.chat.importAttachments).not.toHaveBeenCalled();
+  });
+  it('聊天附件复制项目时通过延后初始化的项目校验并交给附件服务校验原始字节', async () => {
+    const f = wiredRuntime(), input = { workspaceId: 'workspace', conversationId: 'conversation', attachmentIds: ['chat-file'], projectId: 'project' };
+    await expect(f.invoke('chat-attach-to-project', input)).resolves.toMatchObject([{ id: 'project-file', name: 'notes.txt' }]);
     expect(f.storage.assertNotPurged).toHaveBeenCalledWith('project');
     expect(f.storage.assertProject).toHaveBeenCalledWith('project', 'workspace');
-    expect(f.chat.attachmentFiles).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation' }, 'turn', undefined);
-    expect(f.artifacts.write).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project', name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('资料'), preserveOriginalName: true }));
+    expect(f.chat.attachToProject).toHaveBeenCalledWith(input);
+    expect(f.artifacts.write).not.toHaveBeenCalled();
   });
   it('退出期间拒绝新附件选择和复制，不弹文件框也不读写附件', async () => {
     const f = wiredRuntime(); f.dialog.showOpenDialog = vi.fn(); f.context.testRuntime.setClosing(true);
-    await expect(f.invoke('chat-importAttachments', { workspaceId: 'workspace', conversationId: 'conversation' })).rejects.toThrow('正在保存并退出');
-    await expect(f.invoke('chat-transferAttachments', { workspaceId: 'workspace', conversationId: 'conversation', attachmentIds: ['draft-file'], projectId: 'project' })).rejects.toThrow('正在保存并退出');
+    await expect(f.invoke('chat-import-attachments', { workspaceId: 'workspace', conversationId: 'conversation' })).rejects.toThrow('正在保存并退出');
+    await expect(f.invoke('chat-attach-to-project', { workspaceId: 'workspace', conversationId: 'conversation', attachmentIds: ['draft-file'], projectId: 'project' })).rejects.toThrow('正在保存并退出');
     expect(f.dialog.showOpenDialog).not.toHaveBeenCalled(); expect(f.chat.importAttachments).not.toHaveBeenCalled(); expect(f.chat.attachmentFiles).not.toHaveBeenCalled(); expect(f.artifacts.write).not.toHaveBeenCalled();
   });
 
@@ -107,4 +112,34 @@ describe('真实main注册的业务IPC与生命周期接线（无Electron进程�
     const f = wiredRuntime(), proof = { documentSha256: 'a'.repeat(64), originalSourceArtifactId: 'real-source' }, artifacts = [{ id: 'real-output' }]; await f.captures['commerce-images'].onExport({ projectId: 'project', document: { title: '正式产物' }, artifacts, commerceExport: proof }); expect(f.live.recordLocalExport).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'workspace', projectId: 'project', artifacts, commerceExport: proof }));
     await f.context.testRuntime.drain(); expect(f.events.indexOf('business-production:prepareClose')).toBeLessThan(f.events.indexOf('commerce-images:shutdown')); expect(f.events.indexOf('commerce-images:shutdown')).toBeLessThan(f.events.indexOf('live-workflow-engine:shutdown'));
   });
+  it('新增识读、对账单、预检和聊天导出接入实际main注册器', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'), statements = f.services.get('business-statements'), preflight = f.services.get('delivery-preflight'), chat = f.services.get('chat-service');
+    intake.intakeRead = vi.fn(async input => ({ intakeId: 'draft', workspaceId: input.workspaceId }));
+    statements.exportStatement = vi.fn(async () => ({ saved: true })); preflight.preflight = vi.fn(async () => ({ version: 1 })); chat.linkExport = vi.fn(async () => ({ exports: [] }));
+    await expect(f.invoke('business-intakeRead', { workspaceId: 'workspace', orderId: 'order' })).resolves.toMatchObject({ intakeId: 'draft' });
+    await expect(f.invoke('business-exportStatement', { workspaceId: 'workspace', orderId: 'order' })).resolves.toEqual({ saved: true });
+    await expect(f.invoke('delivery-preflight', { projectId: 'project', artifactIds: ['file'] })).resolves.toEqual({ version: 1 });
+    await expect(f.invoke('chat-linkExport', { workspaceId: 'workspace', conversationId: 'conversation', runId: 'run' })).resolves.toEqual({ exports: [] });
+    expect(f.captures['business-intake'].businessStore).toBe(f.data.store); expect(f.captures['business-intake'].businessAssist).toBe(f.assist);
+    expect(f.captures['business-statements'].businessStore).toBe(f.data.store); expect(f.captures['delivery-preflight'].officePreview()).toBe(f.services.get('office-preview-handlers'));
+    f.context.testRuntime.setClosing(true);
+    for (const name of ['business-intakeRead', 'business-intakeExtract', 'business-intakeConfirm', 'business-adoptRevision', 'business-exportStatement', 'delivery-preflight', 'chat-linkExport']) await expect(f.invoke(name, { workspaceId: 'workspace' })).rejects.toThrow('退出');
+  });
+  it('退出主动取消在途需求识读不是本地保存失败，排空后可退出', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'); let rejectRequest;
+    intake.intakeExtract = vi.fn(() => new Promise((_, reject) => { rejectRequest = reject; }));
+    const request = f.invoke('business-intakeExtract', { workspaceId: 'workspace', orderId: 'order', intakeId: 'draft' }), observed = request.catch(error => error);
+    for (let round = 0; !rejectRequest && round < 30; round++) await Promise.resolve(); expect(rejectRequest).toBeTypeOf('function');
+    f.assist.prepareClose = async () => { rejectRequest(Object.assign(Error('已因退出取消识读，费用已保留'), { name: 'AbortError', code: 'BUSINESS_ASSIST_CLOSING' })); };
+    await expect(f.context.testRuntime.drain()).resolves.toBeUndefined(); expect((await observed).name).toBe('AbortError'); expect(f.context.testRuntime.writeFailed()).toBe(false);
+  });
+  it('识读候选真实落盘失败仍阻止静默退出，不能借取消豁免吞写入错误', async () => {
+    const f = wiredRuntime(), intake = f.services.get('business-intake'); let rejectRequest;
+    intake.intakeExtract = vi.fn(() => new Promise((_, reject) => { rejectRequest = reject; }));
+    const request = f.invoke('business-intakeExtract', { workspaceId: 'workspace', orderId: 'order', intakeId: 'draft' }), observed = request.catch(error => error);
+    for (let round = 0; !rejectRequest && round < 30; round++) await Promise.resolve(); expect(rejectRequest).toBeTypeOf('function');
+    f.assist.prepareClose = async () => { rejectRequest(Error('controlled intake draft disk failure')); };
+    await expect(f.context.testRuntime.drain()).rejects.toThrow('未能保存'); expect((await observed).message).toContain('disk failure'); expect(f.context.testRuntime.writeFailed()).toBe(true);
+  });
+
 });

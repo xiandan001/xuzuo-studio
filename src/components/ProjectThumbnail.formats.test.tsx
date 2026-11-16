@@ -37,6 +37,13 @@ async function intersect(visible: boolean, index = observers.length - 1, queued 
 }
 
 describe('项目GIF/SVG预览真实可见性与原格式', () => {
+  it('仅为显式另存成品读取本地图片，不把同项目参考图冒充生成结果', async () => {
+    const f = fixture('image/gif'); f.runner.runs = [];
+    const list = vi.fn(async () => [{ ...f.artifact, id: 'reference-photo' }, f.artifact]); f.runner.listProjectArtifacts = list;
+    await render(f); expect(list).not.toHaveBeenCalled(); expect(f.thumbnail).not.toHaveBeenCalled();
+    f.project = { ...f.project, localOutputArtifactIds: [f.artifact.id] }; await render(f); expect(list).toHaveBeenCalledExactlyOnceWith(f.project.id); await intersect(true);
+    expect(f.thumbnail).toHaveBeenCalledExactlyOnceWith(f.artifact.id); expect(container.textContent).toContain('已保存图片'); expect(container.textContent).not.toContain('实际生成图片');
+  });
   it('原静态位图仍走已有缩略接口和160px懒加载，不套用GIF原图20MB限制', async () => {
     const f = fixture('image/png', { bytes: 21 * 1024 * 1024 }), url = 'data:image/png;base64,iVBORw0KGgo=';
     f.thumbnail.mockResolvedValue({ mimeType: 'image/png', dataUrl: url, thumbnail: true });

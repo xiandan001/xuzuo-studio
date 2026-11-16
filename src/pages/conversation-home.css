@@ -30,3 +30,9 @@
 .conversation-recent-work>svg{flex-shrink:0;color:var(--ui-fg-muted)}
 .conversation-work-icon{display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex-shrink:0;border-radius:9px;background:var(--ui-surface-subtle);color:var(--ui-fg-secondary)}
 @media(max-width:950px){.conversation-home{gap:16px}.conversation-recent>div{grid-template-columns:minmax(0,1fr)}.conversation-recent-work{padding:11px 13px}}
+
+.conversation-home .home-chat-input-row textarea{min-height:56px;max-height:200px;resize:none}.conversation-home .home-chat-footnote,.conversation-home .home-chat-footnote .cost-amount>small{font-size:13px}.conversation-home .home-chat-composer{border-radius:16px}.conversation-home .home-chat-send{width:38px;height:38px}.conversation-recent h2,.conversation-recent>header .text-button{font-size:14px}.conversation-recent-work strong{font-size:15px}.conversation-recent-work small{font-size:13px}
+
+/* Match the workspace page rhythm while keeping home controls away from the
+   sidebar, scroll edge, and macOS window boundary. */
+.next-interface .content-overview .conversation-home{box-sizing:border-box;width:100%;max-width:1200px;padding:24px clamp(24px,3vw,40px) 28px}

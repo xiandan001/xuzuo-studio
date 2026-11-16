@@ -13,7 +13,7 @@ const dependencies = createRequire(path.join(root, 'work/ui-build/package.json')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const work = path.join(root, 'work/setup-runtime');
 const release = path.resolve(root, manifest.build.directories.output);
-const sources = ['setup-contracts.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs'].map(name => path.join(root, 'scripts/native', name));
+const sources = ['setup-contracts.cs', 'setup-directory-move.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs'].map(name => path.join(root, 'scripts/native', name));
 const ui = path.join(root, 'assets/setup-window.xaml'), icon = path.join(root, 'assets/app-icon.png');
 const windows = process.env.SystemRoot || 'C:/Windows';
 const framework = path.join(windows, 'Microsoft.NET/Framework64/v4.0.30319');

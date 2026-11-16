@@ -30,6 +30,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Verify release version metadata
+        run: node scripts/verify-release-version.mjs
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked Electron runtime
@@ -75,6 +77,10 @@ jobs:
         run: node node_modules/vite/bin/vite.js build
       - name: Verify actual business renderer interactions
         run: node scripts/verify-business-browser.mjs
+      - name: Verify project overview and revision interactions
+        run: node scripts/verify-project-flow-browser.mjs
+      - name: Verify clear image viewport and settings interactions
+        run: node scripts/verify-image-settings-browser.mjs
       - name: Verify bead market native data and renderer
         run: node scripts/verify-bead-market-ui.mjs
       - name: Verify real animation studio interactions
@@ -129,6 +135,10 @@ jobs:
             work/bead-native-output/*.png
             work/commerce-native-output/report.json
             work/commerce-native-output/*.png
+            work/image-settings-browser-output/report.json
+            work/image-settings-browser-output/*.png
+            work/project-flow-browser-output/report.json
+            work/project-flow-browser-output/*.png
             work/business-browser-output/report.json
             work/business-browser-output/*.png
             work/bead-market-browser-native-output/report.json
@@ -151,6 +161,8 @@ jobs:
         run: node scripts/build-drive-helper.mjs
       - name: Build custom maintenance runtime
         run: node scripts/build-setup.mjs runtime
+      - name: Verify bounded directory switching under real locks
+        run: node scripts/verify-setup-directory-move.mjs
       - name: Package desktop application
         run: node node_modules/electron-builder/cli.js --win dir --publish never --config.electronDist=node_modules/electron/dist
       - name: Build custom Windows installer
@@ -179,7 +191,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.6.0/full-install-lifecycle.json
+            outputs/release-v2.9.0/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -189,8 +201,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.exe.blockmap
-            outputs/release-v2.6.0/Xuzuo-Studio-Setup-2.6.0.manifest.json
-            outputs/release-v2.6.0/latest.yml
-            outputs/release-v2.6.0/package-verification.json
+            outputs/release-v2.9.0/Xuzuo-Studio-Setup-2.9.0.exe
+            outputs/release-v2.9.0/Xuzuo-Studio-Setup-2.9.0.exe.blockmap
+            outputs/release-v2.9.0/Xuzuo-Studio-Setup-2.9.0.manifest.json
+            outputs/release-v2.9.0/latest.yml
+            outputs/release-v2.9.0/package-verification.json

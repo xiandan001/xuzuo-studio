@@ -1,6 +1,7 @@
 const { endpoint, failure, jsonRequest, normalizedUsage } = require('./provider-http.cjs');
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
+const { PDF, pdfInputIssue } = require('./production-pdf.cjs');
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/csv', 'application/json', 'application/xml']);
@@ -36,7 +37,9 @@ function contentFor(protocol, text, files) {
 
 function textRequest(request, files, context) {
   const protocol = request.connection.protocol;
-  if (request.kind === 'text') files = files.filter(file => TEXT_TYPES.has(file.mimeType) || file.mimeType.startsWith('text/'));
+  const pdfIssue = pdfInputIssue(request.connection, request.model, files);
+  if (pdfIssue) throw failure('UNSUPPORTED_ATTACHMENT', pdfIssue, context);
+  if (request.kind === 'text') files = files.filter(file => file.mimeType === PDF || TEXT_TYPES.has(file.mimeType) || file.mimeType.startsWith('text/'));
   if (request.kind === 'vision') {
     const hadVideo = files.some(file => file.mimeType.startsWith('video/'));
     files = files.filter(file => !file.mimeType.startsWith('video/'));
@@ -82,6 +85,7 @@ function textRequest(request, files, context) {
   const effortFields = reasoningRequestFields(request.connection, request.model, request.options.reasoningEffort);
   body = { ...body, ...effortFields, ...(body.generationConfig ? { generationConfig: { ...body.generationConfig, ...(effortFields.generationConfig || {}) } } : {}) };
   const serialized = JSON.stringify(body);
+  if (Buffer.byteLength(serialized, 'utf8') > 112 * 1024 * 1024) throw failure('ATTACHMENT_TOO_LARGE', '编码后的文档请求过大，请拆分资料后制作。', context);
   if (request.kind === 'video-understanding' && Buffer.byteLength(serialized, 'utf8') >= 20 * 1024 * 1024) throw failure('VIDEO_TOO_LARGE', 'Gemini 内联视频的完整请求需要小于 20 MB，请先压缩或裁剪 MP4。', context);
   return { url, options: { method: 'POST', headers, body: serialized }, billingRequestSnapshot: createBillingRequestSnapshot(request, body) };
 }

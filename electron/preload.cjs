@@ -22,8 +22,17 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 
 contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
+  projectTemplates: Object.fromEntries(['list','save','instantiate','remove'].map(method => [method, input => ipcRenderer.invoke(`runtime:project-templates-${method}`, input)])),
+  customerProofing: {
+    create: input => ipcRenderer.invoke('runtime:proofing-create', input),
+    importFeedback: input => ipcRenderer.invoke('runtime:proofing-import', input),
+  },
   chat: {
-    ...Object.fromEntries(['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'importAttachments', 'transferAttachments'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
+    ...Object.fromEntries(['search','manage','selectTarget','inspectTarget','importBytes','importAsset','importProjectArtifact','linkProduction', 'linkExport'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
+    importAttachments: input => ipcRenderer.invoke('runtime:chat-import-attachments', input),
+    previewAttachment: input => ipcRenderer.invoke('runtime:chat-preview-attachment', input),
+    attachToProject: input => ipcRenderer.invoke('runtime:chat-attach-to-project', input),
+    ...Object.fromEntries(['list', 'read', 'start', 'cancel', 'flush', 'ledger'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('chat:changed', handler); return () => ipcRenderer.removeListener('chat:changed', handler); },
   },
   animation: {
@@ -40,9 +49,9 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   business: {
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('business:changed', handler); return () => ipcRenderer.removeListener('business:changed', handler); },
-    ...Object.fromEntries(Object.entries({ snapshot: 'snapshot', save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery', prepare: 'prepare', start: 'start', control: 'control', listing: 'listing', deliver: 'deliver', adopt: 'adopt', assist: 'assist' }).map(([method, name]) => [method, input => ipcRenderer.invoke(`runtime:business-${name}`, input)])),
+    ...Object.fromEntries(Object.entries({ snapshot: 'snapshot', save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery', prepare: 'prepare', start: 'start', control: 'control', listing: 'listing', deliver: 'deliver', adopt: 'adopt', adoptRevision: 'adoptRevision', intakeRead: 'intakeRead', intakeExtract: 'intakeExtract', intakeConfirm: 'intakeConfirm', exportStatement: 'exportStatement', assist: 'assist', allocateCosts: 'allocateCosts', linkOutput: 'linkOutput', importProofFeedback: 'importProofFeedback' }).map(([method, name]) => [method, input => ipcRenderer.invoke(`runtime:business-${name}`, input)])),
   },
-  commerceImages: Object.fromEntries(['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery'].map(method => [method, input => ipcRenderer.invoke(`runtime:commerce-${method}`, input)])),
+  commerceImages: Object.fromEntries(['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery', 'preview', 'cancelPreview'].map(method => [method, input => ipcRenderer.invoke(`runtime:commerce-${method}`, input)])),
   projectPurge: {
     preview: input => ipcRenderer.invoke('runtime:project-purge-preview', input),
     execute: input => ipcRenderer.invoke('runtime:project-purge-execute', input),
@@ -119,6 +128,8 @@ contextBridge.exposeInMainWorld('desktop', {
     relocateWorkspace: input => ipcRenderer.invoke('runtime:workspace-relocate', input),
   },
   delivery: {
+    preflight: input => ipcRenderer.invoke('runtime:delivery-preflight', input),
+    cancelPreflight: input => ipcRenderer.invoke('runtime:delivery-preflight-cancel', input),
     inspect: input => ipcRenderer.invoke('runtime:delivery-inspect', input),
     saveReview: input => ipcRenderer.invoke('runtime:delivery-review', input),
     confirm: input => ipcRenderer.invoke('runtime:delivery-confirm', input),

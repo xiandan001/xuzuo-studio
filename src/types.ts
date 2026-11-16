@@ -13,7 +13,7 @@ import type { AssetLibraryBridge, ProjectReference } from './asset-types';
 import type { AppUpdateBridge } from './update-types';
 import type { ReactNode } from 'react';
 
-export type ViewId = 'overview' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools' | 'business';
+export type ViewId = 'overview' | 'project' | 'documents' | 'images' | 'projects' | 'assets' | 'activity' | 'finance' | 'settings' | 'prompts' | 'categories' | 'workflows' | 'models' | 'automation' | 'tools' | 'business';
 export type ProjectKind = 'ppt' | 'word' | 'excel' | 'image';
 export type PromptCategory = ProjectKind | 'general';
 export interface Workspace {
@@ -46,6 +46,7 @@ export interface PromptTemplate extends PromptDraft {
 }
 export interface AssetApplication { token: string; workspaceId: string; projectId: string; file: ArtifactMetadata; }
 export interface PromptApplication {
+  referenceFiles?: import('./asset-types').ProjectReference[];
   token: string;
   projectId: string;
   category: PromptCategory;
@@ -54,7 +55,7 @@ export interface PromptApplication {
   imagePreset?: string;
 }
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'complete' | 'paused';
-export interface Project {
+export interface Project { localOutputArtifactIds?: string[];
   purgedAt?: string;
   confirmedDelivery?: { id: string; fingerprint: string; runStateSignature: string };
   liveLedgerBaselineCents?: number;
@@ -113,10 +114,16 @@ export interface Preferences {
   reduceMotion: boolean;
 }
 export interface PageProps {
+  chatIntent?: { token: string; conversationId: string; workspaceId: string; projectId: string; artifactId: string; kind: ProjectKind; name: string };
+  onChatIntentConsumed?: (token: string) => void;
+  onDiscussArtifact?: (file: ArtifactMetadata, kind: ProjectKind) => void;
   businessIntent?: { token: string; recipe: import('./business-types').BusinessRecipe; orderId?: string };
   onBusinessIntentConsumed?: (token: string) => void;
   onOpenBusiness?: (recipe: import('./business-types').BusinessRecipe, orderId?: string) => void;
   activeView?: ViewId;
+  onOpenTask?: (runId: string, projectId: string) => void;
+  taskIntent?: { token: string; workspaceId: string; projectId: string; runId: string };
+  onTaskIntentConsumed?: (token: string) => void;
   automationIntent?: import('./automation-types').AutomationIntent;
   onAutomationIntentConsumed?: (token: string) => void;
   onAutomateWorkflow?: (workflowId: string) => void;
@@ -141,7 +148,7 @@ export interface PageProps {
   onPromptApplied: (token: string) => void;
   onSavePrompt: (draft: PromptDraft, id?: string) => void;
   onManagePrompt?: (id: string, action: 'archive' | 'restore' | 'trash' | 'favorite' | 'unfavorite') => void;
-  onUsePrompt: (template: PromptTemplate, resolvedContent: string, targetProjectId?: string) => void;
+  onUsePrompt: (template: PromptTemplate, resolvedContent: string, targetProjectId?: string, options?: { referenceFiles?: import('./asset-types').ProjectReference[] }) => void;
   onMoveProject: (projectId: string, workspaceId: string, changes?: import('./lib/project-move').ProjectMoveChanges) => Promise<boolean>;
   taskProgress?: Record<string, number>;
   projects: Project[];
@@ -166,10 +173,12 @@ export interface PageProps {
   onProjectDelivered?: (projectId: string, receipt: DeliveryReceipt, selection: DeliverySelection) => void | Promise<void>;
   onGenerate: (projectId: string, action: LedgerEntry['action'], count?: number, onStarted?: () => void, input?: ImageOutputOptions & { beadBaseRequestId?: string; engineeringEnabled?: boolean; engineeringReferenceId?: string; wallpaperTarget?: import('./wallpaper-types').WallpaperTarget; prompt: string; input?: string; attachmentIds?: string[]; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; modelConfigId?: string; credentialId?: string; capability?: ModelCapability; documentImages?: import('./lib/document-illustrations').DocumentImageOptions }) => boolean | void;
   onExport: (projectId?: string, draft?: { title: string; text: string }) => void;
-  onUpdatePreferences: (changes: Partial<Preferences>) => void;
+  onUpdatePreferences: (changes: Partial<Preferences>) => boolean | void;
 }
 export interface DesktopBridge {
   readonly platform?: string;
+  projectTemplates?: import('./project-template-types').ProjectTemplatesBridge;
+  customerProofing?: import('./proofing-types').CustomerProofingBridge;
   chat?: import('./chat-types').ChatBridge;
   animation?: import('./animation-types').AnimationBridge;
   beadMarket?: import('./bead-market-types').BeadMarketBridge;

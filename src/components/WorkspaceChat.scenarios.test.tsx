@@ -22,7 +22,7 @@ afterEach(async () => {
   finally { root = undefined; host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
 });
 
-const reference: ChatAttachment = { id: 'reference-image', name: '产品包装参考.png', kind: 'image', mimeType: 'image/png', bytes: 1000 };
+const reference: ChatAttachment = { id: 'reference-image', name: '产品包装参考.png', kind: 'image', mimeType: 'image/png', bytes: 1000, sha256: 'a'.repeat(64), createdAt: new Date().toISOString() };
 const custom: ImageUseTemplate = { id: 'brand-purpose', workspaceId: 'workspace-one', name: '品牌商品横幅', prompt: '使用附件中的产品包装，制作清晰的品牌商品横幅。', size: '1536x1024', background: 'opaque', minReferences: 1, enabled: true };
 const content = () => host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!;
 async function input(text: string) { await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(content(), text); content().dispatchEvent(new Event('input', { bubbles: true })); }); }
@@ -30,7 +30,7 @@ async function click(label: string) {
   const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find(item => item.getAttribute('aria-label') === label || item.textContent?.trim() === label);
   expect(button, label).toBeTruthy(); await act(async () => { button!.click(); });
 }
-async function openScenarios() { const picker = host.querySelector<HTMLButtonElement>('[aria-label="使用场景"]')!; expect(picker).toBeTruthy(); await act(async () => { picker.click(); }); }
+async function openScenarios() { const picker = host.querySelector<HTMLButtonElement>('[aria-label="选择使用场景"]')!; expect(picker).toBeTruthy(); await act(async () => { picker.click(); }); }
 async function findScenario(text: string) {
   const search = document.querySelector<HTMLInputElement>('[aria-label="搜索使用场景"]')!; expect(search).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, text); search.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -46,85 +46,63 @@ async function fixture(templates: ImageUseTemplate[] = [custom]) {
   });
   const start = vi.fn(async (request: ChatStartRequest) => read(request));
   const importAttachments = vi.fn(async () => [reference]);
-  const bridge = { read, start, importAttachments, list: vi.fn(async () => []), ledger: vi.fn(async () => []), cancel: vi.fn(), flush: vi.fn(), onChanged: () => () => undefined };
+  const attachToProject = vi.fn(async () => [{ ...reference, id: 'project-reference' }]);
+  const bridge = { read, start, importAttachments, attachToProject, list: vi.fn(async () => []), ledger: vi.fn(async () => []), cancel: vi.fn(), flush: vi.fn(), onChanged: () => () => undefined };
   Object.defineProperty(window, 'desktop', { configurable: true, value: { chat: bridge, platform: 'darwin' } });
   const createProject = vi.fn(), usePrompt = vi.fn();
-  const props = { workspaceId: 'workspace-one', workspace: { id: 'workspace-one', name: '独立工作区' }, projects: [], purgedProjects: [], activeProject: { id: '' }, configuration: { connections: [{ id: 'connection', name: '离线模型连接', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://fixture.invalid/v1', enabled: true, status: 'configured' }], models: [{ id: 'model', connectionId: 'connection', name: '离线对话模型', modelId: 'fixture-chat-model', capabilities: ['text', 'vision'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '2' } }], credentials: [{ id: 'key', connectionId: 'connection', name: '离线账户', lastFour: '1234', enabled: true }], workflows: [], categories: [], useTemplates: templates }, workflowRunner: { runs: [] }, ledger: [], preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: createProject, onUsePrompt: usePrompt } as unknown as PageProps;
+  const props = { workspaceId: 'workspace-one', workspace: { id: 'workspace-one', name: '独立工作区' }, projects: [], purgedProjects: [], activeProject: { id: '' }, configuration: { connections: [{ id: 'connection', name: '离线模型连接', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://fixture.invalid/v1', enabled: true, status: 'configured' }], models: [{ id: 'model', connectionId: 'connection', name: '离线对话模型', modelId: 'fixture-chat-model', capabilities: ['text', 'vision'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '2' } }], credentials: [{ id: 'key', connectionId: 'connection', name: '离线账户', lastFour: '1234', enabled: true }], workflows: [], categories: [], useTemplates: templates }, workflowRunner: { runs: [] }, ledger: [], preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: createProject, onUsePrompt: usePrompt, onUpdateProject: vi.fn() } as unknown as PageProps;
   async function render(next = props) { await act(async () => { root ||= createRoot(host); root.render(<WorkspaceChat props={next} onLegacy={vi.fn()} />); }); }
   await render(); return { props, start, read, importAttachments, createProject, usePrompt, render };
 }
 
+async function addAttachment() { await click('添加聊天附件'); await click('本机文件'); }
+
 describe('首页聊天使用场景的集成', () => {
-  it('选择自定义场景保留草稿和附件，切到图片制作；显式发送才传递场景和附件', async () => {
-    const f = await fixture(); await input('必须保留现有商品名和原包装。'); await click('添加附件');
+  it('自定义场景保留用户草稿和附件，只在显式发送时组合场景要求', async () => {
+    const f = await fixture(); const original = '必须保留现有商品名和原包装。'; await input(original); await addAttachment();
     await chooseScenario(custom.name);
-    expect(content().value).toMatch(/^必须保留现有商品名和原包装。\n\n使用场景：品牌商品横幅/);
-    expect(content().value).toContain(custom.prompt); expect(content().value).toContain('1536 × 1024');
-    expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain(reference.name);
-    expect(host.querySelector('[aria-label="对话用途"] [aria-pressed="true"]')?.textContent).toContain('制作');
-    expect(host.querySelector('[aria-label="制作格式"] [aria-pressed="true"]')?.textContent).toBe('图片');
-    expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled(); expect(document.activeElement).toBe(content());
+    expect(content().value).toBe(original);
+    expect(host.querySelector('[aria-label="本轮附件"]')?.textContent).toContain(reference.name);
+    expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toContain(custom.name);
+    expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
     await click('发送聊天消息'); expect(f.start).toHaveBeenCalledOnce();
-    expect(f.start.mock.calls[0][0]).toMatchObject({ mode: 'plan', outputKind: 'image', attachmentIds: [reference.id], text: expect.stringContaining(custom.prompt) });
+    expect(f.start.mock.calls[0][0]).toMatchObject({ mode: 'plan', outputKind: 'image', attachmentIds: [reference.id], text: original, requestText: expect.stringContaining(custom.prompt) });
     expect(f.createProject).not.toHaveBeenCalled();
   });
-
-  it('文档场景选择正确的Word格式，既有文字保留且不会立即调用模型', async () => {
-    const f = await fixture(); await input('合同中保留双方确认的付款条件。'); await chooseScenario('把资料整理成正式文档');
-    expect(content().value).toContain('合同中保留双方确认的付款条件。'); expect(content().value).toContain('合作说明书');
-    expect(host.querySelector('[aria-label="制作格式"] [aria-pressed="true"]')?.textContent).toBe('Word');
-    expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
-    await click('发送聊天消息'); expect(f.start.mock.calls[0][0]).toMatchObject({ mode: 'plan', outputKind: 'word' });
+  it('文档场景选中Word，既有文字保持，发送才采用文档制作要求', async () => {
+    const f = await fixture(); const original = '合同中保留双方确认的付款条件。'; await input(original); await chooseScenario('Word 文档');
+    expect(content().value).toBe(original); expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toContain('Word 文档');
+    expect(f.start).not.toHaveBeenCalled(); await click('发送聊天消息');
+    expect(f.start.mock.calls[0][0]).toMatchObject({ mode: 'plan', outputKind: 'word', text: original, requestText: expect.stringContaining('可编辑的 Word 文档') });
   });
-
-  it('场景加已有输入超过10000字时保留原文与附件，也不切换聊天用途或发送', async () => {
-    const f = await fixture(); const original = '原'.repeat(9990); await input(original); await click('添加附件');
-    await chooseScenario(custom.name);
-    expect(content().value).toBe(original); expect(host.querySelector('[role="alert"]')?.textContent).toContain('超过 10000 字');
-    expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain(reference.name);
-    expect(host.querySelector('[aria-label="对话用途"] [aria-pressed="true"]')?.textContent).toContain('聊天');
-    expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
+  it('满10000字的草稿切换场景不被覆盖或追加内容，附件仍保留', async () => {
+    const f = await fixture(); const original = '原'.repeat(10000); await input(original); await addAttachment(); await chooseScenario(custom.name);
+    expect(content().value).toBe(original); expect(f.start).not.toHaveBeenCalled();
+    expect(content().value).toBe(original); expect(host.querySelector('[aria-label="本轮附件"]')?.textContent).toContain(reference.name);
+    expect(f.createProject).not.toHaveBeenCalled();
   });
-
   it('切换工作区不会显示或提交其他工作区的自定义场景、草稿或附件', async () => {
     const otherTemplate = { ...custom, id: 'other-purpose', workspaceId: 'workspace-two', name: '另一个工作区的场景' };
-    const f = await fixture([custom, otherTemplate]); await input('第一个工作区的私有草稿'); await click('添加附件');
-    const otherProps = { ...f.props, workspaceId: 'workspace-two', workspace: { ...f.props.workspace, id: 'workspace-two' } };
-    await f.render(otherProps); expect(content().value).toBe(''); expect(host.querySelector('[aria-label="待发送的附件"]')).toBeNull();
-    await openScenarios(); expect(await findScenario(custom.name)).toBeUndefined();
-    expect(await findScenario(otherTemplate.name)).toBeTruthy();
+    const f = await fixture([custom, otherTemplate]); await input('第一个工作区的私有草稿'); await addAttachment();
+    await f.render({ ...f.props, workspaceId: 'workspace-two', workspace: { ...f.props.workspace, id: 'workspace-two' } });
+    expect(content().value).toBe(''); expect(host.querySelector('[aria-label="本轮附件"]')).toBeNull();
+    await openScenarios(); expect(await findScenario(custom.name)).toBeUndefined(); expect(await findScenario(otherTemplate.name)).toBeTruthy();
     expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
   });
-
-  it('选择拼豆场景走真实网格工作台入口，不发送普通图片方案；用户打开时才选择项目', async () => {
-    const f = await fixture(); await chooseScenario('拼豆');
-    expect(host.querySelector('[aria-label="拼豆制图入口"]')).toBeTruthy();
-    const draft = content().value; await click('发送聊天消息');
-    expect(content().value).toBe(draft); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
-    await click('打开拼豆工作台'); expect(f.createProject).toHaveBeenCalledOnce();
-    expect(f.createProject.mock.calls[0][0]).toBe('image');
-    const options = f.createProject.mock.calls[0][1]; expect(options.initial.name).toBe('拼豆图纸');
+  it('拼豆场景需要原图，用户显式进入后才建项目并复制原图', async () => {
+    const f = await fixture(); await chooseScenario('拼豆'); await click('进入拼豆');
+    expect(f.createProject).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled(); await addAttachment(); await input('保留原图主体'); await click('进入拼豆');
+    expect(f.createProject).toHaveBeenCalledOnce(); const options = f.createProject.mock.calls[0][1];
     await act(async () => { options.onCreated({ id: 'bead-project', workspaceId: 'workspace-one', kind: 'image' } as Project); });
-    expect(f.usePrompt).toHaveBeenCalledWith(expect.objectContaining({ imagePreset: '拼豆' }), draft, 'bead-project');
-    expect(f.start).not.toHaveBeenCalled();
+    expect(f.usePrompt).toHaveBeenCalledWith(expect.objectContaining({ imagePreset: '拼豆' }), expect.stringContaining('保留原图主体'), 'bead-project', expect.objectContaining({ referenceFiles: [expect.objectContaining({ id: 'project-reference' })] })); expect(f.start).not.toHaveBeenCalled();
   });
-  it('顶部场景显示选中名称，自由聊天不清除原稿或附件且不自动发送', async () => {
-    const f = await fixture(); await input('保留客户已经确认的要求。'); await click('添加附件'); await chooseScenario(custom.name);
-    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain(custom.name);
-    expect(readDisclosure('workspace:workspace-one:chat-scenario', '')).toBe(`image:${custom.id}`);
-    const draft = content().value;
-    await chooseScenario('自由聊天');
-    expect(content().value).toBe(draft); expect(host.querySelector('[aria-label="待发送的附件"]')?.textContent).toContain(reference.name);
-    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
-    expect(host.querySelector('[aria-label="制作格式"]')).toBeNull(); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
+  it('自由聊天和制作格式切换保留原稿附件，场景标签一致且不自动发送', async () => {
+    const f = await fixture(); await input('保留客户已经确认的要求。'); await addAttachment(); await chooseScenario(custom.name);
+    expect(readDisclosure('workspace:workspace-one:chat-scenario', '')).toBe(`purpose-${custom.id}`);
+    await chooseScenario('自由聊天'); expect(content().value).toBe('保留客户已经确认的要求。'); expect(host.querySelector('[aria-label="本轮附件"]')?.textContent).toContain(reference.name);
+    await chooseScenario('宣传图'); expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toContain('宣传图');
+    await chooseScenario('Word 文档'); expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toContain('Word 文档');
+    await chooseScenario('自由聊天'); expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toContain('自由聊天');
+    expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
   });
-  it('聊天和制作格式切换保持场景标签一致并保留输入，不发生模型调用', async () => {
-    const f = await fixture(); await input('这是我自己的需求。');
-    expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
-    await click('制作'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('宣传图');
-    await click('Word'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('正式文档');
-    await click('聊天'); expect(host.querySelector('[aria-label="使用场景"]')?.textContent).toContain('自由聊天');
-    expect(content().value).toBe('这是我自己的需求。'); expect(f.start).not.toHaveBeenCalled();
-  });
-
 });

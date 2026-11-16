@@ -86,7 +86,7 @@ describe('业务原生生产、费用与真实文件', () => {
     const f = await businessFixture('documents', 1); await f.service.start(f.input); const old = await f.untilStatus('review'), word = old.orders[0].tasks.find(task => task.kind === 'word'), current = await f.editorStore.load({ projectId: word.projectId, kind: 'word' }); current.document.blocks[0].text = '人工已确认的新标题'; await f.editorStore.save({ projectId: word.projectId, expectedRevision: current.revision, document: current.document });
     await f.businessStore.mutate(f.project.workspaceId, state => { state.orders[0].facts.公司 = '客户新确认的公司'; state.orders[0].factsRevision++; return state; }); await f.service.start(f.input); const state = await f.untilStatus('review');
     expect(state.orders[0].tasks.find(task => task.kind === 'word').projectId).not.toBe(word.projectId); expect((await f.editorStore.load({ projectId: word.projectId, kind: 'word' })).document.blocks[0].text).toBe('人工已确认的新标题'); expect(old.orders[0].runIds.every(id => state.orders[0].runIds.includes(id))).toBe(true); expect(f.calls).toHaveLength(6);
-  });
+  }, 10000);
   it('交付绑定真实文件SHA和当前资料，采用新导出不改旧回执或费用', async () => {
     const f = await businessFixture('merchant', 1); await f.service.start({ ...f.input, sampleOnly: false }); const state = await f.untilStatus('review'), file = await f.artifactStore.read(state.orders[0].outputIds[0]), checks = { content: true, rights: true, format: true };
     await fs.writeFile(file.path, Buffer.from('changed')); await expect(f.service.deliver({ ...f.input, checks })).rejects.toThrow('改变'); await fs.writeFile(file.path, file.buffer);

@@ -36,7 +36,17 @@ export interface CommerceProtectResult {
   artifact: ArtifactMetadata; width: number; height: number; protectedPixelsVerified: true;
 }
 export interface CommerceImageSavedVersion { revision: number; title: string; savedAt: string; }
+export interface CommerceImagePreviewRequest {
+  projectId: string; artifactId: string; requestId: string; maxSide: number;
+  region: { x: number; y: number; width: number; height: number }; expectedSha256?: string;
+}
+export interface CommerceImagePreview {
+  artifactId: string; dataUrl: string; width: number; height: number; sourceWidth: number; sourceHeight: number; sha256: string;
+  crop: { x: number; y: number; width: number; height: number };
+}
 export interface CommerceImagesBridge {
+  preview?: (input: CommerceImagePreviewRequest) => Promise<CommerceImagePreview>;
+  cancelPreview?: (input: { projectId: string; requestId: string }) => Promise<void>;
   read: (input: CommerceImageScope & { fromSnapshot?: boolean }) => Promise<CommerceImageRead>;
   save: (input: CommerceImageScope & { expectedRevision: number; document: CommerceImageDocument }) => Promise<CommerceImageDocument>;
   render: (input: CommerceImageScope & { expectedRevision: number; sizes?: CommerceImageSize[] }) => Promise<CommerceImageRenderResult>;

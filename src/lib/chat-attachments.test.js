@@ -1,81 +1,151 @@
-import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import os from 'node:os';
 import { createRequire } from 'node:module';
+import { afterEach, describe, expect, it } from 'vitest';
 const require = createRequire(import.meta.url);
-const { createChatAttachments, attachmentFiles, validateAttachmentPayloads } = require('../../electron/chat-attachments.cjs');
-const owned = [];
-const scope = { workspaceId: 'workspace', conversationId: 'conversation' };
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP1sAAAAASUVORK5CYII=', 'base64');
-async function fixture() {
+const { createChatService } = require('../../electron/chat-service.cjs');
+const { createChatAttachments } = require('../../electron/chat-attachments.cjs');
+const { chatBackupFiles, readChatBackups, remapChatBackups, cacheChatReceipt, loadChatReceipt } = require('../../electron/chat-backup.cjs');
+const owned = [], services = [], scope = { workspaceId: 'workspace', conversationId: 'conversation' };
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
+const connection = { id: 'connection', name: 'Fixture', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
+const model = { id: 'model', name: 'Fixture', modelId: 'gpt-6.1-terra', connectionId: 'connection', enabled: true, capabilities: ['text', 'vision'], pricing: { unit: 'million-tokens', currency: 'CNY', input: '1000', output: '2000' } };
+const request = { ...scope, id: 'first', text: '查看资料', connection, model, credentialId: 'key' };
+async function setup(options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-chat-attachment-')); owned.push(directory);
-  const source = path.join(directory, 'selected'); await fs.mkdir(source);
-  const store = createChatAttachments({ directory });
-  const file = async (name, bytes) => { const filename = path.join(source, name); await fs.writeFile(filename, bytes); return filename; };
-  return { directory, source, store, file };
+  const calls = [], service = createChatService({ directory, credentialStore: { withSecret: async (_id, _conn, fn) => fn('fixture') }, execute: async (input, messages) => { calls.push({ input, messages }); return { text: '附件已读取', usage: { inputTokens: 10, outputTokens: 20 }, requestStarted: true }; }, ...options }); services.push(service);
+  async function file(name, bytes = png) { const filename = path.join(directory, name); await fs.writeFile(filename, bytes); return filename; }
+  return { directory, service, calls, file };
 }
-afterEach(async () => { for (const directory of owned.splice(0)) await fs.rm(directory, { recursive: true, force: true }); });
-describe('聊天附件的受控导入与完整内容', () => {
-  it('无项目导入中文文字和图片，公开元数据没有本机路径或文件内容', async () => {
-    const f = await fixture(), text = await f.file('资料.txt', '品牌：蓝色小熊'), image = await f.file('参考.png', png);
-    const metadata = await f.store.importAttachments(scope, [text, image]);
-    expect(metadata).toMatchObject([{ name: '资料.txt', kind: 'text', mimeType: 'text/plain' }, { name: '参考.png', kind: 'image', mimeType: 'image/png' }]);
-    expect(JSON.stringify(metadata)).not.toContain(f.directory); expect(JSON.stringify(metadata)).not.toContain('蓝色小熊');
-    const payloads = await f.store.resolve(scope, metadata.map(file => file.id));
-    expect(payloads[0].text).toBe('品牌：蓝色小熊'); expect(attachmentFiles(payloads)[1].buffer.equals(png)).toBe(true);
-    const reopened = createChatAttachments({ directory: f.directory }); expect(await reopened.resolve(scope, [metadata[0].id])).toMatchObject([{ text: '品牌：蓝色小熊' }]);
+async function settle(service, input = scope) { for (let n = 0; n < 200; n++) { const value = await service.read(input); if (!value.turns.some(turn => turn.status === 'running')) return value; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error('not settled'); }
+afterEach(async () => { await Promise.all(services.splice(0).map(service => service.shutdown())); for (const directory of owned.splice(0)) { if (!path.basename(directory).startsWith('xuzuo-chat-attachment-')) throw Error('unowned'); await fs.rm(directory, { recursive: true, force: true }); } });
+describe('独立聊天的真实文件附件', () => {
+  it('预检只编码一次，真实协议请求收到本地字节且没有创建项目', async () => {
+    const { executeChat } = require('../../electron/provider-chat.cjs'); let body;
+    const f = await setup({ execute: executeChat, fetchImpl: async (_url, options) => { body = JSON.parse(options.body); return new Response(JSON.stringify({ status: 'completed', output_text: '看到了图片', usage: { input_tokens: 10, output_tokens: 20 } }), { headers: { 'content-type': 'application/json' } }); } });
+    const [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); const value = await settle(f.service);
+    expect(value.turns[0].status).toBe('complete'); expect(body.input[0].content.find(part => part.type === 'input_image').image_url).toBe(`data:image/png;base64,${png.toString('base64')}`);
   });
-  it('Office在本地提取正文并保留原始文件，PDF保留二进制而不假装提取了文字', async () => {
-    const f = await fixture(), JSZip = require('jszip'), zip = new JSZip();
-    zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>产品介绍正文</w:t></w:r></w:p></w:body></w:document>');
-    const office = await zip.generateAsync({ type: 'nodebuffer' }), pdf = Buffer.from('%PDF-1.4\n1 0 obj <<>> endobj\n%%EOF');
-    const metadata = await f.store.importAttachments(scope, [await f.file('介绍.docx', office), await f.file('扫描.pdf', pdf)]), payloads = await f.store.resolve(scope, metadata.map(file => file.id));
-    expect(payloads[0]).toMatchObject({ kind: 'text', text: expect.stringContaining('产品介绍正文') });
-    expect(payloads[1]).toMatchObject({ kind: 'document', mimeType: 'application/pdf' }); expect(payloads[1]).not.toHaveProperty('text');
-    expect(attachmentFiles(payloads).map(file => file.buffer)).toEqual([office, pdf]);
+  it('先看图再规划时带入原资料，并为制作保存实际材料引用', async () => {
+    const plan = { version: 1, name: '图片制作', objective: '参考原图制作宣传图', outputKind: 'image', trigger: { type: 'manual' }, steps: [{ kind: 'image-editing', name: '修改原图', instruction: '保留主体' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['保留主体'], constraints: [], maxRepairs: 0, questions: [], unsupported: [] };
+    const calls = [], f = await setup({ execute: async (input, messages) => { calls.push(messages); return { text: input.mode === 'plan' ? JSON.stringify(plan) : '原图主体已确认', requestStarted: true, usage: { inputTokens: 10, outputTokens: 20 } }; } });
+    const [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    await f.service.start({ ...request, id: 'plan', text: '按刚才的图制作', mode: 'plan', outputKind: 'image' }); const value = await settle(f.service);
+    expect(value.turns.at(-1).plan.name).toBe(plan.name); expect(value.turns.at(-1).contextAttachments).toEqual([image]); expect(calls[1][0].attachments[0].buffer).toEqual(png);
   });
-  it('附件编号不能跨对话或跨工作区读取，也不能作为路径使用', async () => {
-    const f = await fixture(), [file] = await f.store.importAttachments(scope, [await f.file('资料.txt', '正文')]);
-    await expect(f.store.resolve({ ...scope, conversationId: 'other' }, [file.id])).rejects.toThrow(/不属于当前对话/);
-    await expect(f.store.resolve({ ...scope, workspaceId: 'other' }, [file.id])).rejects.toThrow(/不属于当前对话/);
-    await expect(f.store.resolve(scope, ['../secret'])).rejects.toThrow(/选择无效/);
-    await expect(f.store.importAttachments({ ...scope, workspaceId: '../secret' }, [])).rejects.toThrow(/编号无效/);
+  it('连续三轮普通聊天均保存真实材料上下文，后续场景或转工具仍有引用', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    await f.service.start({ ...request, id: 'second', text: '再补充一些细节' }); const second = (await settle(f.service)).turns.at(-1);
+    expect(second.attachments).toBeUndefined(); expect(second.contextAttachments).toEqual([image]);
+    await f.service.start({ ...request, id: 'third', text: '继续按刚才的图讨论' }); const third = (await settle(f.service)).turns.at(-1);
+    expect(third.contextAttachments).toEqual([image]); const transmitted = f.calls[2].messages.flatMap(message => message.attachments || []); expect(transmitted).toHaveLength(1); expect(transmitted[0].buffer).toEqual(png);
+    expect(third.contextAttachments[0].id).toBe(image.id); expect((await f.service.ledger()).reduce((sum, entry) => sum + entry.costCents, 0)).toBe(15);
   });
-  it('拒绝选中文件和父目录中的符号链接', async () => {
-    const f = await fixture(), source = await f.file('资料.txt', '正文');
-    const link = path.join(f.source, 'link.txt'); await fs.symlink(source, link);
-    await expect(f.store.importAttachments(scope, [link])).rejects.toThrow(/符号链接/);
-    const folder = path.join(f.directory, 'linked'); await fs.symlink(f.source, folder);
-    await expect(f.store.importAttachments(scope, [path.join(folder, '资料.txt')])).rejects.toThrow(/符号链接/);
+  it('资料超过8份时优先本轮与较新材料，不会永远无法继续聊天', async () => {
+    const f = await setup(), paths = []; for (let n = 0; n < 9; n++) paths.push(await f.file(`image-${n}.png`));
+    const first = await f.service.importAttachments({ ...scope, paths: paths.slice(0, 8) }), [next] = await f.service.importAttachments({ ...scope, paths: paths.slice(8) });
+    await f.service.start({ ...request, attachmentIds: first.map(file => file.id) }); await settle(f.service); await f.service.start({ ...request, id: 'next', attachmentIds: [next.id] }); const value = await settle(f.service);
+    const files = f.calls[1].messages.flatMap(message => message.attachments || []); expect(files).toHaveLength(8); expect(files.some(file => file.id === next.id)).toBe(true); expect(value.turns.at(-1).attachmentNotice).toContain('未带入');
   });
-  it('全批验证成功才提交，不支持、损坏或过大附件不会留下半批选择', async () => {
-    const f = await fixture(), good = await f.file('good.txt', '正文'), bad = await f.file('坏.png', 'not png');
-    await expect(f.store.importAttachments(scope, [good, bad])).rejects.toThrow();
-    await expect(fs.stat(path.join(f.directory, 'chat-attachments-v1'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(f.store.importAttachments(scope, [await f.file('脚本.exe', 'script')])).rejects.toThrow(/格式暂不支持/);
-    await expect(f.store.importAttachments(scope, [await f.file('large.pdf', Buffer.alloc(5 * 1024 * 1024 + 1))])).rejects.toThrow(/5MB/);
-    await expect(f.store.importAttachments(scope, [await f.file('坏.docx', 'not zip')])).rejects.toThrow(/Office/);
-    await expect(f.store.importAttachments(scope, [await f.file('坏.txt', Buffer.from([255, 255]))])).rejects.toThrow(/UTF-8/);
+  it('导入后发送真实图片字节，不创建项目；历史与显式重试保留资料', async () => {
+    const f = await setup(), selected = await f.service.importAttachments({ ...scope, paths: [await f.file('原图.png')] });
+    await f.service.start({ ...request, attachmentIds: [selected[0].id] }); const first = await settle(f.service);
+    expect(f.calls[0].messages[0].attachments[0].buffer).toEqual(png); expect(first.turns[0].attachments[0].name).toBe('原图.png'); expect(JSON.stringify(first)).not.toContain('filename');
+    await f.service.start({ ...request, id: 'followup', text: '再说一遍' }); await settle(f.service); expect(f.calls[1].messages[0].attachments[0].buffer).toEqual(png);
+    await f.service.start({ ...request, id: 'retry', sourceTurnId: 'first' }); await settle(f.service); expect(f.calls[2].messages.at(-1).attachments[0].buffer).toEqual(png); expect((await f.service.ledger()).length).toBe(3);
+    expect(await fs.readdir(path.join(f.directory, 'chat-v1', scope.workspaceId))).toContain('attachments');
   });
-  it('限制每条数量与总量，不静默截断附件', async () => {
-    const f = await fixture(); await expect(f.store.importAttachments(scope, Array(6).fill('/tmp/a'))).rejects.toThrow(/5/);
-    const pdf = Buffer.alloc(4 * 1024 * 1024, 32); pdf.write('%PDF-1.4'); pdf.write('%%EOF', pdf.length - 5);
-    await expect(f.store.importAttachments(scope, await Promise.all([1, 2, 3].map(n => f.file(`${n}.pdf`, pdf))))).rejects.toThrow(/10MB/);
-    await expect(f.store.importAttachments(scope, [await f.file('a.txt', '甲'.repeat(60000)), await f.file('b.txt', '乙'.repeat(60000))])).rejects.toThrow(/正文合计超过10万/);
+  it('当前不兼容图片、跨会话引用、源文件篡改均在调用前拒绝', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] });
+    await expect(f.service.start({ ...request, model: { ...model, capabilities: ['text'] }, attachmentIds: [image.id] })).rejects.toThrow(/看图/);
+    await expect(f.service.start({ ...request, conversationId: 'other', attachmentIds: [image.id] })).rejects.toThrow(/不属于/);
+    await fs.writeFile(path.join(f.directory, 'chat-v1', scope.workspaceId, 'attachments', scope.conversationId, `${image.id}.png`), Buffer.from('bad'));
+    await expect(f.service.start({ ...request, attachmentIds: [image.id] })).rejects.toThrow(/变化|校验/); expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toEqual([]);
   });
-  it('缓存和备份载荷的内容、哈希和元数据需要一致，拒绝额外路径字段', async () => {
-    const f = await fixture(), [metadata] = await f.store.importAttachments(scope, [await f.file('资料.txt', '正文')]);
-    const files = await f.store.resolve(scope, [metadata.id]);
-    expect(() => validateAttachmentPayloads([{ ...files[0], data: Buffer.from('篡改').toString('base64') }])).toThrow(/校验失败/);
-    expect(() => validateAttachmentPayloads([{ ...files[0], path: '/private/user-file' }])).toThrow(/无法识别/);
-    expect(() => validateAttachmentPayloads([...files, ...files])).toThrow(/不同附件/);
+  it('当前所选材料被外部删除时，在发请求前拒绝且不新增费用', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] });
+    await fs.unlink(path.join(f.directory, 'chat-v1', scope.workspaceId, 'attachments', scope.conversationId, `${image.id}.png`));
+    await expect(f.service.start({ ...request, attachmentIds: [image.id] })).rejects.toThrow(); expect(f.calls).toHaveLength(0); expect(await f.service.ledger()).toHaveLength(0);
   });
-  it('缓存保存失败保留原有附件与内容', async () => {
-    const f = await fixture(), [first] = await f.store.importAttachments(scope, [await f.file('原资料.txt', '原文')]);
-    const broken = createChatAttachments({ directory: f.directory, fileSystem: { ...fs, rename: async () => { throw Object.assign(Error(`denied ${f.directory}/private-path`), { code: 'EACCES' }); } } });
-    const error = await broken.importAttachments(scope, [await f.file('新资料.txt', '新文')]).catch(value => value);
-    expect(error.message).toContain('无法读取或保存'); expect(error.message).not.toContain(f.directory); expect(error.message).not.toContain('private-path');
-    expect(await f.store.resolve(scope, [first.id])).toMatchObject([{ text: '原文' }]);
+  it('切换到文字模型可继续聊天，不被旧图片困住，明确标记未带入', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    await f.service.start({ ...request, id: 'text-only', model: { ...model, capabilities: ['text'] }, text: '只谈文案' }); const latest = (await settle(f.service)).turns.at(-1);
+    expect(latest.attachmentNotice).toContain('未带入'); expect(f.calls[1].messages.every(message => !message.attachments)).toBe(true);
+  });
+  it('Office正文在导入时提取并按原图哈希缓存，重试和历史不重复解析', async () => {
+    let extracts = 0; const f = await setup({ extractText: async () => { extracts++; return '真实提取的客户目标'; } });
+    const [doc] = await f.service.importAttachments({ ...scope, paths: [await f.file('需求.docx', Buffer.from([80, 75, 3, 4, 0, 0]))] }); expect(extracts).toBe(1);
+    await f.service.start({ ...request, attachmentIds: [doc.id] }); await settle(f.service); await f.service.start({ ...request, id: 'second' }); await settle(f.service);
+    expect(extracts).toBe(1); expect(f.calls[0].messages[0].attachments[0].extractedText).toContain('客户目标');
+  });
+  it('场景要求真正发送但消息保留用户原文；无附件请求也兼容', async () => {
+    const f = await setup(); await f.service.start({ ...request, text: '原话', requestText: '内置看图要求\n原话' }); const value = await settle(f.service);
+    expect(value.turns[0].userText).toBe('原话'); expect(f.calls[0].messages[0].content).toBe('内置看图要求\n原话');
+  });
+  it('复制进项目幂等，部分失败后重试只处理未成功的一份', async () => {
+    const copies = []; let fail = true;
+    const f = await setup({ attachFiles: async ([file], projectId) => { if (file.name === 'second.txt' && fail) { fail = false; throw Error('disk failure'); } const artifact = { id: `copy-${copies.length}`, projectId, name: file.name, mimeType: file.mimeType, bytes: file.bytes, kind: file.kind, path: '', createdAt: '' }; copies.push(artifact); return [artifact]; } });
+    const files = await f.service.importAttachments({ ...scope, paths: [await f.file('first.txt', Buffer.from('one')), await f.file('second.txt', Buffer.from('two'))] });
+    const transfer = { ...scope, attachmentIds: files.map(file => file.id), projectId: 'project' }; await expect(f.service.attachToProject(transfer)).rejects.toThrow('disk failure'); expect(copies).toHaveLength(1);
+    expect(await f.service.attachToProject(transfer)).toHaveLength(2); expect(copies).toHaveLength(2); await f.service.attachToProject(transfer); expect(copies).toHaveLength(2); expect(f.calls).toHaveLength(0);
+  });
+  it('备份以独立二进制条目保留材料并重映射归属，恢复后可再次发送', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    const snapshot = await f.service.exportWorkspace(scope.workspaceId), files = chatBackupFiles(snapshot), bytes = new Map(files.map(file => [file.name, file.buffer]));
+    expect(JSON.parse(files[0].buffer.toString()).attachmentFiles[0].data).toBeUndefined(); expect(files[1].buffer).toEqual(png);
+    const [loaded] = readChatBackups({ chatWorkspaces: [scope.workspaceId], scope: 'workspaces', locations: { workspaces: [{ workspaceId: scope.workspaceId }] } }, bytes);
+    const idMap = { [scope.workspaceId]: 'restored' }, [remapped] = remapChatBackups([loaded], idMap, 'backup-id'), target = await setup(); await target.service.restoreWorkspace(remapped);
+    const record = remapped.conversations[0], material = record.turns[0].attachments[0]; await target.service.start({ ...request, workspaceId: 'restored', conversationId: record.id, id: 'restored-next', attachmentIds: [material.id] }); await settle(target.service, { workspaceId: 'restored', conversationId: record.id });
+    expect(target.calls[0].messages.at(-1).attachments[0].buffer).toEqual(png); expect((await target.service.ledger()).length).toBe(2);
+    bytes.delete(files[1].name); expect(() => readChatBackups({ chatWorkspaces: [scope.workspaceId], scope: 'workspaces', locations: { workspaces: [{ workspaceId: scope.workspaceId }] } }, bytes)).toThrow(/缺失/);
+  });
+  it.each(['scope', 'reference', 'mime', 'bytes'])('附件备份%s伪造在任何恢复写入之前拒绝', async mode => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    const packed = chatBackupFiles(await f.service.exportWorkspace(scope.workspaceId)), files = new Map(packed.map(file => [file.name, file.buffer])), source = JSON.parse(packed[0].buffer.toString());
+    if (mode === 'scope') source.attachmentFiles[0].conversationId = 'different-conversation';
+    if (mode === 'reference') source.conversations[0].turns[0].attachments[0].sha256 = 'b'.repeat(64);
+    if (mode === 'mime') { source.attachmentFiles[0].attachment.mimeType = 'text/plain'; source.attachmentFiles[0].attachment.kind = 'text'; }
+    if (mode === 'bytes') files.set(packed[1].name, Buffer.from('different bytes'));
+    files.set(packed[0].name, Buffer.from(JSON.stringify(source)));
+    expect(() => readChatBackups({ chatWorkspaces: [scope.workspaceId], scope: 'workspaces', locations: { workspaces: [{ workspaceId: scope.workspaceId }] } }, files)).toThrow(); expect(f.calls).toHaveLength(1);
+  });
+  it('恢复凭据只保留材料元数据，实际材料放旁文件，JSON重读后仍能按哈希恢复', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    const snapshot = await f.service.exportWorkspace(scope.workspaceId), receiptRoot = path.join(f.directory, 'receipts'); await fs.mkdir(receiptRoot);
+    const cached = await cacheChatReceipt(fs, receiptRoot, 'backup', [snapshot]), serialized = JSON.stringify(cached);
+    expect(cached[0].attachmentFiles[0]).toEqual({ conversationId: scope.conversationId, attachment: image, cached: true }); expect(serialized).not.toContain('"buffer"'); expect(serialized).not.toContain('"data"');
+    const restored = await loadChatReceipt(fs, receiptRoot, 'backup', JSON.parse(serialized)); expect(restored[0].attachmentFiles[0].buffer).toEqual(png);
+    const filename = path.join(receiptRoot, 'backup-chat-materials', scope.workspaceId, scope.conversationId, image.id); await fs.writeFile(filename, Buffer.alloc(png.length));
+    await expect(loadChatReceipt(fs, receiptRoot, 'backup', cached)).rejects.toThrow(/哈希/);
+  });
+  it('恢复旁文件缓存拒绝路径穿越和junction，不读取不受控文件', async () => {
+    const f = await setup(), [image] = await f.service.importAttachments({ ...scope, paths: [await f.file('image.png')] }); await f.service.start({ ...request, attachmentIds: [image.id] }); await settle(f.service);
+    const receiptRoot = path.join(f.directory, 'receipts'); await fs.mkdir(receiptRoot); const cached = await cacheChatReceipt(fs, receiptRoot, 'backup', [await f.service.exportWorkspace(scope.workspaceId)]);
+    const forged = structuredClone(cached); forged[0].attachmentFiles[0].conversationId = '../outside'; await expect(loadChatReceipt(fs, receiptRoot, 'backup', forged)).rejects.toThrow(/编号/);
+    const guardedFs = { ...fs, lstat: async filename => { const stat = await fs.lstat(filename); return filename.endsWith('backup-chat-materials') ? new Proxy(stat, { get(target, key) { if (key === 'isSymbolicLink') return () => true; const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value; } }) : stat; } };
+    await expect(loadChatReceipt(guardedFs, receiptRoot, 'backup', cached)).rejects.toThrow(/junction|链接/);
+  });
+  it('恢复合并达到附件容量边界时先拒绝超量，保留旧索引和文件且允许同编号重试', async () => {
+    const f = await setup(), store = createChatAttachments({ directory: f.directory });
+    const [original] = await store.importPaths(scope, [await f.file('原图.png')]);
+    const directory = path.join(f.directory, 'chat-v1', scope.workspaceId, 'attachments', scope.conversationId), index = path.join(directory, 'index.json');
+    // Seed a near-full selection index without generating thousands of unrelated binary files.
+    const saved = JSON.parse(await fs.readFile(index, 'utf8'));
+    saved.items.push(...Array.from({ length: 2398 }, (_, number) => ({ ...original, id: `existing-${number}` })));
+    await fs.writeFile(index, JSON.stringify(saved)); const before = await fs.readFile(index);
+    const files = ['restored-a', 'restored-b'].map(id => ({ attachment: { ...original, id }, buffer: png }));
+    await expect(store.restore(scope, files)).rejects.toThrow(/2400|附件.*上限|附件.*较多/);
+    expect(await fs.readFile(index)).toEqual(before);
+    for (const file of files) await expect(fs.stat(path.join(directory, `${file.attachment.id}.png`))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await store.list(scope)).toHaveLength(2399); expect((await store.read(scope, original.id)).buffer).toEqual(png);
+    await store.restore(scope, [files[0]]); expect(await store.list(scope)).toHaveLength(2400);
+    await store.restore(scope, [files[0]]); expect(await store.list(scope)).toHaveLength(2400); expect((await store.read(scope, files[0].attachment.id)).buffer).toEqual(png);
+  });
+  it('拒绝伪装格式、GIF/SVG和非法文件数量，附件索引不得跨目录', async () => {
+    const f = await setup(); await expect(f.service.importAttachments({ ...scope, paths: [await f.file('bad.png', Buffer.from('not png'))] })).rejects.toThrow(/图片/);
+    await expect(f.service.importAttachments({ ...scope, paths: [await f.file('animated.gif', Buffer.from('GIF89a'))] })).rejects.toThrow(/GIF/);
+    await expect(f.service.importAttachments({ ...scope, paths: Array(9).fill('C:/x') })).rejects.toThrow(/8/);
+    const store = createChatAttachments({ directory: f.directory }); await expect(store.list({ workspaceId: '..', conversationId: 'x' })).rejects.toThrow(/编号/);
   });
 });

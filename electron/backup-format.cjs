@@ -83,7 +83,7 @@ function createIdMap(value) {
   }
   walk(value); return { ...map };
 }
-const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'imageSourceStepId', 'imageMarkupId', 'engineeringReferenceId', 'referenceId', 'creationKey', 'replaceWaitingReviewRunId', 'repairStepId', 'ruleId', 'eventId', 'jobId', 'decisionId', 'sourceWorkflowId', 'sourceId', 'brandId', 'orderId', 'productId', 'feedbackId', 'logoArtifactId', 'artifactId', 'sourceArtifactId', 'documentId', 'snapshotId', 'workingDocumentId', 'protectedMaskArtifactId', 'pageId', 'blockId', 'evidenceArtifactId', 'protectionSourceArtifactId', 'sourceProjectId']);
+const ID_FIELDS = new Set(['id', 'workspaceId', 'projectId', 'runId', 'workflowId', 'stepId', 'connectionId', 'modelConfigId', 'credentialId', 'promptTemplateId', 'businessCategoryId', 'parentId', 'imageId', 'assetId', 'sourceAssetId', 'workflowRunId', 'workflowStepId', 'workflowAttemptId', 'originWorkspaceId', 'lastProjectId', 'exportRunId', 'supersededByRunId', 'supersedesRunId', 'lastLiveCompletionId', 'contentSourceStepId', 'imageSourceStepId', 'imageMarkupId', 'engineeringReferenceId', 'referenceId', 'creationKey', 'replaceWaitingReviewRunId', 'repairStepId', 'ruleId', 'eventId', 'jobId', 'decisionId', 'sourceWorkflowId', 'sourceId', 'brandId', 'orderId', 'productId', 'feedbackId', 'logoArtifactId', 'artifactId', 'sourceArtifactId', 'documentId', 'snapshotId', 'workingDocumentId', 'protectedMaskArtifactId', 'pageId', 'blockId', 'evidenceArtifactId', 'protectionSourceArtifactId', 'sourceProjectId', 'paymentMilestoneId', 'transactionId', 'milestoneId', 'conversationId', 'turnId']);
 const ID_ARRAYS = new Set(['sourceArtifactIds', 'attachmentIds', 'artifactIds', 'documentImageStepIds', 'contentSourceStepIds', 'pendingCostEntryIds', 'legacyCostEntryIds', 'ruleChain', 'projectIds', 'runIds', 'productIds', 'outputIds', 'referenceArtifactIds', 'approvedSampleIds']);
 const PATH_FIELDS = new Set(['path', 'directory', 'storageDirectory']);
 function relocatedPath(value, paths, fileNames) {
@@ -98,7 +98,7 @@ function relocatedPath(value, paths, fileNames) {
 function remap(value, ids, paths = {}, fileNames = {}, field = '') {
   if (['checks', 'checkedIds', 'preparation', 'variables', 'pricing', 'pricingSnapshot', 'billingRuleSnapshot', 'facts'].includes(field)) return structuredClone(value);
   if (typeof value === 'string') {
-    if (ID_FIELDS.has(field) || ID_ARRAYS.has(field)) return Object.hasOwn(ids, value) ? ids[value] : value;
+    if (ID_FIELDS.has(field) || ID_ARRAYS.has(field) || field === 'entryId' || field === 'sheetId' || field === 'localOutputArtifactIds') return Object.hasOwn(ids, value) ? ids[value] : value;
     if (PATH_FIELDS.has(field)) return relocatedPath(value, paths, fileNames);
     if (['fileName', 'trashFileName'].includes(field)) return fileNames[value] || value;
     return value;

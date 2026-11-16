@@ -55,6 +55,21 @@ async function corruptChat(source, exported, change, suffix) {
 }
 
 describe('完整工作区备份包含独立聊天和真实费用', () => {
+  it('真实ZIP恢复实际附件与轻量旁文件凭据，材料可再次发送且重放不回退费用', async () => {
+    const source = await profile(), png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'), filename = path.join(source.directory, '材料.png'); await fs.writeFile(filename, png);
+    const [file] = await source.chat.importAttachments({ workspaceId, conversationId, paths: [filename] });
+    await talk(source, 'material-turn', { model: { ...model, capabilities: ['text', 'vision'] }, attachmentIds: [file.id] });
+    const exported = await archive(source), serializedChat = JSON.parse(await exported.zip.file(`chat/${workspaceId}/chat.json`).async('string'));
+    expect(serializedChat.attachmentFiles[0].buffer).toBeUndefined(); expect(serializedChat.attachmentFiles[0].data).toBeUndefined();
+    expect(await exported.zip.file(`chat/${workspaceId}/attachments/${conversationId}/${file.id}`).async('nodebuffer')).toEqual(png);
+    const target = await profile(), location = await destination(target), imported = await target.backup.importBackup({ filePath: exported.filePath, directory: location });
+    const restoredScope = { workspaceId: imported.idMap[workspaceId], conversationId: imported.idMap[conversationId] }, restored = await target.chat.read(restoredScope), image = restored.turns[0].attachments[0];
+    expect(image.id).toBe(imported.idMap[file.id]); expect((await target.chat.previewAttachment({ ...restoredScope, attachmentId: image.id })).dataUrl).toBe(`data:image/png;base64,${png.toString('base64')}`);
+    const receipt = JSON.parse(await fs.readFile(imported.receiptPath, 'utf8')); expect(receipt.chats[0].attachmentFiles[0].cached).toBe(true); expect(receipt.chats[0].attachmentFiles[0].buffer).toBeUndefined(); expect(receipt.chats[0].attachmentFiles[0].data).toBeUndefined();
+    await target.chat.start({ ...restoredScope, id: 'new-material-turn', text: '继续看这张图', connection, model: { ...model, capabilities: ['text', 'vision'] }, credentialId: 'fixture-key-id', attachmentIds: [image.id] });
+    await until(() => target.chat.read(restoredScope), value => !value.turns.some(turn => turn.status === 'running')); expect(target.calls[0].messages.at(-1).attachments[0].buffer).toEqual(png);
+    const before = await target.chat.ledger(restoredScope.workspaceId); await target.backup.importBackup({ filePath: exported.filePath, directory: location }); expect(await target.chat.ledger(restoredScope.workspaceId)).toEqual(before); expect(before.reduce((sum, entry) => sum + entry.costCents, 0)).toBe(10); expect(target.calls).toHaveLength(1);
+  }, 20000);
   it('聊天、重试与人工费用校正完整恢复，新工作区重绑身份而冻结原计费快照，不重复调用', async () => {
     const source = await profile(); await talk(source); await talk(source, 'chat-retry-turn', { sourceTurnId: 'chat-source-turn' });
     const before = await source.chat.ledger(workspaceId); await source.chat.reconcile({ entryId: before[0].id, costCents: 9 });

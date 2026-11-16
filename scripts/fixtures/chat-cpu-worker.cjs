@@ -1,0 +1,28 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { workerData, parentPort } = require('node:worker_threads');
+
+const root = path.resolve(__dirname, '..', '..');
+assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
+assert.match(process.env.GITHUB_SHA || '', /^[a-f0-9]{40}$/);
+assert.equal(typeof workerData.testOwnerFile, 'string');
+const ownerFile = path.resolve(workerData.testOwnerFile), temporary = path.dirname(ownerFile);
+assert.equal(path.basename(ownerFile), 'owner.json');
+assert.equal(fs.realpathSync(path.dirname(temporary)).toLowerCase(), fs.realpathSync(process.env.RUNNER_TEMP).toLowerCase());
+assert.match(path.basename(temporary), /^xuzuo-chat-studio-[A-Za-z0-9-]+$/);
+assert(!fs.lstatSync(ownerFile).isSymbolicLink());
+const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+assert.equal(owner.kind, 'xuzuo-chat-studio'); assert.equal(owner.commit, process.env.GITHUB_SHA); assert.equal(owner.nonce, workerData.testOwnerNonce); assert.equal(owner.temporary, temporary);
+assert.equal(typeof owner.localRuntime, 'boolean');
+const dependencyRoot = path.join(root, ...(owner.localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
+assert.equal(owner.dependencyRoot, dependencyRoot); assert(!fs.lstatSync(dependencyRoot).isSymbolicLink()); assert.equal(fs.realpathSync(dependencyRoot).toLowerCase(), dependencyRoot.toLowerCase());
+const Module = require('node:module'); process.env.NODE_PATH = dependencyRoot; Module._initPaths();
+const dependencyRequire = Module.createRequire(path.join(path.dirname(dependencyRoot), 'package.json'));
+const dependencies = Object.fromEntries(['jszip', 'saxes', 'exceljs'].map(name => [name, dependencyRequire.resolve(name)]));
+for (const resolved of Object.values(dependencies)) assert(resolved.toLowerCase().startsWith(dependencyRoot.toLowerCase() + path.sep), 'Fixture worker must use the verified dependency root');
+const resolve = Module._resolveFilename;
+Module._resolveFilename = function (name, parent, ...rest) { return Object.hasOwn(dependencies, name) ? dependencies[name] : resolve.call(this, name, parent, ...rest); };
+const post = parentPort.postMessage.bind(parentPort);
+parentPort.postMessage = (message, ...rest) => post({ ...message, fixtureDependencyBootstrapVerified: true }, ...rest);
+require('../../electron/cpu-worker.cjs');

@@ -32,30 +32,12 @@ function macCredentials(decryptStringAsync) {
   });
 }
 describe('普通聊天的真实供应商传输', () => {
-  it.each(['openai-responses', 'openai-chat', 'anthropic', 'gemini'])('%s实际发送附件正文、图片和PDF二进制，保留对话角色', protocol => {
-    const prepared = prepareChat({ ...input, connection: { ...connection, protocol }, model: { ...model, capabilities: ['text', 'vision'] } }, [{ role: 'assistant', content: '此前回复' }, { role: 'user', content: '请结合附件说明', attachments: attachmentFixtures }]);
-    const body = prepared.body, text = expect.stringContaining('蓝色小熊'), image = attachmentFixtures[1], pdf = attachmentFixtures[2];
-    if (protocol === 'openai-responses') {
-      expect(body.input[0]).toEqual({ role: 'assistant', content: '此前回复' });
-      expect(body.input[1].content).toEqual([{ type: 'input_text', text }, { type: 'input_image', image_url: `data:image/png;base64,${image.data}` }, { type: 'input_file', filename: pdf.name, file_data: `data:application/pdf;base64,${pdf.data}` }]);
-    } else if (protocol === 'openai-chat') {
-      expect(body.messages[1]).toEqual({ role: 'assistant', content: '此前回复' });
-      expect(body.messages[2].content).toEqual([{ type: 'text', text }, { type: 'image_url', image_url: { url: `data:image/png;base64,${image.data}` } }, { type: 'file', file: { filename: pdf.name, file_data: `data:application/pdf;base64,${pdf.data}` } }]);
-    } else if (protocol === 'anthropic') {
-      expect(body.messages[0]).toEqual({ role: 'assistant', content: '此前回复' });
-      expect(body.messages[1].content).toEqual([{ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }, { type: 'document', source: { type: 'base64', media_type: pdf.mimeType, data: pdf.data } }, { type: 'text', text }]);
-    } else {
-      expect(body.contents[0]).toEqual({ role: 'model', parts: [{ text: '此前回复' }] });
-      expect(body.contents[1].parts).toEqual([{ text }, { inlineData: { mimeType: image.mimeType, data: image.data } }, { inlineData: { mimeType: pdf.mimeType, data: pdf.data } }]);
-    }
-    expect(JSON.stringify(body)).not.toContain('attachments'); expect(JSON.stringify(body)).not.toContain('sha256');
-  });
-  it('文本模型可读取文档提取正文，图片/PDF不支持时在凭证及请求前明确阻止', async () => {
-    const prepared = prepareChat(input, [{ role: 'user', content: '总结', attachments: attachmentFixtures.slice(0, 1) }]);
-    expect(prepared.body.input[0].content).toContain('蓝色小熊');
-    let decrypts = 0, requests = 0;
-    await expect(executeChat(input, [{ role: 'user', content: '看图', attachments: attachmentFixtures.slice(1) }], { credentialStore: { withSecret: async () => { decrypts++; } }, fetchImpl: async () => { requests++; } })).rejects.toMatchObject({ code: 'UNSUPPORTED_ATTACHMENT', requestStarted: false });
-    expect(decrypts).toBe(0); expect(requests).toBe(0);
+  it('identifies an HTTP-200 quota stream error without exposing provider messages or retrying', async () => {
+    let calls = 0, failure;
+    try { await executeChat(input, messages, { credentialStore: credentials, fetchImpl: async () => { calls++; return sse([{ type: 'response.output_text.delta', delta: '已返回片段' }, { type: 'error', error: { code: 'credit_balance_exhausted', type: 'insufficient_quota', message: 'fixture-secret-123 untrusted details' } }]); } }); }
+    catch (error) { failure = error; }
+    expect(calls).toBe(1); expect(failure.code).toBe('PROVIDER_QUOTA'); expect(failure.message).toContain('余额或调用额度不足');
+    expect(failure.message).not.toContain('fixture-secret'); expect(failure.partialText).toBe('已返回片段'); expect(failure.requestStarted).toBe(true);
   });
   it('Responses保留原生多轮角色，发送强度并流式解码跨字节中文与用量', async () => {
     let sent; const chunks = [];

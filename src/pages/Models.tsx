@@ -3,7 +3,7 @@ import { hasManagedDialog } from '../lib/dialog-stack';
 import { Select, isSelectInteraction } from '../components/Select';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { ArrowDownToLine, ArrowRight, BadgeCheck, BookOpen, Check, ChevronRight, CircleHelp, ClipboardCheck, Cpu, Globe2, KeyRound, Link2, LoaderCircle, LockKeyhole, Pencil, Plus, Power, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, BadgeCheck, BookOpen, Check, ChevronDown, ChevronRight, CircleHelp, ClipboardCheck, Cpu, Globe2, KeyRound, Link2, LoaderCircle, LockKeyhole, Pencil, Plus, Power, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { ApiProtocol, CredentialMetadata, ModelCapability, ModelConfiguration, ModelConnection, ModelPricing } from '../configuration-types';
 import type { PageProps } from '../types';
 import { CAPABILITY_LABELS, PROTOCOL_LABELS, PROVIDER_PRESETS } from '../model-presets';
@@ -15,6 +15,7 @@ import { MODEL_CATALOG, MODEL_CATALOG_DATE, catalogConnectionDraft, catalogConne
 import type { ModelCatalogEntry } from '../model-catalog';
 import { CatalogPriceDetails, ModelCatalog } from '../components/ModelCatalog';
 import { RememberedDetails } from '../components/RememberedDetails';
+import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 import { QuickModelSetup } from '../components/QuickModelSetup';
 import './models.css';
 
@@ -78,9 +79,10 @@ function unverifiedPricing(pricing: ModelPricing, clearValues = false): ModelPri
   return { unit: pricing.unit, currency: pricing.currency, input: clearValues ? '' : pricing.input, output: clearValues ? '' : pricing.output, exchangeRate: pricing.exchangeRate, referenceOnly: pricing.referenceOnly === true, ...(pricing.referenceOnly ? { referenceNote: '复杂计价仍需核对。要自行填写单价，请先切换手动核算。' } : {}) };
 }
 
-export function Models({ configuration, workflowRunner, notify }: PageProps) {
+export function Models({ configuration, workflowRunner, notify, workspaceId }: PageProps) {
   const { connections, models, credentials, vaultStatus } = configuration;
   const vaultAuthorizationPending = vaultStatus.available && vaultStatus.requiresAuthorization === true;
+  const [advancedOpen, setAdvancedOpen] = useRememberedBoolean(`workspace:${workspaceId}:models:advanced-management`, false);
   const [tab, setTab] = useState<ModelsTab>('connections');
   const [query, setQuery] = useState('');
   const [quickSetupOpen, setQuickSetupOpen] = useState(false);
@@ -119,11 +121,12 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     if (!resumeCatalog) return;
     const compatible = matchingCatalogConnections(resumeCatalog, connections);
     if (compatible.length !== 1) return;
-    const draft = catalogModelDraft(resumeCatalog, compatible[0]);
+    switchTab('models'); const draft = catalogModelDraft(resumeCatalog, compatible[0]);
     setModelEditor({ draft, catalogEntryId: resumeCatalog.id }); setResumeCatalog(undefined); setCatalogConnection(undefined);
   }, [resumeCatalog, connections]);
 
   function openConnection(connection?: ModelConnection) {
+    switchTab('connections');
     setFormError(''); setCatalogConnection(undefined);
     if (connection && !connection.demo) { const { name, providerId, protocol, baseUrl, enabled } = connection; setConnectionEditor({ id: connection.id, draft: { name, providerId, protocol, baseUrl, enabled } }); }
     else { const preset = PROVIDER_PRESETS[0]; setConnectionEditor({ draft: { name: '', providerId: preset.id, protocol: preset.protocol, baseUrl: preset.baseUrl, enabled: true } }); }
@@ -135,17 +138,19 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     if (!connectionEditor.draft.name.trim() || !connectionEditor.draft.baseUrl.trim()) { setFormError('请填写连接名称和从服务商控制台获取的 Base URL。'); return; }
     const validation = connectionError(connectionEditor.draft); if (validation) { setFormError(validation); return; }
     if (catalogConnection && !catalogConnectionMatches(catalogConnection, { ...connectionEditor.draft, id: 'new-catalog-connection', status: 'configured' })) { setFormError('此模型价目绑定指定供应商、协议和地域。请保留相应官方连接信息；其它服务可返回手动填写。'); return; }
-    if (configuration.saveConnection(connectionEditor.draft, connectionEditor.id)) { setConnectionEditor(null); if (catalogConnection) setResumeCatalog(catalogConnection); } else setFormError(configuration.storageIssue?.message || '连接尚未保存，请检查本机配置存储后重试；当前输入保留。');
+    if (configuration.saveConnection(connectionEditor.draft, connectionEditor.id)) { switchTab('connections'); setConnectionEditor(null); if (catalogConnection) setResumeCatalog(catalogConnection); } else setFormError(configuration.storageIssue?.message || '连接尚未保存，请检查本机配置存储后重试；当前输入保留。');
   }
   function closeConnection() { setConnectionEditor(null); setFormError(''); if (catalogConnection) { setCatalogOpen(true); setCatalogConnection(undefined); } }
   function openCatalog() { setFormError(''); setModelNotice(''); setModelEditor(null); setCatalogOpen(true); }
   function selectCatalog(entry: ModelCatalogEntry, connectionId: string) {
+    switchTab('models');
     const connection = connections.find(item => item.id === connectionId);
     if (!connection) { notify('连接已变化，请重新选择。', 'error'); return; }
     try { const draft = catalogModelDraft(entry, connection); setModelEditor({ draft, catalogEntryId: entry.id }); setCatalogOpen(false); setModelNotice('已带入目录参数，保存本身不会调用模型。'); setFormError(''); }
     catch (error) { notify(error instanceof Error ? error.message : '此型号暂不能填入运行配置。', 'error'); }
   }
   function createCatalogConnection(entry: ModelCatalogEntry) {
+    switchTab('connections');
     try { const draft = catalogConnectionDraft(entry); setCatalogConnection(entry); setConnectionEditor({ draft }); setCatalogOpen(false); setFormError(''); }
     catch (error) { notify(error instanceof Error ? error.message : '请先配置对应地域的官方连接。', 'error'); }
   }
@@ -159,6 +164,7 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     finally { checkPending.current = false; setCheckingId(''); }
   }
   function openModel(model?: ModelConfiguration) {
+    switchTab('models');
     if (!model) { openCatalog(); return; }
     setFormError(''); setModelNotice(''); setCatalogOpen(false);
     const { name, modelId, connectionId, capabilities, pricing, enabled } = model;
@@ -166,7 +172,7 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     const source = pricing.verifiedAt && pricing.officialUrl && connection ? MODEL_CATALOG.find(entry => entry.modelId === modelId && entry.checkedAt === pricing.verifiedAt && catalogConnectionMatches(entry, connection)) : undefined;
     setModelEditor({ id: model.demo ? undefined : model.id, draft: { name: model.demo ? `${name}（副本）` : name, modelId, connectionId, capabilities: [...capabilities], pricing: { ...pricing }, enabled }, catalogEntryId: source?.id });
   }
-  function openManualModel() { setCatalogOpen(false); setModelNotice(''); setFormError(''); setModelEditor({ draft: emptyModel(availableConnections[0]?.id || '') }); }
+  function openManualModel() { switchTab('models'); setCatalogOpen(false); setModelNotice(''); setFormError(''); setModelEditor({ draft: emptyModel(availableConnections[0]?.id || '') }); }
   function updateModel(changes: Partial<ModelDraft>) {
     const identityChanged = Boolean(modelEditor && (changes.modelId !== undefined && changes.modelId !== modelEditor.draft.modelId || changes.connectionId !== undefined && changes.connectionId !== modelEditor.draft.connectionId || changes.capabilities && JSON.stringify(changes.capabilities) !== JSON.stringify(modelEditor.draft.capabilities)));
     setModelEditor(current => current && { ...current, ...(identityChanged ? { catalogEntryId: undefined } : {}), draft: { ...current.draft, ...changes, ...(identityChanged ? { pricing: unverifiedPricing(current.draft.pricing, true) } : {}) } });
@@ -187,10 +193,11 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     if (!modelEditor.draft.name.trim() || !modelEditor.draft.modelId.trim() || !modelEditor.draft.connectionId) { setFormError('请填写显示名称、真实模型 ID，并选择所属连接。'); return; }
     if (!modelEditor.draft.capabilities.length) { setFormError('至少选择一种模型能力。'); return; }
     const validation = modelError(modelEditor.draft, connections); if (validation) { setFormError(validation); return; }
-    if (configuration.saveModel(modelEditor.draft, modelEditor.id)) setModelEditor(null); else setFormError(configuration.storageIssue?.message || '模型尚未保存，请检查本机配置存储后重试；当前输入保留。');
+    if (configuration.saveModel(modelEditor.draft, modelEditor.id)) { switchTab('models'); setModelEditor(null); } else setFormError(configuration.storageIssue?.message || '模型尚未保存，请检查本机配置存储后重试；当前输入保留。');
   }
   function closeCredential() { setSecret(''); setCredentialEditor(null); setFormError(''); }
   function openCredential(credential?: CredentialMetadata, connectionId?: string) {
+    switchTab('credentials');
     setSecret(''); setFormError('');
     setCredentialEditor(credential ? { id: credential.id, name: credential.name, connectionId: credential.connectionId } : { name: '', connectionId: connectionId || availableConnections[0]?.id || '' });
   }
@@ -201,7 +208,7 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     credentialSavePending.current = true;
     const input = { ...credentialEditor, name: credentialEditor.name.trim(), secret: secret.trim() };
     setSecret(''); setSavingCredential(true); setFormError('');
-    try { if (await configuration.saveCredential(input)) setCredentialEditor(null); else setFormError('未能保存。密钥输入已清空，请确认桌面密钥库状态后重新填写。'); }
+    try { if (await configuration.saveCredential(input)) { switchTab('credentials'); setCredentialEditor(null); } else setFormError('未能保存。密钥输入已清空，请确认桌面密钥库状态后重新填写。'); }
     catch { setFormError('保存失败。密钥输入已清空，请重新填写后重试。'); }
     finally { input.secret = ''; credentialSavePending.current = false; setSavingCredential(false); }
   }
@@ -217,14 +224,15 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
     void navigator.clipboard.writeText(url).then(() => notify('官方文档链接已复制，可以粘贴到浏览器查看。')).catch(() => notify(`官方文档：${url}`, 'info'));
   }
   const add = () => { if (tab === 'connections') openConnection(); else if (tab === 'models') openModel(); else openCredential(); };
-  const switchTab = (next: ModelsTab) => { setTab(next); setQuery(''); };
+  const switchTab = (next: ModelsTab) => { setAdvancedOpen(true); setTab(next); setQuery(''); };
 
   return <div className="mdl-page">
-    <div className="page-heading"><div><p className="mdl-eyebrow">YOUR MODELS, YOUR WAY</p><h1 className="page-title">模型与连接</h1><p className="page-description">把不同服务商、模型与密钥整理好，让每一步都可以自己选择。</p></div><div className="mdl-heading-actions"><button className="btn btn-secondary" onClick={exportSafe}><ArrowDownToLine size={15} />导出配置</button><button className="btn btn-primary" onClick={add} disabled={tab === 'credentials' && availableConnections.length === 0}><Plus size={16} />{tab === 'connections' ? '添加连接' : tab === 'models' ? '添加模型' : '添加 API Key'}</button></div></div>
-    <section className="mdl-quick-entry" aria-label="快速接入模型"><Sparkles size={24} /><div><strong>{setup.readyModels.length ? '接入新的服务商' : '先接入一个常用模型'}</strong><p>{setup.readyModels.length ? `${setup.readyModels.length} 个模型已配齐。也可以添加其他服务商，按用途选择。` : '选择服务商 → 填入 Key → 勾选文字或图片用途，一次完成配置。'}</p></div><button type="button" className="btn btn-primary" onClick={() => setQuickSetupOpen(true)}>快速接入<ArrowRight size={15} /></button></section>
-    <RememberedDetails className="mdl-setup-disclosure" rememberKey="models:advanced-setup-guide"><summary>高级管理 · 连接、模型与 Key 的独立设置</summary><section className="mdl-setup-panel panel" aria-label="模型配置进度"><div className="mdl-setup-steps"><button onClick={() => switchTab('connections')}><Link2 size={18} /><span><strong>服务连接</strong><small>{setup.enabledConnections.length} 条启用 / {setup.realConnections.length} 条真实连接</small></span></button><button onClick={() => switchTab('models')}><Cpu size={18} /><span><strong>模型配置</strong><small>{setup.enabledModels.length} 个启用模型</small></span></button><button onClick={() => switchTab('credentials')}><KeyRound size={18} /><span><strong>API Key</strong><small>{setup.enabledKeys.length} 把启用凭证</small></span></button></div><footer><p><ShieldCheck size={15} />支持自定义地址、独立型号、多把 Key 和单独启停。配置不会触发付费生成。</p></footer></section></RememberedDetails>
-    {quickSetupOpen && <QuickModelSetup configuration={configuration} onClose={() => setQuickSetupOpen(false)} onComplete={() => { setQuickSetupOpen(false); switchTab('models'); notify('模型接入完成，可回到首页聊天或制作。'); }} />}
-    <section className="mdl-catalog-entry"><BookOpen size={22} /><div><strong>不知道填哪个模型？从官方目录选择</strong><p>文字、图片理解、生成和编辑分开筛选，查看准确 ID、价格条件与参考花费。资料核对 {MODEL_CATALOG_DATE}。</p></div><button className="btn btn-primary" onClick={openCatalog}>浏览模型目录<ArrowRight size={15} /></button></section>
+    <div className="page-heading"><div><h1 className="page-title">模型与账户</h1><p className="page-description">接入常用模型，聊天和制作时直接选择。</p></div><div className="mdl-heading-actions"><button className="btn btn-secondary" onClick={exportSafe}><ArrowDownToLine size={15} />导出配置</button></div></div>
+    <section className="mdl-quick-entry" aria-label="快速接入模型"><Sparkles size={24} /><div><strong>{setup.readyModels.length ? '本地配置已配齐' : '先接入一个常用模型'}</strong><p>{setup.readyModels.length ? `${setup.readyModels.length} 个模型已配齐。也可以添加其他服务商，按用途选择。` : '选择服务商 → 填入 Key → 勾选文字或图片用途，一次完成配置。'}</p><small>保存设置不调用模型；实际可用性由运行时检查。</small></div><button type="button" className="btn btn-primary" onClick={() => setQuickSetupOpen(true)}>{setup.readyModels.length ? '接入新模型' : '快速接入'}<ArrowRight size={15} /></button></section>
+    <section className="mdl-catalog-entry"><BookOpen size={22} /><div><strong>不知道填哪个模型？从官方目录选择</strong><p>文字、图片理解、生成和编辑分开筛选，查看准确 ID、价格条件与参考花费。资料核对 {MODEL_CATALOG_DATE}。</p></div><button className="btn btn-secondary" onClick={openCatalog}>浏览模型目录<ArrowRight size={15} /></button></section>
+    <div className="mdl-management-switch"><button type="button" className="btn btn-secondary" aria-label="高级模型管理" aria-controls="mdl-advanced-management" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(value => !value)}><Cpu size={16} />高级管理<ChevronDown size={15} /></button><span>{setup.realConnections.length} 条连接 · {setup.realModels.length} 个模型 · {credentials.length} 把 Key</span></div>
+    {advancedOpen && <section id="mdl-advanced-management" className="mdl-advanced-management" aria-label="高级模型管理内容"><header className="mdl-management-heading"><div><strong>连接、模型与 Key</strong><p>独立管理多服务商、多型号和多把凭证。</p></div><button className="btn btn-secondary" onClick={add} disabled={tab === 'credentials' && availableConnections.length === 0}><Plus size={16} />{tab === 'connections' ? '添加连接' : tab === 'models' ? '添加模型' : '添加 API Key'}</button></header>
+    <RememberedDetails className="mdl-setup-disclosure" rememberKey="models:advanced-setup-guide"><summary>查看连接、模型与 Key 说明</summary><section className="mdl-setup-panel panel" aria-label="模型配置进度"><div className="mdl-setup-steps"><button onClick={() => switchTab('connections')}><Link2 size={18} /><span><strong>服务连接</strong><small>{setup.enabledConnections.length} 条启用 / {setup.realConnections.length} 条真实连接</small></span></button><button onClick={() => switchTab('models')}><Cpu size={18} /><span><strong>模型配置</strong><small>{setup.enabledModels.length} 个启用模型</small></span></button><button onClick={() => switchTab('credentials')}><KeyRound size={18} /><span><strong>API Key</strong><small>{setup.enabledKeys.length} 把启用凭证</small></span></button></div><footer><p><ShieldCheck size={15} />支持自定义地址、独立型号、多把 Key 和单独启停。配置不会触发付费生成。</p></footer></section></RememberedDetails>
     <div className="mdl-safety-note"><CircleHelp size={15} /><p>供应商预设和能力勾选不等于全部接口已验证。工作流真实运行前会检查适配情况；未支持的协议会阻止执行。认证检查仅验证所选凭证访问基础接口的结果，不保证所有模型、余额或多模态能力可用。</p></div>
     <div className="mdl-toolbar"><div className="tabs mdl-tabs">{([{ id: 'connections', name: '服务连接', icon: Link2, count: connections.length }, { id: 'models', name: '模型配置', icon: Cpu, count: models.length }, { id: 'credentials', name: 'API Key', icon: KeyRound, count: credentials.length }] as const).map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => switchTab(item.id)}><item.icon size={15} />{item.name}<span>{item.count}</span></button>)}</div><label className="mdl-search"><Search size={15} /><input aria-label="搜索模型与连接" value={query} onChange={event => setQuery(event.target.value)} placeholder={tab === 'connections' ? '搜索服务商、连接或协议…' : tab === 'models' ? '搜索模型名称、ID 或能力…' : '搜索凭证名称或所属连接…'} /></label></div>
 
@@ -232,7 +240,7 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
       const preset = PROVIDER_PRESETS.find(item => item.id === connection.providerId);
       const modelCount = models.filter(model => model.connectionId === connection.id).length;
       const keyCount = credentials.filter(credential => credential.connectionId === connection.id).length;
-      return <article className={`panel mdl-connection-card ${connection.enabled ? '' : 'mdl-disabled'}`} key={connection.id}><div className="mdl-card-heading"><span className={`mdl-provider-icon ${connection.demo ? 'mdl-provider-demo' : ''}`}>{connection.demo ? <Sparkles size={22} /> : <Globe2 size={21} />}</span><span className={`mdl-state ${connection.demo ? 'demo' : connection.status === 'format-checked' ? 'checked' : ''}`}>{connection.demo ? '内置演示' : connection.status === 'format-checked' ? '格式已检查' : '配置已保存'}</span></div><h2>{connection.name}</h2><p className="mdl-provider-name">{preset?.name || '本地演示引擎'}<span>·</span>{preset?.region || '无需联网'}</p><div className="mdl-endpoint"><span>{PROTOCOL_LABELS[connection.protocol]}</span><code title={connection.baseUrl}>{connection.demo ? '本机模拟 · 不调用任何 API' : connection.baseUrl}</code></div><div className="mdl-card-counts"><span><Cpu size={13} />{modelCount} 个模型</span><span><KeyRound size={13} />{connection.demo ? '无需凭证' : `${keyCount} 把 Key`}</span></div><footer><EnabledButton enabled={connection.enabled} name={connection.name} disabled={Boolean(connection.demo)} onClick={() => configuration.setConnectionEnabled(connection.id, !connection.enabled)} />{!connection.demo && <><button className="mdl-text-button" onClick={() => { setTab('credentials'); openCredential(undefined, connection.id); }}><KeyRound size={13} />添加 Key</button><button className="btn-icon" aria-label={`编辑连接${connection.name}`} title="编辑连接" onClick={() => openConnection(connection)}><Pencil size={14} /></button><button className="mdl-check-button" aria-label={`检查${connection.name}真实连接`} onClick={() => checkConnection(connection)}>{checkingId === connection.id ? <LoaderCircle size={13} className="spin" /> : <ClipboardCheck size={13} />}检查连接</button></>}</footer></article>;
+      return <article className={`panel mdl-connection-card ${connection.enabled ? '' : 'mdl-disabled'}`} key={connection.id}><div className="mdl-card-heading"><span className={`mdl-provider-icon ${connection.demo ? 'mdl-provider-demo' : ''}`}>{connection.demo ? <Sparkles size={22} /> : <Globe2 size={21} />}</span><span className={`mdl-state ${connection.demo ? 'demo' : connection.status === 'format-checked' ? 'checked' : ''}`}>{connection.demo ? '内置演示' : connection.status === 'format-checked' ? '格式已检查' : '配置已保存'}</span></div><h2>{connection.name}</h2><p className="mdl-provider-name">{preset?.name || '本地演示引擎'}<span>·</span>{preset?.region || '无需联网'}</p><div className="mdl-endpoint"><span>{PROTOCOL_LABELS[connection.protocol]}</span><code title={connection.baseUrl}>{connection.demo ? '本机模拟 · 不调用任何 API' : connection.baseUrl}</code></div><div className="mdl-card-counts"><span><Cpu size={13} />{modelCount} 个模型</span><span><KeyRound size={13} />{connection.demo ? '无需凭证' : `${keyCount} 把 Key`}</span></div><footer><EnabledButton enabled={connection.enabled} name={connection.name} disabled={Boolean(connection.demo)} onClick={() => configuration.setConnectionEnabled(connection.id, !connection.enabled)} />{!connection.demo && <><button className="mdl-text-button" onClick={() => { switchTab('credentials'); openCredential(undefined, connection.id); }}><KeyRound size={13} />添加 Key</button><button className="btn-icon" aria-label={`编辑连接${connection.name}`} title="编辑连接" onClick={() => openConnection(connection)}><Pencil size={14} /></button><button className="mdl-check-button" aria-label={`检查${connection.name}真实连接`} onClick={() => checkConnection(connection)}>{checkingId === connection.id ? <LoaderCircle size={13} className="spin" /> : <ClipboardCheck size={13} />}检查连接</button></>}</footer></article>;
     })}<button className="mdl-add-card" onClick={() => openConnection()}><span><Plus size={24} /></span><b>添加自己的服务连接</b><small>选预设，或填写自定义地址与协议</small><ArrowRight size={16} /></button></div></>}
 
     {tab === 'models' && <><div className="mdl-section-heading"><span>可选模型<b>{filteredModels.length}</b></span><small>支持哪些输入、输出，由具体模型与接口决定</small></div>{filteredModels.length ? <div className="mdl-model-list">{filteredModels.map(model => {
@@ -247,6 +255,8 @@ export function Models({ configuration, workflowRunner, notify }: PageProps) {
 
     <div className="mdl-page-footnote"><ShieldCheck size={14} /><span>配置保存在本机，各工作区可引用。保存配置和密钥不调用模型；认证检查会访问你选择的服务地址，真实生成和重试可能收费。预设不代表所有型号与模态均已联通。</span></div>
 
+    </section>}
+    {quickSetupOpen && <QuickModelSetup configuration={configuration} onClose={() => setQuickSetupOpen(false)} onComplete={() => { setQuickSetupOpen(false); switchTab('models'); notify('模型接入完成，可回到首页聊天或制作。'); }} />}
     {catalogOpen && <Modal title="选择官方模型" subtitle={`按供应商和用途选择 · 资料核对 ${MODEL_CATALOG_DATE}`} icon={<BookOpen size={23} />} className="mdl-catalog-dialog" onClose={() => setCatalogOpen(false)} footer={<><span className="mdl-modal-note"><ShieldCheck size={14} />目录不含账户余额或已领取赠送额度，实际以自己的控制台为准。</span><button className="btn btn-secondary" onClick={openManualModel}>手动填写</button><button className="btn btn-primary" onClick={() => setCatalogOpen(false)}>关闭目录</button></>}><ModelCatalog connections={connections} onSelect={selectCatalog} onCreateConnection={createCatalogConnection} onCopySource={copyDocumentation} /></Modal>}
     {connectionCheck && <Modal title="检查真实连接" subtitle={connectionCheck.name} icon={<Globe2 size={22} />} busy={!!checkingId} onClose={() => setConnectionCheck(null)} footer={<><span className="mdl-modal-note"><ShieldCheck size={13} />只检查基础接口，不运行生成任务</span><button className="btn btn-secondary" disabled={!!checkingId} onClick={() => setConnectionCheck(null)}>关闭</button><button className="btn btn-primary" disabled={!!checkingId || !checkCredentialId || !workflowRunner.runtimeStatus.available} onClick={() => { void sendConnectionCheck(); }}>{checkingId ? <LoaderCircle size={14} className="spin" /> : <ClipboardCheck size={14} />}{checkingId ? '正在检查…' : '发送认证检查'}</button></>}><div className="mdl-probe-target"><span>请求服务地址</span><code>{cleanEndpoint(connectionCheck.baseUrl)}</code><small>{PROTOCOL_LABELS[connectionCheck.protocol]}</small></div><label className="mdl-field"><span>明确选择这次使用的 Key <b>*</b></span><Select className="field" aria-label="认证检查使用凭证" value={checkCredentialId} onValueChange={value => { setCheckCredentialId(value); setCheckMessage(''); }} disabled={!!checkingId} options={[{ value: '', label: '请选择同一连接下启用的凭证' }, ...checkKeys.map(credential => ({ value: credential.id, label: `${credential.name} · ••••${credential.lastFour}` }))]} /><small>{checkKeys.length === 1 ? '已带入这条连接唯一启用的 Key，点击发送才开始检查。' : '不会自动轮换或尝试其他 Key。请求会发送到上方服务地址。'}</small></label>{checkKeys.length === 0 && <div className="mdl-inline-note"><KeyRound size={16} /><span>这条连接还没有启用的 API Key。</span><button disabled={!!checkingId} onClick={() => { const id = connectionCheck.id; setConnectionCheck(null); switchTab('credentials'); openCredential(undefined, id); }}>为此连接添加 Key<ArrowRight size={13} /></button></div>}{!workflowRunner.runtimeStatus.available && <p className="mdl-probe-unavailable">{workflowRunner.runtimeStatus.reason || '请在桌面应用中执行真实连接检查。'}</p>}<div className="mdl-credential-notice"><ShieldCheck size={18} /><div><b>认证检查范围</b><p>仅访问服务商的基础认证或模型目录接口。成功结果不保证某个模型、额度、图像、语音或视频生成一定可用；失败也可能是该服务商没有提供此目录接口。</p></div></div>{checkMessage && <p className={`mdl-probe-message ${checkSucceeded === false ? 'failed' : checkSucceeded ? 'passed' : ''}`} role={checkSucceeded === false ? 'alert' : 'status'}>{checkSucceeded === true ? <Check size={15} /> : <CircleHelp size={15} />}{checkMessage}</p>}</Modal>}
     {connectionEditor && <Modal error={formError} title={connectionEditor.id ? '编辑服务连接' : '添加服务连接'} subtitle={catalogConnection ? `先为 ${catalogConnection.name} 保存官方连接，再继续模型配置。` : "连接地址与协议分别配置，Key 在独立的密钥库中保存。"} icon={<Link2 size={22} />} onClose={closeConnection} footer={<><span className="mdl-modal-note"><ShieldCheck size={13} />只保存配置，不联网</span><button className="btn btn-secondary" onClick={closeConnection}>取消</button><button className="btn btn-primary" type="submit" form="mdl-connection-form"><Check size={14} />保存连接</button></>}><form id="mdl-connection-form" onSubmit={saveConnection}><div className="mdl-form-grid"><label className="mdl-field"><span>连接名称 <b>*</b></span><input className="field" aria-label="连接名称" maxLength={60} value={connectionEditor.draft.name} onChange={event => updateConnection({ name: event.target.value })} placeholder="例如：我的百炼账号 · 北京" /></label><label className="mdl-field"><span>服务商预设</span><Select className="field" aria-label="服务商预设" value={connectionEditor.draft.providerId} onValueChange={selectProvider} options={PROVIDER_PRESETS.map(preset => ({ value: preset.id, label: `${preset.name} · ${preset.region}` }))} /></label><label className="mdl-field mdl-full-width"><span>接口协议 <b>*</b></span><Select className="field" aria-label="接口协议" value={connectionEditor.draft.protocol} onValueChange={value => updateConnection({ protocol: value as ApiProtocol })} options={CONFIGURABLE_PROTOCOLS.map(protocol => ({ value: protocol, label: PROTOCOL_LABELS[protocol] }))} /><small>更换协议不会自动保证地址兼容；图像、音频、视频专用接口需要各自适配。</small></label><label className="mdl-field mdl-full-width"><span>Base URL <b>*</b></span><input className="field mdl-code-field" aria-label="Base URL" value={connectionEditor.draft.baseUrl} onChange={event => updateConnection({ baseUrl: event.target.value })} placeholder="从服务商控制台复制，例如 https://api.example.com/v1" autoComplete="off" spellCheck={false} /><small>填写服务基础地址，不填 Key、认证参数或完整请求内容。</small></label></div><div className="mdl-preset-note"><BadgeCheck size={17} /><div><b>{currentPreset?.name} · {currentPreset?.region}</b><p>{currentPreset?.note}</p>{currentPreset?.docsUrl && <button type="button" className="mdl-doc-button" onClick={() => copyDocumentation(currentPreset.docsUrl)}>复制官方文档链接<ArrowRight size={12} /></button>}</div></div><label className="mdl-checkbox-line"><input type="checkbox" checked={connectionEditor.draft.enabled} onChange={event => updateConnection({ enabled: event.target.checked })} />保存后启用此连接</label></form></Modal>}

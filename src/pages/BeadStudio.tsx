@@ -26,14 +26,14 @@ import './bead-studio.css';
 
 const BeadMarketPanel = lazy(() => import('../components/bead-market/BeadMarketPanel').then(module => ({ default: module.BeadMarketPanel })));
 const StudioAssetPicker = lazy(() => import('../components/StudioAssetPicker').then(module => ({ default: module.StudioAssetPicker })));
-interface Props { props: PageProps; project: Project; onBack: () => void; }
+interface Props { props: PageProps; project: Project; onBack: () => void; initialReferenceId?: string; }
 const number = (text: string) => text.trim() ? Number(text) : Number.NaN;
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作暂未完成，当前图纸与费用保留。';
 const formatNames: Record<BeadExportFormat, string> = { bundle: '整套 ZIP', png: '预览 PNG', pdf: '打印 PDF', csv: '用量 CSV', xlsx: '采购 Excel', json: '工程 JSON' };
 
 export function BeadStudio(input: Props) { return <BeadProject key={input.project.id} {...input} />; }
 
-function BeadProject({ props, project, onBack }: Props) {
+function BeadProject({ props, project, onBack, initialReferenceId }: Props) {
   const bridge = typeof window === 'undefined' ? undefined : window.desktop?.beads, canvas = useRef<BeadCanvasHandle>(null);
   const store = useBeadDocument(project.id, bridge, { beforeSave: () => canvas.current?.commitStroke(), pendingStroke: () => Boolean(canvas.current?.hasPendingStroke()) });
   const [settings, setSettings] = useState<BeadSettings>({ ...DEFAULT_BEAD_SETTINGS }), [palette, setPalette] = useState<BeadPalette>(() => BEAD_PALETTES.find(item => item.id === DEFAULT_BEAD_PALETTE_ID) || BEAD_PALETTES[0]);
@@ -43,6 +43,7 @@ function BeadProject({ props, project, onBack }: Props) {
   const [historyOpen, setHistoryOpen] = useState(false), [versions, setVersions] = useState<BeadSavedVersion[]>([]), [historyLoading, setHistoryLoading] = useState(false), [historyIssue, setHistoryIssue] = useState('');
   const [keepAspect, setKeepAspect] = useRememberedBoolean(`beads:${project.id}:aspect`, true), [view, setView] = useRememberedString(`beads:${project.id}:view`, 'canvas');
   const alive = useRef(true), operation = useRef(0), sourceRead = useRef(0), sourceRef = useRef(source); sourceRef.current = source;
+  const initialSourceRead = useRef<string | undefined>(undefined);
   const appliedAsset = useRef<string | undefined>(undefined), currentAsset = useRef(props.assetToApply); currentAsset.current = props.assetToApply;
   const tasks = useRef(new Set<Promise<void>>());
   const track = (task: Promise<void>) => { tasks.current.add(task); void task.then(() => tasks.current.delete(task), cause => { tasks.current.delete(task); if (alive.current) setOperationIssue(errorText(cause)); }); };
@@ -73,6 +74,11 @@ function BeadProject({ props, project, onBack }: Props) {
     if (sourceRef.current?.referenceId === document.referenceId && sourceRef.current.sourceSha256 === document.sourceSha256) return;
     void readSource(document.referenceId, false);
   }, [document?.id, document?.referenceId, document?.sourceSha256]);
+  useEffect(() => {
+    if (!initialReferenceId || !bridge || store.loading || store.error || document || sourceRef.current || initialSourceRead.current === initialReferenceId) return;
+    initialSourceRead.current = initialReferenceId;
+    void readSource(initialReferenceId, false);
+  }, [initialReferenceId, bridge, store.loading, store.error, document]);
   useEffect(() => {
     let current = true;
     if (props.workflowRunner.listProjectArtifacts) void props.workflowRunner.listProjectArtifacts(project.id).then(value => { if (current) setFiles(value); }, () => {});

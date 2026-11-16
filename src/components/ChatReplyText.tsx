@@ -1,17 +1,31 @@
-import { Fragment, memo } from 'react';
+import { createElement, memo } from 'react';
 import type { ReactNode } from 'react';
+import { parseChatMarkdown, type ChatMarkdownNode } from '../lib/chat-markdown';
+import { ChatMarkdownImage } from './ChatMarkdownImage';
+import './chat-reply-text.css';
 
-function inline(value: string): ReactNode {
-  return value.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((part, index) => part.startsWith('**') && part.endsWith('**') ? <strong key={index}>{part.slice(2, -2)}</strong> : part.startsWith('`') && part.endsWith('`') ? <code key={index}>{part.slice(1, -1)}</code> : <Fragment key={index}>{part}</Fragment>);
+function nodeText(nodes: ChatMarkdownNode[]): string { return nodes.map(node => node.type === 'text' ? node.value : node.tag === 'br' ? '\n' : nodeText(node.children)).join(''); }
+function hasImage(nodes: ChatMarkdownNode[]): boolean { return nodes.some(node => node.type === 'element' && (node.image || hasImage(node.children))); }
+function renderNode(node: ChatMarkdownNode, key: string): ReactNode {
+  if (node.type === 'text') return node.value;
+  if (node.image && node.imageUrl) return <ChatMarkdownImage key={key} url={node.imageUrl} alt={nodeText(node.children) || '图片'} title={node.title} />;
+  const isTask = node.tag === 'li' && typeof node.taskChecked === 'boolean';
+  const className = node.image ? 'chat-reply-image-note' : isTask ? 'chat-reply-task-item' : /^h[1-6]$/.test(node.tag) ? 'chat-reply-heading' : undefined;
+  const props = {
+    key,
+    className,
+    ...(node.title ? { title: node.title } : {}),
+    ...(node.tag === 'ol' && node.start !== undefined ? { start: node.start } : {}),
+    ...(node.align ? { style: { textAlign: node.align } } : {}),
+    ...(node.tag === 'a' && node.href ? { href: node.href, target: '_blank', rel: 'noopener noreferrer' } : {}),
+  };
+  if (node.tag === 'br' || node.tag === 'hr') return createElement(node.tag, props);
+  const children = node.children.map((child, index) => renderNode(child, `${key}-${index}`));
+  if (isTask) children.unshift(<input key={`${key}-check`} className="chat-reply-task-check" type="checkbox" checked={node.taskChecked} readOnly disabled tabIndex={-1} aria-label={node.taskChecked ? '已完成任务' : '未完成任务'} />);
+  if (node.tag === 'a' && node.href && hasImage(node.children)) return <span className="chat-reply-linked-image" key={key}>{children}<a href={node.href} title={node.title} target="_blank" rel="noopener noreferrer">打开链接</a></span>;
+  const content = createElement(node.tag, props, ...children);
+  return node.tag === 'table' ? <div className="chat-reply-table" key={key}>{content}</div> : content;
 }
 export const ChatReplyText = memo(function ChatReplyText({ text }: { text: string }) {
-  const sections = text.split(/^```[^\n]*\n?/m);
-  return <div className="chat-reply-text">{sections.map((section, index) => index % 2 ? <pre key={index}><code>{section.replace(/\n$/, '')}</code></pre> : section.split(/\n\s*\n/).filter(Boolean).map((paragraph, position) => {
-    const lines = paragraph.split('\n'), key = `${index}-${position}`;
-    if (lines.length >= 2 && /^\|?.+\|.+/.test(lines[0]) && /^\|?[\s:|-]+\|/.test(lines[1])) {
-      const cells = (line: string) => line.replace(/^\|\s*|\s*\|$/g, '').split('|').map(cell => cell.trim());
-      return <div className="chat-reply-table" key={key}><table><thead><tr>{cells(lines[0]).map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead><tbody>{lines.slice(2).map((line, row) => <tr key={row}>{cells(line).map((cell, i) => <td key={i}>{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
-    }
-    return <div key={key}>{lines.map((line, row) => /^#{1,4}\s/.test(line) ? <strong className="chat-reply-heading" key={row}>{inline(line.replace(/^#{1,4}\s+/, ''))}</strong> : /^[-*]\s/.test(line) ? <div className="chat-reply-list" key={row}>• {inline(line.replace(/^[-*]\s+/, ''))}</div> : <p key={row}>{inline(line) || '\u00a0'}</p>)}</div>;
-  }))}</div>;
+  return <div className="chat-reply-text">{parseChatMarkdown(text).map((node, index) => renderNode(node, String(index)))}</div>;
 });

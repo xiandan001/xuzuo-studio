@@ -85,7 +85,7 @@ async function main() {
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted', 'Only a disposable GitHub-hosted runner may install this fixture');
   assert.equal((await fsp.realpath(process.env.GITHUB_WORKSPACE)).toLowerCase(), (await fsp.realpath(root)).toLowerCase());
   assert(process.env.RUNNER_TEMP && path.isAbsolute(process.env.RUNNER_TEMP)); assert(process.argv.length <= 3);
-  const sourcePackage = await json(path.join(root, 'package.json')); assert.equal(sourcePackage.version, '2.6.0');
+  const sourcePackage = await json(path.join(root, 'package.json')); assert.match(sourcePackage.version, /^\d+\.\d+\.\d+$/);
   const release = path.resolve(process.argv[2] || path.join(root, sourcePackage.build.directories.output)); inside(path.join(root, 'outputs'), release); await ordinary(release, true);
   reportFile = path.join(release, 'full-install-lifecycle.json'); await assert.rejects(fsp.lstat(reportFile), { code: 'ENOENT' });
   current = await json(path.join(release, 'package-verification.json')); assert.equal(current.passed, true); assert.equal(current.commit, process.env.GITHUB_SHA); assert.equal(current.version, sourcePackage.version);
@@ -102,6 +102,12 @@ async function main() {
     process.exit(1);
   }, 720000); totalDeadline.unref();
   Object.assign(report, { commit: process.env.GITHUB_SHA, version: current.version, fixture, oldInstaller: { version: oldVersion, bytes: oldBytes, sha256: oldSha }, baselineEngine: 'Current production SetupEngine with verified complete 2.1.5 runtime; not literal old installer entry point' });
+  const moveProof = await json(path.join(root, 'work/setup-directory-move-output/report.json'));
+  assert(moveProof.passed && moveProof.commit === process.env.GITHUB_SHA && moveProof.version === current.version && !moveProof.normalApplicationStarted && !moveProof.installerExecuted && !moveProof.registryTouched && moveProof.providerCalls === 0);
+  assert.deepEqual(moveProof.fixture.cases.map(item => item.name).sort(), ['delayed-lock-release', 'permanent-lock-preserves-source', 'validation-failure-no-retry']);
+  assert(moveProof.fixture.cases.every(item => item.passed === true));
+  for (const source of moveProof.sources) { inside(root, path.join(root, source.name)); assert.equal((await identity(path.join(root, source.name))).sha256, source.sha256); }
+  report.directoryMoveLockHandlingVerified = true; report.directoryMoveLockProof = moveProof;
   await fsp.writeFile(path.join(fixture, 'owner.json'), JSON.stringify({ kind: 'xuzuo-full-install-ci', directory: fixture, commit: process.env.GITHUB_SHA, nonce: randomUUID() }) + '\n', { flag: 'wx' });
   const { setupMetadata, compileSetup, archivePayload } = await import('./build-setup.mjs');
   const guid = randomUUID(), metadata = setupMetadata({ appId: 'local.xuzuo.studio.full.qa.' + guid, productName: 'Xuzuo full runtime QA', executableProductName: sourcePackage.build.productName, validation: true, validationRoot: fixture, shortcutRoot: path.join(fixture, 'shortcuts'), shortcutName: 'Xuzuo full runtime QA ' + guid, defaultDirectoryName: 'application' });
@@ -109,7 +115,7 @@ async function main() {
   report.namespace = { appId: metadata.appId, installGuid: metadata.installGuid, shortcutRoot: metadata.shortcutRoot, uninstallRegistryKey: metadata.uninstallRegistryKey };
   const framework = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319'), compiler = path.join(framework, 'csc.exe');
   const references = ['System.dll', 'System.Core.dll', 'System.Xml.dll', 'System.Xaml.dll', 'System.Web.Extensions.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll', 'Microsoft.CSharp.dll', 'WPF/WindowsBase.dll', 'WPF/PresentationCore.dll', 'WPF/PresentationFramework.dll'].map(name => path.join(framework, name));
-  const sources = ['setup-contracts.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs', 'setup-update-fixture.cs'].map(name => path.join(root, 'scripts/native', name));
+  const sources = ['setup-contracts.cs', 'setup-directory-move.cs', 'setup-engine.cs', 'setup-program.cs', 'setup-ui.cs', 'setup-update.cs', 'setup-update-fixture.cs'].map(name => path.join(root, 'scripts/native', name));
   report.installerSource = []; for (const file of sources) report.installerSource.push({ name: path.basename(file), ...await identity(file) });
   async function controller(destination, meta, manifest, payload) {
     const metaFile = path.join(path.dirname(destination), path.basename(destination) + '.metadata.json'); await fsp.writeFile(metaFile, JSON.stringify(meta) + '\n', { flag: 'wx' });
@@ -213,8 +219,13 @@ async function main() {
   const update = launch(next.setup, ['--update', '--root', installed, '--wait-pid', String(processIdentity.pid), '--wait-start', String(processIdentity.startedAt), '--result', resultFile], 180000, process.env, 'update-cli');
   await delay(600); assert.equal(update.child.exitCode, null); assert.equal(oldApp.child.exitCode, null); assert.equal((await json(path.join(installed, 'resources/xuzuo-install-manifest.json'))).version, oldVersion);
   report.waitedForRealOldProcess = true; ownerProcess.child.stdin.end(); assert.equal((await ownerProcess.done).code, 0); assert.equal((await oldApp.done).code, 0);
-  const updateExit = await update.done; assert.equal(updateExit.code, 0); assert(!updateExit.timedOut);
-  const updateResult = await json(resultFile); assert.equal(updateResult.success, true); assert.equal(updateResult.version, current.version);
+  const updateExit = await update.done;
+  report.updateCliExit = updateExit;
+  let updateResult;
+  try { updateResult = await json(resultFile); report.updateCliResult = updateResult; }
+  catch (error) { report.updateCliResultError = { name: error.name, code: error.code, message: String(error.message).slice(0, 1200) }; }
+  assert.equal(updateExit.code, 0, `Update CLI failed: ${JSON.stringify({ timedOut: updateExit.timedOut, result: report.updateCliResult, resultError: report.updateCliResultError })}`); assert(!updateExit.timedOut);
+  assert(updateResult, 'Successful update did not write a result'); assert.equal(updateResult.success, true); assert.equal(updateResult.version, current.version);
   await verifyRuntime(installed, next.manifest, ['resources/xuzuo-install-manifest.json', '.xuzuo-setup-owner.json']); const nextStatus = await command(next.driver, ['status', installed]); assert.equal(nextStatus.registration.Version, current.version); assert(nextStatus.shortcuts.every(file => file.exists));
   assert.deepEqual(await identity(userFile), userHash); assert.deepEqual(await identity(syntheticFeeFile), syntheticFeeHash); assert.equal((await fsp.readdir(profile)).filter(name => /^credentials(?:[-.]|$)/i.test(name)).length, 0);
   report.updateCliVerified = true; report.fullRuntimeFilesVerified = true; report.oldProcess = processIdentity; report.preparingRetryVerified = true;

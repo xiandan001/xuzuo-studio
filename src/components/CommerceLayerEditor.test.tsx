@@ -11,7 +11,7 @@ import { CommerceLayerEditor } from './CommerceLayerEditor';
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=';
 const roots: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers(); localStorage.clear();
   vi.stubGlobal('ResizeObserver', class { callback: ResizeObserverCallback; constructor(callback: ResizeObserverCallback) { this.callback = callback; } observe() { this.callback([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver); } disconnect() {} unobserve() {} });
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} }) as unknown as CanvasRenderingContext2D);
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(image);
@@ -22,12 +22,12 @@ function doc(source = 'original', documentId = 'working'): CommerceImageDocument
   return { type: 'xuzuo-commerce-image', version: 1, id: documentId, projectId: 'project', sourceArtifactId: source, sourceSha256: 'a'.repeat(64), revision: 0, title: '商品海报', width: 256, height: 256, background: '#FFFFFF', updatedAt: '', layers: [{ id: 'product', type: 'image', role: 'product', artifactId: source, name: '商品主体', x: 0, y: 0, width: 256, height: 256, opacity: 1, visible: true, locked: false }, { id: 'price', type: 'text', name: '售价', text: '原售价129元', x: 10, y: 200, width: 230, height: 50, fontSize: 20, fontFamily: 'Microsoft YaHei', fontWeight: 'bold', align: 'left', color: '#17212B', opacity: 1, visible: true, locked: false }] };
 }
 function read(document = doc()): CommerceImageRead { return { projectId: 'project', sourceArtifactId: document.sourceArtifactId, documentId: document.id, document, source: { id: document.sourceArtifactId, name: '真实商品.png', width: 256, height: 256, sha256: document.sourceSha256, previewDataUrl: image }, previews: { [document.sourceArtifactId]: image } }; }
-async function mounted(options: { source?: string; bridge?: Partial<CommerceImagesBridge> } = {}) {
+async function mounted(options: { source?: string; workspaceId?: string; bridge?: Partial<CommerceImagesBridge> } = {}) {
   let current = doc(); const onGenerate = vi.fn(), onExport = vi.fn();
   const bridge: CommerceImagesBridge = { read: vi.fn(async () => read(current)), save: vi.fn(async input => { current = { ...input.document, revision: input.expectedRevision + 1 }; return current; }), render: vi.fn(async () => ({ documentId: current.id, sourceRevision: current.revision, runId: 'export', artifacts: [{ id: 'result', projectId: 'project', name: '真实成品.png', mimeType: 'image/png', kind: 'image' as const, bytes: 100, path: 'managed/result', createdAt: '' }] })), applyAlpha: vi.fn(async () => ({ artifact: { id: 'product-matte', name: '主体.png', projectId: 'project', mimeType: 'image/png', kind: 'image' as const, bytes: 10, path: '', createdAt: '' }, width: 256, height: 256, sourceSha256: 'a'.repeat(64) })), protect: vi.fn(), mask: vi.fn(async () => ({ id: 'mask', name: '蒙版.png', projectId: 'project', mimeType: 'image/png', kind: 'image' as const, bytes: 10, path: '', createdAt: '' })), cancel: vi.fn(async () => {}), history: vi.fn(async () => []), exportRecovery: vi.fn(async () => ({ saved: true })), ...options.bridge };
   Object.defineProperty(window, 'desktop', { configurable: true, value: { commerceImages: bridge } });
   const ledger = Object.freeze([Object.freeze({ id: 'paid', projectId: 'project', projectName: '商品', billingMode: 'live', costState: 'calculated', costCents: 128, action: '初次生成', model: '已有调用', time: '', status: 'complete' })]);
-  const props = { workspaceId: 'workspace', projects: [{ id: 'project', name: '商品海报', workspaceId: 'workspace', kind: 'image', status: 'draft' }], ledger, onGenerate, onUpdateProject: vi.fn(), notify: vi.fn(), workflowRunner: { runs: [], listProjectArtifacts: vi.fn(async () => []), thumbnailArtifact: vi.fn(async () => ({ mimeType: 'image/png', dataUrl: image })), previewArtifact: vi.fn(async () => ({ mimeType: 'image/png', dataUrl: image })), importFiles: vi.fn(async () => []), saveArtifact: vi.fn(async () => ({ saved: true })) } } as unknown as PageProps;
+  const props = { workspaceId: options.workspaceId || 'workspace', projects: [{ id: 'project', name: '商品海报', workspaceId: options.workspaceId || 'workspace', kind: 'image', status: 'draft' }], ledger, onGenerate, onUpdateProject: vi.fn(), notify: vi.fn(), workflowRunner: { runs: [], listProjectArtifacts: vi.fn(async () => []), thumbnailArtifact: vi.fn(async () => ({ mimeType: 'image/png', dataUrl: image })), previewArtifact: vi.fn(async () => ({ mimeType: 'image/png', dataUrl: image })), importFiles: vi.fn(async () => []), saveArtifact: vi.fn(async () => ({ saved: true })) } } as unknown as PageProps;
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host); roots.push(root);
   const render = async (source = options.source || 'final-png') => act(async () => root.render(<CommerceLayerEditor props={props} projectId="project" sourceArtifactId={source} onExport={onExport} />)); await render();
   return { host, root, bridge, props, onGenerate, onExport, ledger, current: () => current, render };
@@ -38,6 +38,46 @@ async function input(host: HTMLElement, name: string, value: string) {
   await act(async () => { Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(element, value); element.dispatchEvent(new Event('input', { bubbles: true })); });
 }
 describe('商品图层编辑与零额外API操作', () => {
+  it('没有图层选择时收窄属性区域，新增图层恢复原来的展开偏好', async () => {
+    const ui = await mounted();
+    await act(async () => button(ui.host, '删除图层').click());
+    await act(async () => button(ui.host, '删除图层').click());
+    expect(ui.host.querySelector('.cle-layout')?.classList.contains('is-properties-collapsed')).toBe(true);
+    expect(button(ui.host, '展开属性面板').disabled).toBe(true);
+    expect(ui.host.querySelector('.cle-properties')).toBeNull();
+    await act(async () => button(ui.host, '加文字').click());
+    expect(ui.host.querySelector('.cle-layout')?.classList.contains('is-properties-collapsed')).toBe(false);
+    expect(ui.host.querySelector('[aria-label="准确文字内容"]')).not.toBeNull();
+    expect(ui.onGenerate).not.toHaveBeenCalled(); expect(ui.ledger[0].costCents).toBe(128);
+  });
+
+  it('左右面板分别折叠并记忆，画布和未保存文字不被重新挂载', async () => {
+    const ui = await mounted(), stage = ui.host.querySelector('.cle-stage');
+    await input(ui.host, '准确文字内容', '折叠时保留的文字'); const calls = vi.mocked(ui.bridge.save).mock.calls.length;
+    await act(async () => button(ui.host, '收起图层面板').click());
+    expect(ui.host.querySelector('.cle-layout')?.classList.contains('is-layers-collapsed')).toBe(true);
+    expect(ui.host.querySelector('[aria-label="准确文字内容"]')).not.toBeNull();
+    await act(async () => button(ui.host, '收起属性面板').click());
+    expect(ui.host.querySelector('.cle-layout')?.classList.contains('is-properties-collapsed')).toBe(true);
+    expect(ui.host.querySelector('.cle-stage')).toBe(stage); expect(ui.bridge.save).toHaveBeenCalledTimes(calls); expect(ui.onGenerate).not.toHaveBeenCalled();
+    await act(async () => button(ui.host, '展开属性面板').click());
+    expect(ui.host.querySelector<HTMLTextAreaElement>('[aria-label="准确文字内容"]')?.value).toBe('折叠时保留的文字');
+    expect(ui.host.querySelector('.cle-layout')?.classList.contains('is-layers-collapsed')).toBe(true);
+    await act(async () => button(ui.host, '保存').click());
+    expect(ui.current().layers.find(layer => layer.id === 'price')).toMatchObject({ text: '折叠时保留的文字' });
+    await act(async () => button(ui.host, '收起属性面板').click());
+    await ui.render('other-source');
+    expect(ui.host.querySelector('[aria-label="收起图层面板"]')).not.toBeNull();
+    expect(ui.host.querySelector('[aria-label="收起属性面板"]')).not.toBeNull();
+    await ui.render('final-png');
+    expect(ui.host.querySelector('[aria-label="展开图层面板"]')).not.toBeNull();
+    expect(ui.host.querySelector('[aria-label="展开属性面板"]')).not.toBeNull();
+    const other = await mounted({ workspaceId: 'another-workspace' });
+    expect(other.host.querySelector('[aria-label="收起图层面板"]')).not.toBeNull();
+    expect(other.host.querySelector('[aria-label="收起属性面板"]')).not.toBeNull();
+    expect(ui.ledger[0].costCents).toBe(128);
+  });
+
   it('成品回层后改价保存导出，使用原图scope且不重新调用模型', async () => {
     const ui = await mounted(); expect(ui.host.querySelector<HTMLTextAreaElement>('[aria-label="准确文字内容"]')?.value).toBe('原售价129元');
     await input(ui.host, '准确文字内容', '准确售价99元'); await act(async () => button(ui.host, '导出成品').click());
