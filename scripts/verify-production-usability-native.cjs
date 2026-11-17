@@ -70,8 +70,17 @@ async function click(selector, text) {
 }
 async function fill(selector, value) {
   await click(selector); await point(selector, undefined, true);
-  for (const type of ['keyDown', 'keyUp']) window.webContents.sendInputEvent({ type, keyCode: 'A', modifiers: ['control'] });
-  await window.webContents.insertText(value); await until('native text input', `document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(value)}`);
+  const token = `${owner.nonce}:input:${(report.textInputs?.length || 0) + 1}`;
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).dataset.productionUsabilityInput=${JSON.stringify(token)}`);
+  const read = `(()=>{const input=document.querySelector(${JSON.stringify(selector)});return input?{value:input.value,sameElement:input.dataset.productionUsabilityInput===${JSON.stringify(token)},focused:document.activeElement===input,start:input.selectionStart,end:input.selectionEnd,disabled:input.disabled,readOnly:input.readOnly,inert:!!input.closest('[inert]')}:null})()`;
+  const measurement = { selector, token, expected: value, selection: 'DOM full range; actual text is inserted by Electron, not a value setter', before: await evaluate(read), verified: false };
+  try {
+    await evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});if(input?.dataset.productionUsabilityInput!==${JSON.stringify(token)})throw Error('Native input element changed');input.focus({preventScroll:true});input.setSelectionRange(0,input.value.length)})()`);
+    await until('focused full selection before native text input', `(()=>{const input=document.querySelector(${JSON.stringify(selector)});return input?.dataset.productionUsabilityInput===${JSON.stringify(token)}&&document.activeElement===input&&input.selectionStart===0&&input.selectionEnd===input.value.length&&!input.disabled&&!input.readOnly&&!input.closest('[inert]')})()`, 4000);
+    measurement.selected = await evaluate(read);
+    await window.webContents.insertText(value); await until('native text input', `(()=>{const input=document.querySelector(${JSON.stringify(selector)});return input?.dataset.productionUsabilityInput===${JSON.stringify(token)}&&input.value===${JSON.stringify(value)}})()`);
+    measurement.verified = true;
+  } finally { measurement.after = await evaluate(read); (report.textInputs ||= []).push(measurement); }
 }
 async function viewport(width, mode) { window.setContentSize(width, 940); await click('.puf-header button', mode === 'dark' ? '黑夜' : '白天'); await until('theme resolved', `document.documentElement.dataset.appTheme===${JSON.stringify(mode)}`); }
 async function layout(name, selector) {

@@ -86,7 +86,7 @@ describe('asset list bounded filesystem probes and ordered metadata', () => {
     const f = await fixture(fileSystem); files = f.files; hold = true;
     const before = await fs.readFile(f.source), listing = f.library.list({ workspaceId: 'one' }); await entered.promise;
     const updating = f.library.update({ workspaceId: 'one', id: f.asset.id, favorite: true });
-    const adding = f.library.importPaths({ workspaceId: 'one', paths: [f.source] });
+    const adding = f.library.importPaths({ workspaceId: 'one', paths: [f.source], duplicates: 'copy' });
     let completed;
     try { completed = await completedBeforeRelease(Promise.all([updating, adding])); } finally { hold = false; release.resolve(); }
     const [updated, [added], items] = await Promise.all([updating, adding, listing]);
@@ -104,7 +104,7 @@ describe('asset list bounded filesystem probes and ordered metadata', () => {
     };
     const f = await fixture(fileSystem); files = f.files; hold = true;
     const listing = f.library.list({ workspaceId: 'one' }); await entered.promise; loseAck = true;
-    const adding = f.library.importPaths({ workspaceId: 'one', paths: [f.source] }).catch(error => error);
+    const adding = f.library.importPaths({ workspaceId: 'one', paths: [f.source], duplicates: 'copy' }).catch(error => error);
     let completed;
     try { completed = await completedBeforeRelease(adding); } finally { hold = false; release.resolve(); }
     expect((await adding).message).toBe('owned lost acknowledgement'); expect(completed).toBe(true);
@@ -255,7 +255,7 @@ describe('explicit metadata-first lists and visible availability probes', () => 
     const f = await fixture(fileSystem); files = f.files; hold = true;
     const probing = f.library.probe({ workspaceId: 'one', ids: [f.asset.id] }); await entered.promise;
     await f.library.update({ workspaceId: 'one', id: f.asset.id, archived: true });
-    const [added] = await f.library.importPaths({ workspaceId: 'one', paths: [f.source] });
+    const [added] = await f.library.importPaths({ workspaceId: 'one', paths: [f.source], duplicates: 'copy' });
     hold = false; release.resolve();
     expect(await probing).toEqual([{ id: f.asset.id, unavailable: true }]);
     expect((await f.library.list({ workspaceId: 'one', availabilityIds: [] })).map(item => item.id)).toEqual([added.id, f.asset.id]);

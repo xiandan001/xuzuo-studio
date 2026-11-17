@@ -43,7 +43,8 @@ async function yieldToInteraction(signal, yieldBackground) { active(signal); if 
 function sameFile(before, after) { return ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(name => before[name] === after[name]); }
 async function ordinaryFile(fs, filename, maximum = MAX_FILE) {
   await checkedDirectory(fs, path.dirname(filename)); const stat = await fs.lstat(filename);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum || path.resolve(await fs.realpath(filename)).toLowerCase() !== path.resolve(filename).toLowerCase()) throw Error('备份文件不是普通文件、路径已变化或超过大小限制。');
+  const canonicalParent = await fs.realpath(path.dirname(filename));
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum || path.resolve(await fs.realpath(filename)).toLowerCase() !== path.resolve(canonicalParent, path.basename(filename)).toLowerCase()) throw Error('备份文件不是普通文件、路径已变化或超过大小限制。');
   return stat;
 }
 async function readChunks(fs, filename, onChunk, { signal, yieldBackground, maximum = MAX_FILE } = {}) {

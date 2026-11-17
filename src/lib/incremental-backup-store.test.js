@@ -32,6 +32,21 @@ async function snapshot(f, bytes, options = {}) {
 async function index(f) { return JSON.parse(await fs.readFile(path.join(f.repository, 'index.json'), 'utf8')); }
 
 describe('流式不可变分卷与真实内容校验', () => {
+  it('父目录短名展开后仍核对真实叶子和字节，拒绝叶子转向、超限和目录junction', async () => {
+    const f = await fixture(), canonical = path.join(f.directory, 'canonical-long-parent'), alias = path.join(f.directory, 'CANONI~1');
+    await fs.mkdir(canonical); const data = Buffer.from('Actual ordinary file under a canonical parent'), filename = path.join(canonical, 'source.bin'); await fs.writeFile(filename, data);
+    const translated = value => value === alias || value.startsWith(alias + path.sep) ? canonical + value.slice(alias.length) : value;
+    let opens = 0;
+    const aliasFs = { ...fs, lstat: value => fs.lstat(translated(value)), realpath: value => fs.realpath(translated(value)), open: (...args) => { opens++; return fs.open(translated(args[0]), ...args.slice(1)); } };
+    expect(await fileIdentity(aliasFs, path.join(alias, 'source.bin'))).toEqual({ bytes: data.length, sha256: digest(data) });
+    const before = opens, other = path.join(f.directory, 'other.bin'); await fs.writeFile(other, data);
+    const redirected = { ...aliasFs, realpath: value => value === path.join(alias, 'source.bin') ? fs.realpath(other) : aliasFs.realpath(value) };
+    await expect(fileIdentity(redirected, path.join(alias, 'source.bin'))).rejects.toThrow(/路径已变化/); expect(opens).toBe(before);
+    await expect(fileIdentity(aliasFs, path.join(alias, 'source.bin'), { maximum: data.length - 1 })).rejects.toThrow(/大小限制/); expect(opens).toBe(before);
+    const junction = path.join(f.directory, 'redirected-parent'); await fs.symlink(canonical, junction, 'junction');
+    await expect(fileIdentity(fs, path.join(junction, 'source.bin'))).rejects.toThrow(/junction|符号链接/);
+    expect((await fs.readFile(filename)).equals(data)).toBe(true);
+  });
   it('真实文件分块保存与恢复，读缓冲有界且不会把描述符冒充Buffer', async () => {
     const f = await fixture(), data = Buffer.alloc(PART_BYTES + 137, 49); data.writeUInt32LE(7182);
     const created = await snapshot(f, data), opened = await openSnapshot(created.result.snapshotPath), source = opened.files.get(created.file.path);
