@@ -88,9 +88,16 @@ async function verifyNewChatFeatures({ service, workspaceId, production, inputFi
       if (kind === 'word') { const xml = await zip.file('word/document.xml').async('string'); assert(xml.includes('完整说明') && xml.includes('橘猫')); }
       else if (kind === 'ppt') { const pages = Object.keys(zip.files).filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name)); assert(pages.length > 1); assert((await Promise.all(pages.map(name => zip.file(name).async('string')))).join('').includes('橘猫')); }
       else { const workbook = new (require('exceljs').Workbook)(); await workbook.xlsx.load(actual.buffer); assert.equal(workbook.worksheets[0].getCell('A1').value, '类别'); assert.equal(workbook.worksheets[0].getCell('B2').value, '橘猫'); }
-      const selector = `.creation-production:has(footer span[title$=".${extension[kind]}"])`;
-      await dom(`document.querySelector(${JSON.stringify(selector)})`, `${kind} result card uses actual linked native run`); await evaluate(`document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')}).scrollIntoView({block:'center'})`);
-      try { await dom(`document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')})?.textContent.includes('橘猫')`, `${kind} HomeProductionResult reads the exact export input`); }
+      const selector = `.creation-production:has(footer span[title=${JSON.stringify(file.name)}])`;
+      await dom(`document.querySelector(${JSON.stringify(selector)})`, `${kind} result card uses actual linked native run`);
+      let visiblePasses = 0;
+      try {
+        await until(async () => {
+          const view = await evaluate(`(()=>{const p=document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')}),thread=p?.closest('.workspace-chat-thread'),name=p?.closest('.creation-production')?.querySelector('footer span[title]')?.getAttribute('title');if(!p||!thread)return {visible:false,name};const r=p.getBoundingClientRect(),t=thread.getBoundingClientRect(),height=Math.min(r.bottom,t.bottom,innerHeight)-Math.max(r.top,t.top,0),width=Math.min(r.right,t.right,innerWidth)-Math.max(r.left,t.left,0),visible=name===${JSON.stringify(file.name)}&&r.height>0&&height>=Math.min(48,r.height)&&width>=Math.min(48,r.width);if(!visible)p.scrollIntoView({block:'center',behavior:'instant'});return {visible,name,rect:r.toJSON(),thread:t.toJSON(),scroll:thread.scrollTop}})()`);
+          report.exportPreviewViewport = { kind, artifactId: file.id, ...view }; visiblePasses = view.visible ? visiblePasses + 1 : 0; return visiblePasses >= 2;
+        }, `${kind} exact result preview stays inside its actual scroll viewport`, 4000);
+        await dom(`document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')})?.textContent.includes('橘猫')`, `${kind} HomeProductionResult reads the exact export input`);
+      }
       catch (error) { const preview = await production.previewArtifact(file.id); report.exportDiagnostic = { kind, backendText: preview.text?.slice(0, 1200), page: await evaluate(`(()=>{const p=document.querySelector(${JSON.stringify(selector + ' .creation-result-preview')});return {text:p?.textContent,html:p?.innerHTML.slice(0,1500),rect:p?.getBoundingClientRect().toJSON(),scroll:document.querySelector('.workspace-chat-thread')?.scrollTop}})()`) }; throw error; }
       await click(selector + ' [aria-label="打开编辑器"]'); await dom(`document.querySelector('.chat-fixture').dataset.editorKind===${JSON.stringify(kind)}`, `${kind} result directly enters actual editor`);
       await dom(`document.querySelector('.chat-fixture-editor')&&[document.querySelector('.chat-fixture-editor').textContent,...[...document.querySelectorAll('.chat-fixture-editor input,.chat-fixture-editor textarea')].map(e=>e.value)].join(' ').includes(${JSON.stringify('MANUAL_' + kind.toUpperCase() + '_UNCHANGED')})`, `${kind} real editor retains the saved manual draft`);

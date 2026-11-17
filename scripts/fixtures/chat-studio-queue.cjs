@@ -64,8 +64,15 @@ async function verifyChatQueue(ctx) {
   await step('queue-edit-withdraw-snapshots-and-two-theme-layouts', async () => {
     await click('[aria-label=' + JSON.stringify('编辑待发消息 ' + pendingId) + ']'); await dom("document.querySelector('[aria-label=\"修改待发要求\"]')", 'editing reserves this pending request before changing text');
     await fillEdit(editedText); await select('推理强度', '轻度');
-    await fill('队列验收B：这条只用于验证发送前撤回。'); await click('[aria-label="排队发送消息"]');
-    let current = await read(); assert.equal(current.queue.length, 2); const withdrawn = current.queue.find(item => item.id !== pendingId); assert(withdrawn);
+    const withdrawnText = '队列验收B：这条只用于验证发送前撤回。';
+    await fill(withdrawnText); await click('[aria-label="排队发送消息"]');
+    let current;
+    await until(async () => {
+      current = await read(); const candidate = current.queue?.find(item => item.id !== pendingId && item.text === withdrawnText);
+      report.queueFollowupCommit = { expectedText: withdrawnText, queue: (current.queue || []).map(item => ({ id: item.id, text: item.text, status: item.status, editing: !!item.editing })), modelCalls: calls.length };
+      return current.queue?.length === 2 && !!candidate && await evaluate("!!document.querySelector('[data-queue-id=" + JSON.stringify(candidate.id) + "]')");
+    }, 'second enqueue committed to its actual queue and renderer before withdrawal', 4000);
+    assert.equal(current.queue.length, 2); const withdrawn = current.queue.find(item => item.id !== pendingId); assert(withdrawn);
     await click('[aria-label=' + JSON.stringify('撤回待发消息 ' + withdrawn.id) + ']');
     await until(async () => { current = await read(); return current.queue?.length === 1 && !current.queue.some(item => item.id === withdrawn.id); }, 'withdrawal committed to the actual persisted queue');
     await dom("!document.querySelector('[data-queue-id=" + JSON.stringify(withdrawn.id) + "]')", 'withdrawn entry removed from the actual renderer');
