@@ -4,7 +4,7 @@ import { commerceDocumentIssue, commerceInitialDocument } from '../lib/commerce-
 import { emptyEditHistory, recordEdit, redoEdit, undoEdit } from '../lib/edit-history';
 import { registerEditorSession } from '../lib/editor-session-guard';
 
-export function useCommerceDocument(projectId: string, sourceArtifactId: string | undefined, bridge: CommerceImagesBridge | undefined, title: string) {
+export function useCommerceDocument(projectId: string, sourceArtifactId: string | undefined, bridge: CommerceImagesBridge | undefined, title: string, documentId?: string) {
   const [document, setDocument] = useState<CommerceImageDocument>(), [readResult, setReadResult] = useState<CommerceImageRead>(), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false), [dirty, setDirty] = useState(false), [error, setError] = useState(''), [, renderHistory] = useState(0), [reload, setReload] = useState(0);
   const current = useRef<CommerceImageDocument | undefined>(undefined), scope = useRef<CommerceImageScope | undefined>(undefined), revision = useRef(0), changed = useRef(false), epoch = useRef(0), alive = useRef(true), issue = useRef(''), history = useRef(emptyEditHistory<CommerceImageDocument>()), savingTask = useRef<Promise<boolean> | undefined>(undefined);
   const reading = useRef(0), titleRef = useRef(title), snapshotMode = useRef(false), boundSource = useRef(sourceArtifactId); titleRef.current = title;
@@ -15,13 +15,13 @@ export function useCommerceDocument(projectId: string, sourceArtifactId: string 
     if (!sourceArtifactId || !bridge) { setLoading(false); return () => { alive.current = false; }; }
     setLoading(true);
     if (boundSource.current !== sourceArtifactId) { snapshotMode.current = false; boundSource.current = sourceArtifactId; }
-    void bridge.read({ projectId, sourceArtifactId, ...(snapshotMode.current ? { fromSnapshot: true } : {}) }).then(result => {
+    void bridge.read({ projectId, sourceArtifactId, ...(snapshotMode.current ? { fromSnapshot: true } : documentId ? { documentId } : {}) }).then(result => {
       if (!alive.current || epoch.current !== token) return;
       const value = commerceInitialDocument(result, titleRef.current); if (result.projectId !== projectId || value.projectId !== projectId || value.sourceArtifactId !== result.sourceArtifactId) throw Error('读取的图层工程不属于当前项目。');
       scope.current = { projectId, sourceArtifactId: result.sourceArtifactId, documentId: result.documentId }; setReadResult(result); accept(value);
     }).catch(cause => { if (alive.current && epoch.current === token) markError(cause instanceof Error ? cause.message : '图层工程无法读取。'); }).finally(() => { if (alive.current && reading.current === readToken) setLoading(false); });
     return () => { alive.current = false; epoch.current++; reading.current++; };
-  }, [projectId, sourceArtifactId, bridge, accept, markError, reload]);
+  }, [projectId, sourceArtifactId, documentId, bridge, accept, markError, reload]);
   const change = useCallback((value: CommerceImageDocument, group?: string) => {
     const previous = current.current; if (!previous) return;
     const updated = { ...value, id: previous.id, projectId: previous.projectId, sourceArtifactId: previous.sourceArtifactId, sourceSha256: previous.sourceSha256, revision: revision.current };

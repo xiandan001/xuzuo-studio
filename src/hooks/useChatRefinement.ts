@@ -7,7 +7,7 @@ import { artifactRefinementWorkflow } from '../lib/artifact-refinement';
 import { prepareAnimationReference } from '../lib/generated-animation-reference';
 import { prepareSvgReference } from '../lib/svg-reference';
 
-interface PendingRefinement { target: ChatTarget; instruction: string; workflowId?: string; runId?: string; }
+interface PendingRefinement { target: ChatTarget; instruction: string; workflowId?: string; runId?: string; sourceTurnId?: string; }
 
 export function useChatRefinement(props: PageProps, conversationId: string, onLinked: () => void) {
   const key = `xuzuo-chat-refinement-pending-v1:${props.workspaceId}:${conversationId}`;
@@ -18,8 +18,8 @@ export function useChatRefinement(props: PageProps, conversationId: string, onLi
   const pending = useRef(false), context = useRef({ props, conversationId, onLinked }); context.current = { props, conversationId, onLinked };
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  async function link(target: ChatTarget, instruction: string, runId: string) { await window.desktop!.chat!.linkProduction({ workspaceId: props.workspaceId, conversationId, target, instruction, runId }); localStorage.removeItem(key); if (alive.current) { setUnknown(undefined); context.current.onLinked(); } }
-  async function start(target: ChatTarget, instruction: string, binding: NaturalBinding) {
+  async function link(target: ChatTarget, instruction: string, runId: string, sourceTurnId?: string) { await window.desktop!.chat!.linkProduction({ workspaceId: props.workspaceId, conversationId, target, instruction, runId, ...(sourceTurnId ? { sourceTurnId } : {}) }); localStorage.removeItem(key); if (alive.current) { setUnknown(undefined); context.current.onLinked(); } }
+  async function start(target: ChatTarget, instruction: string, binding: NaturalBinding, sourceTurnId?: string) {
     if (pending.current || unknown) return false;
     const requestedScope = `${props.workspaceId}/${conversationId}`, valid = () => alive.current && requestedScope === `${context.current.props.workspaceId}/${context.current.conversationId}`;
     pending.current = true; setBusy(true); setError('');
@@ -37,7 +37,7 @@ export function useChatRefinement(props: PageProps, conversationId: string, onLi
       const check = await props.workflowRunner.preflight(request.workflow, project.id, request.input, {}, request.attachmentIds); if (!check.ok) throw Error(check.errors.join('\n')); if (!valid()) return false;
       const review = props.workflowRunner.runs.find(run => run.projectId === project.id && run.status === 'waiting-review' && run.attempts.some(attempt => attempt.artifacts?.some(file => file.id === target.artifactId)));
       // Persist before dispatch so remounting the page cannot turn a lost acknowledgement into a second paid request.
-      const submitted: PendingRefinement = { target, instruction, workflowId: request.workflow.id };
+      const submitted: PendingRefinement = { target, instruction, workflowId: request.workflow.id, ...(sourceTurnId ? { sourceTurnId } : {}) };
       localStorage.setItem(key, JSON.stringify(submitted));
       setUnknown(submitted);
       const result = await props.workflowRunner.startLive(request.workflow, project.id, request.input, {}, request.attachmentIds, true, review?.id);
@@ -45,7 +45,7 @@ export function useChatRefinement(props: PageProps, conversationId: string, onLi
       if (result.status !== 'started') { localStorage.removeItem(key); if (alive.current) setUnknown(undefined); throw Error(result.error); }
       const confirmed = { ...submitted, runId: result.runId };
       if (alive.current) setUnknown(confirmed);
-      try { localStorage.setItem(key, JSON.stringify(confirmed)); await link(target, instruction, result.runId); }
+      try { localStorage.setItem(key, JSON.stringify(confirmed)); await link(target, instruction, result.runId, sourceTurnId); }
       catch { if (alive.current) setError('修订任务已启动，关联暂未保存；请读取任务状态，避免重复制作。'); return false; }
       return true;
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : '精修未能开始，原稿和已有费用保留。'); return false; }
@@ -65,7 +65,7 @@ export function useChatRefinement(props: PageProps, conversationId: string, onLi
           if (!runId) { localStorage.removeItem(key); if (alive.current) { setUnknown(undefined); setError('已确认没有提交这次修订，可以重新点击开始。'); } return; }
         } else throw Error(result.error);
       }
-      await link(unknown.target, unknown.instruction, runId);
+      await link(unknown.target, unknown.instruction, runId, unknown.sourceTurnId);
       if (alive.current) setError('');
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : '暂时无法确认提交结果。'); }
     finally { pending.current = false; if (alive.current) setBusy(false); }

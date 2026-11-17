@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 let closeStateReader, lastClosingStatus;
+let lastInteraction = 0;
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  const noteInteraction = () => { const time = Date.now(); if (time - lastInteraction < 400) return; lastInteraction = time; ipcRenderer.send('runtime:performance-activity'); };
+  const noteDrag = event => { if (event.buttons || event.pointerType === 'touch') noteInteraction(); };
+  for (const name of ['pointerdown', 'keydown', 'wheel']) window.addEventListener(name, noteInteraction, { capture: true, passive: true });
+  window.addEventListener('pointermove', noteDrag, { capture: true, passive: true });
+  window.addEventListener('pagehide', () => { for (const name of ['pointerdown', 'keydown', 'wheel']) window.removeEventListener(name, noteInteraction, { capture: true }); window.removeEventListener('pointermove', noteDrag, { capture: true }); }, { once: true });
+}
 const pendingCloseRequests = new Set(), closingListeners = new Set();
 function replyToClose(token) {
   let blocked = true;
@@ -16,13 +24,17 @@ ipcRenderer.on('window:closing-status', (_event, value) => {
 });
 
 contextBridge.exposeInMainWorld('desktop', {
-  projectTemplates: Object.fromEntries(['list','save','instantiate','remove'].map(method => [method, input => ipcRenderer.invoke(`runtime:project-templates-${method}`, input)])),
+  performance: { read: () => ipcRenderer.invoke('runtime:performance-read'), save: input => ipcRenderer.invoke('runtime:performance-save', input) },
+  projectTemplates: Object.fromEntries(['list','save','instantiate','remove','sources'].map(method => [method, input => ipcRenderer.invoke(`runtime:project-templates-${method}`, input)])),
+  contentSearch: { search: input => ipcRenderer.invoke('runtime:content-search', input), cancel: input => ipcRenderer.invoke('runtime:content-search-cancel', input) },
   customerProofing: {
     create: input => ipcRenderer.invoke('runtime:proofing-create', input),
     importFeedback: input => ipcRenderer.invoke('runtime:proofing-import', input),
   },
   chat: {
-    ...Object.fromEntries(['search','manage','selectTarget','inspectTarget','importBytes','importAsset','importProjectArtifact','linkProduction', 'linkExport'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
+    ...Object.fromEntries(['search','manage','selectTarget','inspectTarget','importBytes','importAsset','importProjectArtifact','linkProduction', 'linkExport','enqueue'].map(method => [method, input => ipcRenderer.invoke(`runtime:chat-${method}`, input)])),
+    manageQueue: input => ipcRenderer.invoke('runtime:chat-manage-queue', input),
+    cancelSearch: input => ipcRenderer.invoke('runtime:chat-cancel-search', input),
     importAttachments: input => ipcRenderer.invoke('runtime:chat-import-attachments', input),
     previewAttachment: input => ipcRenderer.invoke('runtime:chat-preview-attachment', input),
     attachToProject: input => ipcRenderer.invoke('runtime:chat-attach-to-project', input),
@@ -45,7 +57,7 @@ contextBridge.exposeInMainWorld('desktop', {
     onChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('business:changed', handler); return () => ipcRenderer.removeListener('business:changed', handler); },
     ...Object.fromEntries(Object.entries({ snapshot: 'snapshot', save: 'save', importPreview: 'import-preview', importCommit: 'import-commit', exportRecovery: 'export-recovery', prepare: 'prepare', start: 'start', control: 'control', listing: 'listing', deliver: 'deliver', adopt: 'adopt', adoptRevision: 'adoptRevision', intakeRead: 'intakeRead', intakeExtract: 'intakeExtract', intakeConfirm: 'intakeConfirm', exportStatement: 'exportStatement', assist: 'assist', allocateCosts: 'allocateCosts', linkOutput: 'linkOutput', importProofFeedback: 'importProofFeedback' }).map(([method, name]) => [method, input => ipcRenderer.invoke(`runtime:business-${name}`, input)])),
   },
-  commerceImages: Object.fromEntries(['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery', 'preview', 'cancelPreview'].map(method => [method, input => ipcRenderer.invoke(`runtime:commerce-${method}`, input)])),
+  commerceImages: Object.fromEntries(['read', 'save', 'render', 'applyAlpha', 'protect', 'mask', 'cancel', 'history', 'restore', 'exportRecovery', 'preview', 'cancelPreview', 'reflowPreview', 'reflowExport'].map(method => [method, input => ipcRenderer.invoke(`runtime:commerce-${method}`, input)])),
   projectPurge: {
     preview: input => ipcRenderer.invoke('runtime:project-purge-preview', input),
     execute: input => ipcRenderer.invoke('runtime:project-purge-execute', input),
@@ -113,6 +125,14 @@ contextBridge.exposeInMainWorld('desktop', {
     savePdf: input => ipcRenderer.invoke('runtime:office-preview-save-pdf', input),
   },
   dataManagement: {
+    backupStatus: input => ipcRenderer.invoke('runtime:backup-status', input),
+    configureAutoBackup: input => ipcRenderer.invoke('runtime:backup-configure-auto', input),
+    syncBackupMeta: input => ipcRenderer.invoke('runtime:backup-sync-meta', input),
+    runIncrementalBackup: input => ipcRenderer.invoke('runtime:backup-run-incremental', input),
+    cancelIncrementalBackup: input => ipcRenderer.invoke('runtime:backup-cancel-incremental', input),
+    inspectIncrementalBackup: input => ipcRenderer.invoke('runtime:backup-inspect-incremental', input),
+    restoreIncrementalBackup: input => ipcRenderer.invoke('runtime:backup-restore-incremental', input),
+    onBackupChanged: listener => { const handler = (_event, value) => listener(value); ipcRenderer.on('backup:changed', handler); return () => ipcRenderer.removeListener('backup:changed', handler); },
     exportBackup: input => ipcRenderer.invoke('runtime:backup-export', input),
     inspectBackup: () => ipcRenderer.invoke('runtime:backup-inspect'),
     importBackup: input => ipcRenderer.invoke('runtime:backup-import', input),

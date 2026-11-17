@@ -1,6 +1,7 @@
 import type { StorageIssue } from '../configuration-types';
 import { initialConfiguration, readConfigurationResult } from './configuration';
 import type { ConfigurationState } from './configuration';
+import { notifyBackupSourceSaved } from './backup-change-events';
 
 export const CONFIGURATION_KEY = 'xuzuo-configuration-v1';
 type StorageReader = Pick<Storage, 'getItem'>;
@@ -15,7 +16,7 @@ export function loadStoredConfiguration(storage: StorageSource<StorageReader>): 
   return { state: result.state, raw, ...(result.issue ? { issue: { kind: 'read' as const, message: result.issue.message, canExportOriginal: raw !== null } } : {}) };
 }
 export function writeStoredConfiguration(storage: StorageSource<StorageWriter>, state: ConfigurationState): { raw?: string; issue?: StorageIssue } {
-  try { const raw = JSON.stringify(state); (typeof storage === 'function' ? storage() : storage).setItem(CONFIGURATION_KEY, raw); return { raw }; }
+  try { const raw = JSON.stringify(state); (typeof storage === 'function' ? storage() : storage).setItem(CONFIGURATION_KEY, raw); notifyBackupSourceSaved(); return { raw }; }
   catch { return { issue: { kind: 'write', message: '模型与工作流配置未能保存，本次修改没有替换已有配置。请检查磁盘或浏览器存储后重试。', canExportOriginal: false } }; }
 }
 export function resetStoredConfiguration(source: StorageSource<StorageWriter>, backupKey: string, expectedRaw?: string | null): StoredConfiguration {
@@ -29,6 +30,7 @@ export function resetStoredConfiguration(source: StorageSource<StorageWriter>, b
     if (raw !== null) storage.setItem(backupKey, raw);
     if (storage.getItem(CONFIGURATION_KEY) !== raw) return { state, raw, issue: { kind: 'read', message: '备份期间配置已被其他窗口更新，请先重新读取；新配置没有被覆盖。', canExportOriginal: raw !== null } };
     const saved = JSON.stringify(state); storage.setItem(CONFIGURATION_KEY, saved);
+    notifyBackupSourceSaved();
     return { state, raw: saved };
   } catch { return { state, raw, issue: { kind: 'read', message: '无法完成原始配置备份及重置，原配置没有被清空。请先导出原始内容并检查本机存储空间。', canExportOriginal: raw !== null } }; }
 }

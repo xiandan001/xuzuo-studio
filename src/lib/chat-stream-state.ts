@@ -7,6 +7,7 @@ function newerTurn(old: ChatTurn | undefined, incoming: ChatTurn) {
   return incoming;
 }
 export function applyChatChange(previous: ChatConversation | undefined, event: ChatChangedEvent): { value?: ChatConversation; needsRead: boolean } {
+  if (event.queueChanged) return { value: previous, needsRead: true };
   if (!previous || previous.workspaceId !== event.workspaceId || previous.id !== event.conversationId) return { value: previous, needsRead: true };
   if (event.stream) {
     const delta = event.stream, old = previous.turns.find(turn => turn.id === delta.turnId);

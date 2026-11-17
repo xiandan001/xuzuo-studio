@@ -4,6 +4,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { checkedDirectory, checkedFile, atomicJson } = require('./workspace-paths.cjs');
 const { safeBasename } = require('./trash-store.cjs');
 const { assetProvenance } = require('./asset-provenance.cjs');
+const { readImportFile } = require('./asset-import-files.cjs');
 const TYPES = { '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json', '.csv': 'text/csv', '.tsv': 'text/tab-separated-values', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pdf': 'application/pdf', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.mp4': 'video/mp4' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const validId = id => typeof id === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(id);
@@ -147,6 +148,18 @@ function createAssetLibrary({ workspaceStorage, artifactStore, fileSystem = fsDe
       if (await serial(() => snapshot.generation === indexGeneration)) return items;
     }
   }
+  async function importSource(source) {
+    const mimeType = TYPES[path.extname(source).toLowerCase()]; if (!mimeType) throw new Error('所选文件类型暂不支持作为素材。');
+    return { mimeType, ...await readImportFile(fs, source) };
+  }
+  async function existingImport(workspaceId, records, source) {
+    for (const item of records.filter(item => !item.archivedAt && item.mimeType === source.mimeType && item.bytes === source.bytes && item.sha256 === source.sha256)) {
+      try {
+        const place = await location(workspaceId), actual = await readImportFile(fs, path.join(place.directory, 'files', item.fileName));
+        if (actual.bytes === item.bytes && actual.sha256 === item.sha256) return item;
+      } catch { /* Keep changed/missing old copies and create an independent valid copy. */ }
+    }
+  }
   return {
     search({ workspaceId, query, limit = 6 }) { return serial(async () => {
       if (typeof query !== 'string' || query.length > 120 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('搜索内容最多 120 个字符，结果数量需为 1–50。');
@@ -166,26 +179,50 @@ function createAssetLibrary({ workspaceStorage, artifactStore, fileSystem = fsDe
     probe({ workspaceId, ids }) {
       return trackListing(() => { validateProbeIds(ids); return listAssets(workspaceId, [...ids], true); });
     },
-    importPaths({ workspaceId, paths }) { return serial(async () => {
+    async inspectImportPaths({ workspaceId, paths }) {
+      if (!Array.isArray(paths) || !paths.length || paths.length > 20 || paths.some(source => typeof source !== 'string' || !path.isAbsolute(source))) throw Error('一次请选择 1–20 个本机素材文件。');
+      const records = await serial(async () => readIndex(await location(workspaceId))), rows = [], selected = new Set(); let total = 0;
+      for (const filename of paths) {
+        const stat = await checkedFile(fs, filename); total += stat.size;
+        if (total > 200 * 1024 * 1024) throw Error('一次导入不能超过200MB，请分批添加。');
+        const source = await importSource(filename), existing = await existingImport(workspaceId, records, source);
+        const signature = `${source.mimeType}/${source.sha256}`;
+        rows.push({ name: path.basename(filename), bytes: source.bytes, sha256: source.sha256, ...(existing ? { existing: publicItem(existing, workspaceId) } : {}), ...(selected.has(signature) ? { duplicateSelection: true } : {}) });
+        selected.add(signature);
+      }
+      return rows;
+    },
+    importPaths({ workspaceId, paths, duplicates = 'reuse', expected }) { return serial(async () => {
       if (!Array.isArray(paths) || !paths.length || paths.length > 20 || paths.some(source => typeof source !== 'string' || !path.isAbsolute(source))) throw new Error('一次请选择 1–20 个本机素材文件。');
-      const place = await location(workspaceId, true), assets = await readIndex(place), added = [], created = []; let total = 0;
+      if (!['reuse', 'copy'].includes(duplicates) || expected !== undefined && (!Array.isArray(expected) || expected.length !== paths.length || expected.some(row => !row || !/^[a-f0-9]{64}$/.test(row.sha256) || !Number.isSafeInteger(row.bytes) || row.bytes < 0))) throw Error('素材导入确认信息无效，请重新选择。');
+      const place = await location(workspaceId, true), assets = await readIndex(place), added = [], created = [], returned = new Map(); let total = 0;
       try {
-        for (const source of paths) {
-          const mimeType = TYPES[path.extname(source).toLowerCase()]; if (!mimeType) throw new Error('所选文件类型暂不支持作为素材。');
-          const stat = await checkedFile(fs, source); total += stat.size;
+        for (let index = 0; index < paths.length; index++) {
+          const filename = paths[index], stat = await checkedFile(fs, filename); total += stat.size;
           if (total > 200 * 1024 * 1024) throw new Error('一次导入的素材总大小不能超过 200 MB，请分批添加。');
-          const buffer = await fs.readFile(source); if (buffer.length !== stat.size) throw new Error('导入期间原文件发生变化，未覆盖原文件。');
-          const after = await checkedFile(fs, source); if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('导入期间原文件发生变化，未把不一致内容保存为素材。');
-          const id = randomUUID(), name = path.basename(source), fileName = `${id}${path.extname(source).toLowerCase()}`;
-          const record = { id, name, fileName: `${id}-${fileName}`, mimeType, bytes: buffer.length, sha256: digest(buffer), createdAt: new Date().toISOString(), favorite: false };
+          const source = await importSource(filename);
+          if (expected && (expected[index].sha256 !== source.sha256 || expected[index].bytes !== source.bytes)) throw Error('确认期间源文件已变化，请重新导入；原素材未覆盖。');
+          const newlyAdded = duplicates === 'reuse' ? added.find(item => item.mimeType === source.mimeType && item.bytes === source.bytes && item.sha256 === source.sha256) : undefined;
+          const existing = duplicates === 'reuse' && !newlyAdded ? await existingImport(workspaceId, assets, source) : undefined;
+          if (newlyAdded || existing) {
+            const item = newlyAdded || existing;
+            if (!returned.has(item.id)) returned.set(item.id, { ...publicItem(item, workspaceId), ...(existing ? { reused: true } : {}) });
+            continue;
+          }
+          const id = randomUUID(), name = path.basename(filename), fileName = `${id}${path.extname(filename).toLowerCase()}`;
+          const record = { id, name, fileName: `${id}-${fileName}`, mimeType: source.mimeType, bytes: source.bytes, sha256: source.sha256, createdAt: new Date().toISOString(), favorite: false };
           const target = path.join(place.directory, 'files', record.fileName), handle = await fs.open(target, 'wx');
-          try { const owned = await handle.stat(); created.push({ id, target, ino: owned.ino, dev: owned.dev }); await handle.writeFile(buffer); }
+          try {
+            const owned = await handle.stat(); created.push({ id, target, ino: owned.ino, dev: owned.dev });
+            const copied = await readImportFile(fs, filename, chunk => handle.writeFile(chunk));
+            if (copied.bytes !== source.bytes || copied.sha256 !== source.sha256) throw Error('复制期间源文件已改变，未提交不一致的素材。');
+          }
           finally { await handle.close(); }
-          added.push(record);
+          added.push(record); returned.set(id, publicItem(record, workspaceId));
         }
-        await commitIndex(place, [...added, ...assets]);
+        if (added.length) await commitIndex(place, [...added, ...assets]);
       } catch (error) { await removeUncommitted(place, created); throw error; }
-      return added.map(item => publicItem(item, workspaceId));
+      return [...returned.values()];
     }); },
     importBuiltin({ workspaceId, file }) { return serial(async () => {
       if (!file || file.mimeType !== 'image/png' || !(file.buffer instanceof Uint8Array) || file.buffer.length > 20 * 1024 * 1024) throw new Error('内置素材文件无效，未保存副本。');

@@ -15,8 +15,8 @@ function checkedCommerceDocument(input) {
     seen.add(layer.id);
     const base = { id: layer.id, name: layer.name, x: layer.x, y: layer.y, width: layer.width, height: layer.height, opacity: layer.opacity, visible: layer.visible, locked: layer.locked };
     if (layer.type === 'image') {
-      if (!validId(layer.artifactId) || !['product', 'background', 'logo'].includes(layer.role)) throw Error('请为图片图层选择本项目的实际图片。');
-      return { ...base, type: 'image', role: layer.role, artifactId: layer.artifactId };
+      if (!validId(layer.artifactId) || layer.originalArtifactId !== undefined && !validId(layer.originalArtifactId) || layer.templatePlaceholder !== undefined && typeof layer.templatePlaceholder !== 'boolean' || !['product', 'background', 'logo'].includes(layer.role)) throw Error('请为图片图层选择本项目的实际图片。');
+      return { ...base, type: 'image', role: layer.role, artifactId: layer.artifactId, ...(layer.originalArtifactId ? { originalArtifactId: layer.originalArtifactId } : {}), ...(layer.templatePlaceholder ? { templatePlaceholder: true } : {}) };
     }
     if (layer.type !== 'text' || typeof layer.text !== 'string' || layer.text.length > 2000 || !number(layer.fontSize) || layer.fontSize < 6 || layer.fontSize > 512 || !hex(layer.color) || !fonts.includes(layer.fontFamily) || !['normal', 'bold'].includes(layer.fontWeight) || !['left', 'center', 'right'].includes(layer.align)) throw Error('文字、字体、字号或颜色无效，每个文字层最多2000字。');
     textCount += layer.text.length;

@@ -1,0 +1,25 @@
+.performance-settings h2 { display: flex; align-items: center; gap: 8px; }
+.performance-settings .op-setting-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 0; }
+.performance-settings .op-setting-switch-row > div { min-width: 0; flex: 1; }
+.performance-settings .op-setting-switch-row b { font-size: 15px; font-weight: 650; color: var(--ui-fg); }
+.performance-settings .op-setting-switch-row p { margin: 6px 0 0; color: var(--ui-fg-secondary); font-size: 14px; line-height: 1.7; }
+.performance-settings .op-toggle { flex: none; position: relative; width: 44px; height: 26px; border: 0; border-radius: 16px; padding: 3px; background: var(--ui-surface-subtle); cursor: pointer; }
+.performance-settings .op-toggle > span { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: var(--ui-shadow-sm); color: var(--ui-accent); transform: translateX(0); }
+.performance-settings .op-toggle.checked { background: var(--ui-accent); }
+.performance-settings .op-toggle.checked > span { transform: translateX(18px); }
+.performance-settings .op-toggle:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.performance-settings .op-toggle:disabled { cursor: default; opacity: .5; }
+.performance-settings details { margin-top: 14px; border-top: 1px solid var(--ui-border); padding-top: 12px; }
+.performance-settings summary { cursor: pointer; color: var(--ui-fg-secondary); font-size: 14px; }
+.performance-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 14px; }
+.performance-summary .btn { min-height: 34px; font-size: 13px; }
+.performance-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.performance-metrics > div { padding: 12px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-subtle); }
+.performance-metrics dt, .performance-note { font-size: 13px; color: var(--ui-fg-secondary); line-height: 1.6; }
+.performance-metrics dd { margin: 6px 0 0; font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+.performance-recent { margin: 14px 0 0; padding: 0; list-style: none; }
+.performance-recent li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; padding: 9px 0; border-top: 1px solid var(--ui-border); font-size: 13px; }
+.performance-recent small { margin-left: 8px; color: var(--ui-fg-secondary); }
+.performance-error { color: var(--ui-danger, #cf4446); font-size: 14px; line-height: 1.6; }
+.performance-error button { margin-left: 10px; }
+@media (max-width: 1050px) { .performance-metrics { grid-template-columns: 1fr; } }

@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 const require = createRequire(import.meta.url);
-const { createIdMap, remap } = require('../../electron/backup-format.cjs');
+const { createIdMap, remap, withoutSecrets } = require('../../electron/backup-format.cjs');
 
 describe('备份只映射实体编号和明确引用', () => {
   it('检查项常量和变量中的id不会成为新实体编号', () => {
@@ -17,6 +17,18 @@ describe('备份只映射实体编号和明确引用', () => {
     expect(result.variables).toEqual(input.variables); expect(result.checks).toEqual(input.checks); expect(result.checkedIds).toEqual(input.checkedIds);
     expect(result.preferencesByWorkspace['mapped-workspace']).toEqual({ studioName: 'title' }); expect(result.calculation.cells['mapped-sheet'].A1).toEqual(input.calculation.cells['sheet-one'].A1);
     expect(result.directory).toBe('D:\\new\\project'); expect(result.path).toBe('D:\\new\\project\\mapped-artifact-source.txt'); expect(result['mapped-title']).toBeUndefined();
+  });
+  it('商品原图基准只重绑已有材料编号，不把引用或正文误当新实体', () => {
+    const value = { artifacts: [{ id: 'original-image', projectId: 'source-project' }], layers: [{ id: 'layer-one', originalArtifactId: 'original-image', artifactId: 'edited-image' }], prompt: 'original-image', facts: { originalArtifactId: 'original-image' } };
+    const ids = createIdMap(value), restored = remap(value, ids);
+    expect(ids['original-image']).toBeTruthy(); expect(ids['edited-image']).toBeUndefined();
+    expect(restored.layers[0].originalArtifactId).toBe(ids['original-image']); expect(restored.layers[0].artifactId).toBe('edited-image'); expect(restored.prompt).toBe(value.prompt); expect(restored.facts).toEqual(value.facts);
+  });
+  it('可编辑模板占位标记在去敏和编号重绑后保持布尔值，不被当成实体', () => {
+    const value = { creative: { document: { layers: [{ id: 'layer-one', templatePlaceholder: true }], entries: [{ id: 'entry-one', frames: [{ id: 'frame-one', templatePlaceholder: false }] }] } }, credentialId: 'not-backed-up', text: 'templatePlaceholder' };
+    const safe = withoutSecrets(value), ids = createIdMap(safe), restored = remap(safe, ids);
+    expect(restored.creative.document.layers[0].templatePlaceholder).toBe(true); expect(restored.creative.document.entries[0].frames[0].templatePlaceholder).toBe(false);
+    expect(restored.credentialId).toBeUndefined(); expect(restored.text).toBe(value.text); expect(ids.true).toBeUndefined(); expect(ids.false).toBeUndefined();
   });
 });
 

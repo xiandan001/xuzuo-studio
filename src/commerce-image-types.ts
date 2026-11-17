@@ -5,7 +5,7 @@ export interface CommerceLayerBase {
   opacity: number; visible: boolean; locked: boolean;
 }
 export interface CommerceRasterLayer extends CommerceLayerBase {
-  type: 'image'; role: 'product' | 'background' | 'logo'; artifactId: string;
+  type: 'image'; role: 'product' | 'background' | 'logo'; artifactId: string; originalArtifactId?: string; templatePlaceholder?: boolean;
 }
 export interface CommerceTextLayer extends CommerceLayerBase {
   type: 'text'; text: string; fontSize: number; color: string; fontFamily: string;
@@ -29,6 +29,11 @@ export interface CommerceImageSize { width: number; height: number; label: strin
 export interface CommerceImageRenderResult {
   artifacts: ArtifactMetadata[]; documentId: string; sourceRevision: number; runId: string;
 }
+export interface CommerceReflowPreview {
+  previewId: string; sourceRevision: number;
+  targets: (CommerceImageSize & { id: string; document: CommerceImageDocument; previewDataUrl: string; warnings: string[] })[];
+}
+export interface CommerceReflowResult extends CommerceImageRenderResult { variants: { targetId: string; documentId: string; width: number; height: number; artifactIds: string[] }[]; }
 export interface CommerceAlphaResult {
   artifact: ArtifactMetadata; width: number; height: number; sourceSha256: string;
 }
@@ -45,6 +50,8 @@ export interface CommerceImagePreview {
   crop: { x: number; y: number; width: number; height: number };
 }
 export interface CommerceImagesBridge {
+  reflowPreview?: (input: CommerceImageScope & { expectedRevision: number; requestId: string; targets: CommerceImageSize[] }) => Promise<CommerceReflowPreview>;
+  reflowExport?: (input: CommerceImageScope & { expectedRevision: number; previewId: string; approvedTargetIds: string[] }) => Promise<CommerceReflowResult>;
   preview?: (input: CommerceImagePreviewRequest) => Promise<CommerceImagePreview>;
   cancelPreview?: (input: { projectId: string; requestId: string }) => Promise<void>;
   read: (input: CommerceImageScope & { fromSnapshot?: boolean }) => Promise<CommerceImageRead>;

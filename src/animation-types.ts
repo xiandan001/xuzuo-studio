@@ -3,7 +3,7 @@ import type { ArtifactMetadata } from './live-types';
 export type AnimationMode = 'atlas' | 'gif';
 export type AnimationStyle = 'pixel-light' | 'pixel-actions' | 'illustrated-actions' | 'photo-people' | 'photo-pets' | 'clay-mascot' | 'lenticular' | 'type-linked' | 'comic-fusion';
 export type AnimationMotion = 'nod' | 'jump' | 'sway' | 'startle' | 'tremble' | 'ponder' | 'breathe' | 'stomp' | 'rush' | 'peek' | 'pulse' | 'pop' | 'offer' | 'lean' | 'droop' | 'dance';
-export interface AnimationFrame { id: string; atlasArtifactId: string; cell: [number, number]; grid: [number, number]; crop?: [number, number, number, number]; durationMs: number; }
+export interface AnimationFrame { id: string; atlasArtifactId: string; cell: [number, number]; grid: [number, number]; crop?: [number, number, number, number]; durationMs: number; templatePlaceholder?: boolean; }
 export interface AnimationEntry {
   id: string; caption: string; description: string; motion: AnimationMotion; frames: AnimationFrame[];
   outputArtifactId?: string; coverArtifactId?: string; sourceHash?: string; renderedHash?: string;

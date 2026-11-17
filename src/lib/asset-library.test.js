@@ -28,7 +28,7 @@ async function fixture(fileSystem = fs) {
   return { directory, first, second, project, other, storage, store, options, library, source, index: path.join(first, '.xuzuo-assets', 'library-v1.json'), files: path.join(first, '.xuzuo-assets', 'files') };
 }
 const list = f => f.library.list({ workspaceId: 'workspace-one' });
-const imported = async f => (await f.library.importPaths({ workspaceId: 'workspace-one', paths: [f.source] }))[0];
+const imported = async (f, duplicates) => (await f.library.importPaths({ workspaceId: 'workspace-one', paths: [f.source], duplicates }))[0];
 const read = (f, id, workspaceId = 'workspace-one') => f.library.read({ workspaceId, id });
 const attach = (f, id, projectId = 'project-one', workspaceId = 'workspace-one') => f.library.attach({ workspaceId, id, projectId });
 const backingFile = async (f, id) => path.join(f.files, JSON.parse(await fs.readFile(f.index, 'utf8')).assets.find(item => item.id === id).fileName);
@@ -107,7 +107,7 @@ describe('真实本地素材库', () => {
     let deny = false;
     const fileSystem = { ...fs, rename: async (from, to) => { if (deny && path.basename(to) === 'library-v1.json') throw new Error('index commit denied'); return fs.rename(from, to); } };
     const f = await fixture(fileSystem), item = await imported(f), before = await fs.readFile(f.index), filename = await backingFile(f, item.id), bytes = await fs.readFile(filename), files = await fs.readdir(f.files); deny = true;
-    await expect(imported(f)).rejects.toThrow('index commit denied');
+    await expect(imported(f, 'copy')).rejects.toThrow('index commit denied');
     expect(await fs.readFile(f.index)).toEqual(before); expect(await fs.readFile(filename)).toEqual(bytes); expect(await fs.readdir(f.files)).toEqual(files); expect(await fs.readFile(f.source)).toEqual(bytes);
   });
   it('首次导入的索引提交失败也清理本次文件，仍可重新导入', async () => {
@@ -131,7 +131,7 @@ describe('真实本地素材库', () => {
     let deny = false;
     const fileSystem = { ...fs, rename: async (from, to) => { await fs.rename(from, to); if (deny && path.basename(to) === 'library-v1.json') { deny = false; throw new Error('lost commit acknowledgement'); } } };
     const f = await fixture(fileSystem); await imported(f); deny = true;
-    await expect(imported(f)).rejects.toThrow('lost commit acknowledgement'); const items = await list(f); expect(items).toHaveLength(2);
+    await expect(imported(f, 'copy')).rejects.toThrow('lost commit acknowledgement'); const items = await list(f); expect(items).toHaveLength(2);
     for (const item of items) expect((await read(f, item.id)).buffer.toString()).toBe('完整素材正文-END');
   });
   it('对renderer只返回白名单元数据，不返回文件路径、摘要或注入的Key字段', async () => {

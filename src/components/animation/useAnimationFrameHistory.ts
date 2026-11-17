@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AnimationDocument, AnimationFrame } from '../../animation-types';
 
-type Source = Pick<AnimationFrame, 'atlasArtifactId' | 'cell' | 'grid' | 'crop'>;
+type Source = Pick<AnimationFrame, 'atlasArtifactId' | 'cell' | 'grid' | 'crop' | 'templatePlaceholder'>;
 interface Change { before: Source; after: Source; }
 interface Scope { past: Change[]; future: Change[]; }
-const source = (frame: AnimationFrame): Source => ({ atlasArtifactId: frame.atlasArtifactId, cell: [...frame.cell], grid: [...frame.grid], ...(frame.crop ? { crop: [...frame.crop] } : {}) });
-const fingerprint = (value: Source) => JSON.stringify([value.atlasArtifactId, value.cell, value.grid, value.crop ?? null]);
+const source = (frame: AnimationFrame): Source => ({ atlasArtifactId: frame.atlasArtifactId, cell: [...frame.cell], grid: [...frame.grid], ...(frame.crop ? { crop: [...frame.crop] } : {}), ...(frame.templatePlaceholder ? { templatePlaceholder: true } : {}) });
+const fingerprint = (value: Source) => JSON.stringify([value.atlasArtifactId, value.cell, value.grid, value.crop ?? null, Boolean(value.templatePlaceholder)]);
 const scopeKey = (entryId: string, frameId: string) => JSON.stringify([entryId, frameId]);
 const findFrame = (document: AnimationDocument, entryId: string, frameId: string) => document.entries.find(entry => entry.id === entryId)?.frames.find(frame => frame.id === frameId);
 
@@ -45,7 +45,7 @@ export function useAnimationFrameHistory(projectId: string) {
     if (!canMove(document, entryId, frameId, redo)) return;
     const key = scopeKey(entryId, frameId), current = state.current, scope = current.scopes.get(key)!, from = redo ? scope.future : scope.past, to = redo ? scope.past : scope.future, change = from.at(-1)!;
     const target = redo ? change.after : change.before;
-    const result: AnimationDocument = { ...document, entries: document.entries.map(entry => entry.id !== entryId ? entry : { ...entry, status: 'stale', frames: entry.frames.map(frame => { if (frame.id !== frameId) return frame; const next = { ...frame, ...source({ ...frame, ...target }) }; if (!target.crop) delete next.crop; return next; }) }) };
+    const result: AnimationDocument = { ...document, entries: document.entries.map(entry => entry.id !== entryId ? entry : { ...entry, status: 'stale', frames: entry.frames.map(frame => { if (frame.id !== frameId) return frame; const next = { ...frame, ...source({ ...frame, ...target }) }; if (!target.crop) delete next.crop; if (!target.templatePlaceholder) delete next.templatePlaceholder; return next; }) }) };
     from.pop(); to.push(change); current.scopes.delete(key); current.scopes.set(key, scope); render(value => value + 1); return result;
   }, [canMove]);
   const undo = useCallback((document: AnimationDocument, entryId: string, frameId: string) => move(document, entryId, frameId, false), [move]);

@@ -13,6 +13,7 @@ function createAnimationComposition({ directory, artifactStore, tool, core, file
     return fs.readFile(resolved);
   }
   async function run(document, entries, signal, operation, exportFrames = false) {
+    if (entries.some(entry => entry.frames.some(frame => frame.templatePlaceholder))) throw Error('模板源画面尚未替换，请先换入兼容图集或关键帧；静态参考图不会自动补出动作。');
     await checkedDirectory(fs, root, true); const ownedRoot = await fs.realpath(root), temporary = await fs.mkdtemp(path.join(ownedRoot, 'render-'));
     const active = () => { if (signal?.aborted) throw Object.assign(Error('本地合成已取消，源稿和费用保留。'), { name: 'AbortError' }); };
     try {

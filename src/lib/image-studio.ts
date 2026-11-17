@@ -41,6 +41,8 @@ export interface ImageDraft {
   markupSourceId?: string;
   wallpaperEnabled?: boolean;
   wallpaperTarget?: WallpaperTarget;
+  templateLayerSourceId?: string;
+  templateLayerDocumentId?: string;
 }
 
 export const imageDraftKey = (projectId: string) => `xuzuo-image-draft-v1-${projectId}`;
@@ -80,6 +82,7 @@ export function readImageDraft(raw: string | null, description: string): ImageDr
       ...(typeof value.wallpaperEnabled === 'boolean' ? { wallpaperEnabled: value.wallpaperEnabled } : value.preset === '壁纸' ? { wallpaperEnabled: true } : {}),
       ...(readWallpaperTarget(value.wallpaperTarget) ? { wallpaperTarget: readWallpaperTarget(value.wallpaperTarget) } : {}),
       ...(typeof value.markupSourceId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.markupSourceId) ? { markupSourceId: value.markupSourceId } : {}),
+      ...(typeof value.templateLayerSourceId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.templateLayerSourceId) ? { templateLayerSourceId: value.templateLayerSourceId, ...(typeof value.templateLayerDocumentId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value.templateLayerDocumentId) ? { templateLayerDocumentId: value.templateLayerDocumentId } : {}) } : {}),
       ...(typeof value.galleryBaseId === 'string' && references.length > 0 && references[0].id === value.galleryBaseId ? { galleryBaseId: value.galleryBaseId } : {}),
     };
   } catch { return defaults; }

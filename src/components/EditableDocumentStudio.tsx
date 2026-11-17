@@ -131,6 +131,18 @@ export function EditableDocumentStudio(props: PageProps) {
   const autoSourceAttempt = useRef('');
   const current = useRef({ projectId: project.id, document, record, sourceArtifactIds, dirty });
   current.current = { projectId: project.id, document, record, sourceArtifactIds, dirty };
+  const previewFocus = useRef('');
+  function focusPreviewUnit(unitId?: string, revision?: number) {
+    const message = revision !== undefined && record?.revision !== revision ? '这份导出对应其他编辑版本，当前稿已保留；可在“编辑版本”中查看。' : !unitId || !(document.kind === 'word' ? document.blocks : document.slides).some(unit => unit.id === unitId) ? '插图对应位置已变化，当前稿已保留，请在页面中重新选择。' : '';
+    if (message) { setActionError(message); props.notify(message, 'info'); return; }
+    setSelectedId(unitId!); layout.openPanel('format');
+    requestAnimationFrame(() => { if (current.current.projectId === project.id) focusBusinessDocumentField(workbench.current, unitId!); });
+  }
+  useEffect(() => {
+    const target = props.searchTarget;
+    if (!ready || !target || target.kind !== 'document' || !target.editDocument || target.projectId !== project.id || target.documentKind !== kind || target.workspaceId && target.workspaceId !== props.workspaceId || previewFocus.current === target.token) return;
+    previewFocus.current = target.token; focusPreviewUnit(target.documentUnitId, target.sourceRevision); props.onSearchTargetConsumed?.(target.token);
+  }, [props.searchTarget?.token, ready, record?.revision, project.id, props.workspaceId]);
   const scopedEdits = useDocumentSelectionHistory({ document, selectedId, selectedCellId, enabled: ready && !busy, onApply: applyScopedDocument });
   const source = latestProjectContentArtifact(props.workflowRunner.runs, project.id);
   const sourceRef = useRef(source); sourceRef.current = source;
@@ -558,7 +570,7 @@ export function EditableDocumentStudio(props: PageProps) {
   </CompactAiPanel>;
   const versions = <VersionTimeline key={project.id} projectId={project.id} document={document} savedRevision={record?.revision} dirty={dirty} busy={!!busy} versions={history} exportNames={currentExport.map(file => file.name)} requestedRevision={comparisonRevision} onRequestConsumed={() => setComparisonRevision(undefined)} loadVersion={revision => bridge ? bridge.loadVersion({ projectId: project.id, revision }) : Promise.reject(new Error('请在桌面应用中读取已保存版本。'))} onRestore={applyVersion} />;
   const assets = <><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={!ready || !!busy} onClick={() => { void importImage(selectedPicture); }}><ImagePlus size={15} />从本地导入图片</button></div><Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker embedded props={props} title={selectedPicture ? '替换当前插图' : '插入文档素材'} description={selectedPicture ? '替换所选图片，正文和其他图片保留，可撤销。' : kind === 'word' ? '插入当前段落之后，原文字保留，可撤销。' : '放入当前页；已有插图时新增图片页，原页保留。'} confirmLabel={selectedPicture ? '替换所选图片' : '插入当前位置'} onClose={layout.closePanel} onChoose={useMaterial} /></Suspense></>;
-  const files = <ArtifactResults artifacts={realArtifacts} runner={props.workflowRunner} projectId={project.id} />;
+  const files = <ArtifactResults artifacts={realArtifacts} runner={props.workflowRunner} projectId={project.id} onEditDocumentUnit={focusPreviewUnit} />;
   const deliveryTools = <><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={!!busy || !ready || !bridge} onClick={() => { void previewCurrentOffice(); }}>预览实际 Office 文件</button><button type="button" className="btn btn-secondary" disabled={!!busy || !ready || !bridge} onClick={() => { void persist(true); }}>导出到项目</button></div><p>先导出当前版本，再核对实际文件；确认交付与普通导出分开记录。</p></>;
   const panel = layout.tool === 'ai' ? aiTools : layout.tool === 'assets' ? assets : layout.tool === 'format' ? formatTools : layout.tool === 'versions' ? versions : layout.tool === 'files' ? files : deliveryTools;
   const notices = <><DocumentRevisionPanel props={props} ready={ready} busy={!!busy} dirty={dirty} revision={record?.revision || 0} sourceArtifactIds={sourceArtifactIds} exportedRevision={exported ? record?.revision : undefined} exportedArtifacts={currentExport} onLoadSource={loadRevisionSource} />{Object.keys(previewErrors).length > 0 && <div className="ed-new-source" role="status"><span>当前可见插图有 {Object.keys(previewErrors).length} 张预览未能读取，原文件与文稿保留。</span><button type="button" className="btn btn-secondary" onClick={retryPreviews}>重新读取插图预览</button></div>}<ProjectReferences props={props} />

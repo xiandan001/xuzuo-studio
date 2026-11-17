@@ -15,6 +15,10 @@ beforeEach(animationDomSetup);
 afterEach(async () => { await animationCleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('选中单帧的源画面撤销/重做（真实React，不调用模型或原生接口）', () => {
+  it('局部撤销恢复占位标记，重做真实替换后清掉标记，不把未填模板当成品', async () => {
+    await animationMount(<Probe projectId="project-a" />); const before = document(); before.entries[0].frames[0].templatePlaceholder = true; const after = repaint(before); delete after.entries[0].frames[0].templatePlaceholder;
+    await act(async () => current.record(before, after)); let undone: AnimationDocument | undefined; await act(async () => { undone = current.undo(after, 'first-entry', 'first-frame'); }); expect(undone!.entries[0].frames[0].templatePlaceholder).toBe(true); let redone: AnimationDocument | undefined; await act(async () => { redone = current.redo(undone!, 'first-entry', 'first-frame'); }); expect(redone!.entries[0].frames[0].templatePlaceholder).toBeUndefined(); expect(redone!.entries[0].frames[0].atlasArtifactId).toBe('new-atlas');
+  });
   it('恢复AI前的图集/格位/裁切，保留其它条目后来文案、其它帧时长和当前帧时长', async () => {
     const backend = animationBackend(); Object.defineProperty(window, 'desktop', { configurable: true, value: { animation: backend.bridge } });
     const ledger = Object.freeze([{ id: 'already-paid', costCents: 89 }]), ledgerBefore = JSON.stringify(ledger);

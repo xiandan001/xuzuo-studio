@@ -10,6 +10,8 @@ const { executeChat, prepareChat, prepareChatMessages, compactChatRequest } = re
 const { createChatAttachments, validPublicMetadata, backupBytes, MAX_COUNT, MAX_TOTAL } = require('./chat-attachments.cjs');
 const { parseNaturalAutomationPlan } = require('./natural-automation-plan.runtime.cjs');
 const { imageType } = require('./image-output-formats.cjs');
+const { queueEntriesValid, publicQueue, createChatQueue } = require('./chat-queue.cjs');
+const { queuedBindingFingerprint } = require('./chat-queue-binding.cjs');
 const { LIMIT: HISTORY_LIMIT, historyFieldsValid, historyFields, checkedHistory, historyCandidates, checkedManage, applyHistory, normalize: normalizeHistory, targetValid, productionsValid } = require('./chat-history.cjs');
 
 const idValid = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
@@ -29,13 +31,13 @@ function indexValid(value, workspaceId) {
   if (!value || ![1, 2].includes(value.version) || value.workspaceId !== workspaceId || value.revision !== undefined && (!Number.isSafeInteger(value.revision) || value.revision < 0) || !Array.isArray(value.items) || value.items.length > HISTORY_LIMIT) return false;
   const ids = new Set();
   return value.items.every(item => {
-    if (!item || !idValid(item.id) || ids.has(item.id) || item.workspaceId !== workspaceId || typeof item.title !== 'string' || item.title.length > 100 || !dateValid(item.createdAt) || !dateValid(item.updatedAt) || !Number.isSafeInteger(item.turnCount) || item.turnCount < 0 || item.turnCount > 300 || item.activeTurnId !== undefined && !idValid(item.activeTurnId) || !historyFieldsValid(item) || item.recordHash !== undefined && !/^[a-f0-9]{64}$/.test(item.recordHash) || !(feeEntriesValid(item.ledger, workspaceId, item.id) || item.ledger === undefined && /^[a-f0-9]{64}$/.test(item.ledgerKey || ''))) return false;
+    if (!item || !idValid(item.id) || ids.has(item.id) || item.workspaceId !== workspaceId || typeof item.title !== 'string' || item.title.length > 100 || !dateValid(item.createdAt) || !dateValid(item.updatedAt) || !Number.isSafeInteger(item.turnCount) || item.turnCount < 0 || item.turnCount > 300 || item.queuedCount !== undefined && (!Number.isSafeInteger(item.queuedCount) || item.queuedCount < 0 || item.queuedCount > 20) || item.activeTurnId !== undefined && !idValid(item.activeTurnId) || !historyFieldsValid(item) || item.recordHash !== undefined && !/^[a-f0-9]{64}$/.test(item.recordHash) || !(feeEntriesValid(item.ledger, workspaceId, item.id) || item.ledger === undefined && /^[a-f0-9]{64}$/.test(item.ledgerKey || ''))) return false;
     ids.add(item.id);
     return true;
   });
 }
 function recordValid(value, input) {
-  if (value?.version !== 1 || !idValid(value.id) || !idValid(value.workspaceId) || value.id !== input.conversationId || value.workspaceId !== input.workspaceId || typeof value.title !== 'string' || value.title.length > 100 || !dateValid(value.createdAt) || !dateValid(value.updatedAt) || !Array.isArray(value.turns) || value.turns.length > 300 || value._importOrigin !== undefined && !importOriginValid(value._importOrigin) || !historyFieldsValid(value) || !productionsValid(value.productions) || !chatExportsValid(value.exports)) return false;
+  if (value?.version !== 1 || !idValid(value.id) || !idValid(value.workspaceId) || value.id !== input.conversationId || value.workspaceId !== input.workspaceId || typeof value.title !== 'string' || value.title.length > 100 || !dateValid(value.createdAt) || !dateValid(value.updatedAt) || !Array.isArray(value.turns) || value.turns.length > 300 || value._importOrigin !== undefined && !importOriginValid(value._importOrigin) || !historyFieldsValid(value) || !productionsValid(value.productions) || !chatExportsValid(value.exports) || !queueEntriesValid(value.queue, input, checkedStart)) return false;
   const ids = new Set();
   return value.turns.every(turn => {
     if (!turn || !idValid(turn.id) || ids.has(turn.id) || typeof turn.userText !== 'string' || turn.userText.length > 10000 || typeof turn.text !== 'string' || turn.text.length > 2 * 1024 * 1024 || !['running', 'complete', 'cancelled', 'failed', 'interrupted'].includes(turn.status) || !dateValid(turn.createdAt) || !dateValid(turn.updatedAt) || !Number.isSafeInteger(turn.costCents) || turn.costCents < 0 || !COST_STATES.has(turn.costState) || typeof turn.modelName !== 'string' || typeof turn.modelId !== 'string' || !turn._billing || turn._billing.modelId !== turn.modelId || !turn._billing.connection || !/^[a-f0-9]{64}$/.test(turn._fingerprint || '')) return false;
@@ -46,7 +48,7 @@ function recordValid(value, input) {
     ids.add(turn.id); return true;
   });
 }
-function validateWorkspaceSnapshot(value) {
+function validateWorkspaceSnapshot(value, { sources = false } = {}) {
   if (!value || value.version !== undefined && value.version !== 1 || !idValid(value.workspaceId) || !Array.isArray(value.conversations) || value.conversations.length > HISTORY_LIMIT) throw Error('聊天备份格式无效，尚未恢复任何聊天。');
   const ids = new Set();
   function containsSecretFields(object) {
@@ -62,18 +64,19 @@ function validateWorkspaceSnapshot(value) {
   const known = new Map(); let total = 0;
   for (const file of files) {
     const key = `${file.conversationId}/${file.attachment?.id}`;
-    if (!ids.has(file.conversationId) || !validPublicMetadata(file.attachment) || known.has(key) || Object.keys(file).some(key => !['conversationId', 'attachment', 'buffer', 'data'].includes(key))) throw Error('聊天附件备份格式或归属无效。');
-    const bytes = backupBytes(file); if ((total += bytes.length) > 512 * 1024 * 1024) throw Error('聊天附件备份合计超过512MB。'); known.set(key, file.attachment);
+    if (!ids.has(file.conversationId) || !validPublicMetadata(file.attachment) || known.has(key) || Object.keys(file).some(key => !(sources ? ['conversationId', 'attachment', 'source'] : ['conversationId', 'attachment', 'buffer', 'data']).includes(key))) throw Error('聊天附件备份格式或归属无效。');
+    if (sources) { const source = file.source, streamed = source?.kind === 'xuzuo-stream-file'; const validSource = streamed ? Object.keys(source).every(key => ['kind', 'bytes', 'sha256', 'readBytes', 'copyTo'].includes(key)) && typeof source.readBytes === 'function' && typeof source.copyTo === 'function' : source && Object.keys(source).every(key => ['path', 'bytes', 'sha256'].includes(key)) && typeof source.path === 'string' && path.isAbsolute(source.path) && source.path.length <= 32767; if (!validPublicMetadata(file.attachment) || !validSource || source.bytes !== file.attachment.bytes || source.sha256 !== file.attachment.sha256) throw Error('聊天附件流式来源无效。'); if ((total += source.bytes) > 16 * 1024 * 1024 * 1024) throw Error('聊天附件流式备份超过16GiB。'); }
+    else { const bytes = backupBytes(file); if ((total += bytes.length) > 512 * 1024 * 1024) throw Error('聊天附件备份合计超过512MB。'); } known.set(key, file.attachment);
   }
-  for (const record of value.conversations) for (const turn of record.turns) for (const item of [...(turn.attachments || []), ...(turn.contextAttachments || [])]) { const actual = known.get(`${record.id}/${item.id}`); if (!actual || (['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].some(key => actual[key] !== item[key]) || JSON.stringify(actual.provenance || null) !== JSON.stringify(item.provenance || null))) throw Error('聊天备份缺少实际附件或引用信息不一致，尚未恢复。'); }
-  return { ...clone({ version: 1, workspaceId: value.workspaceId, conversations: value.conversations }), ...(files.length ? { attachmentFiles: files.map(file => ({ conversationId: file.conversationId, attachment: clone(file.attachment), buffer: backupBytes(file) })) } : {}) };
+  for (const record of value.conversations) for (const item of [...record.turns.flatMap(turn => [...(turn.attachments || []), ...(turn.contextAttachments || [])]), ...(record.queue || []).flatMap(item => item.attachments)]) { const actual = known.get(`${record.id}/${item.id}`); if (!actual || (['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt'].some(key => actual[key] !== item[key]) || JSON.stringify(actual.provenance || null) !== JSON.stringify(item.provenance || null))) throw Error('聊天备份缺少实际附件或引用信息不一致，尚未恢复。'); }
+  return { ...clone({ version: 1, workspaceId: value.workspaceId, conversations: value.conversations }), ...(files.length ? { attachmentFiles: files.map(file => ({ conversationId: file.conversationId, attachment: clone(file.attachment), ...(sources ? { source: { ...file.source } } : { buffer: backupBytes(file) }) })) } : {}) };
 }
 
 function summary(record) {
-  return { id: record.id, workspaceId: record.workspaceId, title: record.title, ...historyFields(record), createdAt: record.createdAt, updatedAt: record.updatedAt, turnCount: record.turns.length, ...(record.turns.some(isActive) ? { activeTurnId: record.turns.find(isActive).id } : {}) };
+  return { id: record.id, workspaceId: record.workspaceId, title: record.title, ...historyFields(record), createdAt: record.createdAt, updatedAt: record.updatedAt, turnCount: record.turns.length, ...(record.queue?.length ? { queuedCount: record.queue.length } : {}), ...(record.turns.some(isActive) ? { activeTurnId: record.turns.find(isActive).id } : {}) };
 }
 const publicTurn = turn => ({ ...Object.fromEntries(Object.entries(turn).filter(([key]) => !key.startsWith('_'))), streamSequence: turn._streamSequence || 0 });
-function publicConversation(record) { return { ...(record.exports?.length ? { exports: clone(record.exports) } : {}), version: 1, ...summary(record), turns: record.turns.map(publicTurn), ...(record.productions?.length ? { productions: clone(record.productions) } : {}) }; }
+function publicConversation(record) { return { ...(record.exports?.length ? { exports: clone(record.exports) } : {}), version: 1, ...summary(record), turns: record.turns.map(publicTurn), ...(record.queue?.length ? { queue: publicQueue(record.queue) } : {}), ...(record.productions?.length ? { productions: clone(record.productions) } : {}) }; }
 function blank(input) { const time = now(); return { version: 1, id: input.conversationId, workspaceId: input.workspaceId, title: '新对话', createdAt: time, updatedAt: time, turns: [] }; }
 function checkedScope(input) {
   if (!input || !idValid(input.workspaceId) || !idValid(input.conversationId)) throw Error('对话或工作区编号无效。');
@@ -120,10 +123,11 @@ function entriesFor(record) {
     time: turn.createdAt, status: turn.status === 'running' ? 'processing' : turn.status === 'complete' ? 'complete' : turn.status === 'cancelled' ? 'cancelled' : 'failed', billingMode: 'live', quantity: 1 }));
 }
 
-function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRates, onChanged = () => undefined, fileSystem = fs, execute = executeChat, cacheBudgetBytes = STORE_LIMIT, attachFiles, extractText, verifyProjectAttachment, previewImage, readAsset, readArtifact, documentSourceForArtifact, validateTarget, readRun, indexLimitBytes = STORE_LIMIT } = {}) {
+function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRates, onChanged = () => undefined, fileSystem = fs, execute = executeChat, cacheBudgetBytes = STORE_LIMIT, attachFiles, extractText, verifyProjectAttachment, previewImage, readAsset, readArtifact, documentSourceForArtifact, validateTarget, readRun, getQueuedBindings, indexLimitBytes = STORE_LIMIT } = {}) {
   if (typeof credentialStore?.withSecret !== 'function' || typeof directory !== 'string' || !path.isAbsolute(directory)) throw TypeError('普通聊天缺少本地存储目录或凭证库。');
   const root = path.join(directory, 'chat-v1'), workspaces = new Map(), records = new Map(), workspaceLoads = new Map(), queues = new Map(), active = new Map(), dirty = new Map(), weights = new Map();
   let closing = false;
+  const historySearches = new Map(), emittedQueues = new Map();
   const attachments = createChatAttachments({ directory, fileSystem, extractText });
   const feeCache = new Map(); let feeCacheBytes = 0;
   function cacheFees(key, entries) {
@@ -162,9 +166,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     const metadata = file => Object.fromEntries(['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt', 'provenance'].filter(key => file[key] !== undefined).map(key => [key, file[key]]));
     return { messages: execute === executeChat ? [] : prepared, preparedRequest, current: current.map(metadata), context: [...included.values()].map(metadata), trimmed, ...(skipped.length ? { notice: `本轮未带入部分较早的附件（超出数量/大小限制、当前模型不支持或原文件不可用）：${[...new Set(skipped)].slice(0, 4).join('、')}。可重新添加并选择支持看图的模型。` } : {}) };
   }
-  const recordWeight = record => 1024 + record.turns.reduce((sum, turn) => sum + 4096 + 2 * (turn.userText.length + turn.text.length), 0);
+  const recordWeight = record => 1024 + record.turns.reduce((sum, turn) => sum + 4096 + 2 * (turn.userText.length + turn.text.length), 0) + (record.queue || []).reduce((sum, item) => sum + 4096 + 2 * (item._request.text.length + (item._request.requestText?.length || 0)), 0);
   const cachedBytes = () => [...weights.values()].reduce((sum, weight) => sum + weight, 0);
-  const emit = (record, ledgerChanged = false, changedTurn = record.turns.at(-1)) => { const key = `${record.workspaceId}/${record.id}`; if (records.has(key)) weights.set(key, recordWeight(record)); try { onChanged({ workspaceId: record.workspaceId, conversationId: record.id, ledgerChanged, ...(changedTurn ? { turn: clone(publicTurn(changedTurn)) } : {}), title: record.title, updatedAt: record.updatedAt }); } catch { /* A renderer cannot interrupt persistence. */ } };
+  const emit = (record, ledgerChanged = false, changedTurn = record.turns.at(-1)) => { const key = `${record.workspaceId}/${record.id}`; if (records.has(key)) weights.set(key, recordWeight(record)); const queueSignature = JSON.stringify((record.queue || []).map(item => [item.id, item.status, item.updatedAt, item._editing, item._needsAccount, item._request.text, item._request.requestText, item.attachments.map(file => file.id)])); const queueChanged = queueSignature !== (emittedQueues.get(key) || '[]'); emittedQueues.set(key, queueSignature); try { onChanged({ workspaceId: record.workspaceId, conversationId: record.id, ledgerChanged, ...(queueChanged ? { queueChanged: true, historyChanged: true } : {}), ...(changedTurn ? { turn: clone(publicTurn(changedTurn)) } : {}), title: record.title, updatedAt: record.updatedAt }); } catch { /* A renderer cannot interrupt persistence. */ } };
   function emitStream(record, turn, operation) {
     const previous = operation.emittedText || '';
     turn._streamSequence = (turn._streamSequence || 0) + 1;
@@ -312,7 +316,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     const state = await loadWorkspace(workspaceId); if (state.recovered) return; state.recovered = true;
     try {
       for (const info of state.items.values()) {
-        const key = `${workspaceId}/${info.id}`; if (!info.activeTurnId || active.has(key)) continue;
+        const key = `${workspaceId}/${info.id}`; if (!info.activeTurnId && !info.queuedCount || active.has(key)) continue;
         let record;
         try { record = clone(await loadRecord({ workspaceId, conversationId: info.id })); }
         catch (error) {
@@ -321,6 +325,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
           items.set(info.id, unavailable); const compact = await compactItems(workspaceId, items), value = indexValue(state, compact, state.revision + 1); checkSize(value, '当前工作区的聊天索引', indexLimitBytes); await atomicJson(fileSystem, indexFile(workspaceId), value); state.items = compact; state.revision++; continue;
         }
         for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.updatedAt = now(); turn.error = '上次回答因应用退出而中断，片段与已有费用保留；不会自动重发。'; if (turn._requestStarted !== false) { turn.costState = 'unknown'; turn.costReason = '连接中断，供应商尚未返回完整用量，不能把这次调用视为免费。'; } else turn.costState = 'not-incurred'; }
+        queuedChat.recoverRecord(record);
         record.updatedAt = now(); await persist(record); emit(record, true);
       }
     } catch (error) { state.recovered = false; throw error; }
@@ -338,7 +343,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     const key = keyOf(input); let terminal;
     try {
       const preparedRequest = operation.preparedRequest; delete operation.preparedRequest;
-      const result = await execute(input, messages, { credentialStore, fetchImpl, preparedRequest, signal: operation.controller.signal, onText: text => {
+      if (operation.queuedEntry) await queuedChat.checkBinding(operation.queuedEntry);
+      const executionCredentials = operation.queuedEntry && getQueuedBindings ? { ...credentialStore, withSecret: (id, connectionId, action) => credentialStore.withSecret(id, connectionId, async secret => { await queuedChat.checkBinding(operation.queuedEntry); return action(secret); }) } : credentialStore;
+      const result = await execute(input, messages, { credentialStore: executionCredentials, fetchImpl, preparedRequest, signal: operation.controller.signal, onText: text => {
         const record = records.get(key), turn = record?.turns.find(item => item.id === input.id); if (!turn || !isActive(turn)) return;
         turn.text = text; turn.updatedAt = now(); record.updatedAt = turn.updatedAt;
         if (Date.now() - operation.emittedAt >= 100) { operation.emittedAt = Date.now(); emitStream(record, turn, operation); }
@@ -368,6 +375,8 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       if (turn.status === 'complete' && input.mode === 'plan') {
         try { turn.plan = parseNaturalAutomationPlan(turn.text); } catch { turn.status = 'failed'; turn.error = '模型返回的制作方案不完整或格式不正确，尚未执行制作；已保留回答与费用，可调整需求后重试。'; }
       }
+      if (terminal.error?.code === 'QUEUED_BINDING_CHANGED' && terminal.error.requestStarted === false && operation.queuedEntry) queuedChat.rebind(record, operation.queuedEntry, input.id);
+      if (turn.status !== 'complete') queuedChat.pause(record, '当前回复已停止或未完成，后续消息尚未发送；确认后可继续队列。');
       turn.updatedAt = now(); record.updatedAt = turn.updatedAt;
       try { await persist(record); } catch { turn.saveIssue = '回答已返回，但本地记录保存失败。请保留当前窗口并复制回答，不要重新发送以免重复收费。'; cache(record); dirty.set(key, record); }
       if (active.get(key) === operation) active.delete(key);
@@ -385,6 +394,8 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       const record = clone(await loadRecord(input)), existing = record.turns.find(turn => turn.id === input.id), fingerprint = signature(input);
       if (existing) { if (existing._fingerprint !== fingerprint) throw Error('这条消息编号已用于不同内容，没有重复调用模型。'); return publicConversation(record); }
       if (record.trashedAt) throw Error('这段聊天已移入回收站，请先恢复后再发送；已有费用保留。');
+      const queuedEntry = record.queue?.find(item => item.id === input.id);
+      if (queuedEntry && signature(queuedEntry._request) !== fingerprint) throw Error('待发消息内容已变化，未重复调用模型。');
       if (input.target) await inspectTarget({ workspaceId: input.workspaceId, target: input.target });
       if (record.turns.length >= 300) throw Error('这段聊天已经很长，请新建对话，原记录与费用保留。');
       const key = keyOf(input);
@@ -393,7 +404,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       if (input.sourceTurnId && !record.turns.some(turn => turn.id === input.sourceTurnId && !isActive(turn))) throw Error('找不到要重试的原消息，请重新编辑后发送。');
       const original = input.sourceTurnId && record.turns.find(turn => turn.id === input.sourceTurnId);
       const currentIds = input.attachmentIds || original?.attachments?.map(item => item.id) || [];
-      const context = contextMessages(record, input), material = await attachmentContext(input, context, currentIds), createdAt = now(), fx = await fxRates?.get(createdAt);
+      const context = contextMessages(record, input), material = await attachmentContext(input, context, currentIds);
+      if (queuedEntry) await queuedChat.checkBinding(queuedEntry);
+      const createdAt = now(), fx = await fxRates?.get(createdAt);
       const billing = { modelId: input.model.modelId, connection: input.connection, operation: 'text', startedAt: createdAt, pricing: input.model.pricing, fx };
       billing.ruleSnapshot = resolveOfficialBillingRule(billing, billing.pricing);
       const turn = { id: input.id, userText: input.text, text: '', status: 'running', createdAt, updatedAt: createdAt, modelName: input.model.name, modelId: input.model.modelId, modelConfigId: input.model.id, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort, mode: input.mode, ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}), ...(context.truncated ? { contextTruncated: true } : {}), costCents: 0, costState: 'unknown', _fingerprint: fingerprint, _requestStarted: true, _billing: billing };
@@ -406,8 +419,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       delete record.archivedAt;
       if (!record.turns.length) record.title = input.text.replace(/\s+/g, ' ').slice(0, 36);
       record.turns.push(turn); record.updatedAt = createdAt;
+      if (queuedEntry) record.queue = record.queue.filter(item => item.id !== input.id);
       if (closing || active.size >= 2) throw Error('对话服务正在忙，请稍候再发送；输入已保留。');
-      const operation = { turnId: input.id, controller: new AbortController(), emittedAt: 0, emittedText: '', checkpointAt: Date.now(), checkpoint: undefined, task: undefined, preparedRequest: material.preparedRequest }; active.set(key, operation);
+      const operation = { turnId: input.id, controller: new AbortController(), emittedAt: 0, emittedText: '', checkpointAt: Date.now(), checkpoint: undefined, task: undefined, preparedRequest: material.preparedRequest, ...(queuedEntry ? { queuedEntry: clone(queuedEntry) } : {}) }; active.set(key, operation);
       try { await persist(record); }
       catch (error) {
         if (error.chatRecordWritten) {
@@ -424,7 +438,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
         return publicConversation(record);
       }
       emit(record, true);
-      operation.task = pump(input, operation, material.messages).catch(() => { const saved = records.get(key); if (saved) emit(saved, true); }).finally(() => { if (active.get(key) === operation) active.delete(key); });
+      operation.task = pump(input, operation, material.messages).catch(() => { const saved = records.get(key); if (saved) emit(saved, true); }).finally(() => { if (active.get(key) === operation) active.delete(key); queuedChat.kick(); });
       return publicConversation(record);
     });
   }
@@ -514,33 +528,45 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       return attachments.importBytes(input, [{ name, mimeType: file.mimeType, bytes: file.buffer, ...(file.provenance ? { provenance: file.provenance } : {}) }]);
     });
   }
-  async function searchHistory(raw) {
+  async function searchHistoryPage(raw, signal) {
     const input = checkedHistory(raw); await queues.get(input.workspaceId)?.catch(() => undefined); await recover(input.workspaceId);
     const pool = historyCandidates((await loadWorkspace(input.workspaceId)).items.values(), input.scope), items = [];
     let cursor = input.cursor, scanned = 0, textBudget = 0;
     while (cursor < pool.length && scanned < 100 && items.length < input.limit && textBudget < 8 * 1024 * 1024) {
-      const info = pool[cursor++]; scanned++; let matched = !input.query || normalizeHistory(info.title).includes(input.query), matchSnippet;
+      if (signal?.aborted) throw Object.assign(Error('聊天正文搜索已取消。'), { name: 'AbortError' });
+      const info = pool[cursor++]; scanned++; let matched = !input.query || normalizeHistory(info.title).includes(input.query), matchSnippet, matchTurnId;
       if (!matched) {
         try {
           const record = await loadRecord({ workspaceId: input.workspaceId, conversationId: info.id });
           for (const turn of record.turns) {
+            if (signal?.aborted) throw Object.assign(Error('聊天正文搜索已取消。'), { name: 'AbortError' });
             textBudget += turn.userText.length + turn.text.length;
             const text = turn.userText + '\n' + turn.text, normalized = normalizeHistory(text), index = normalized.indexOf(input.query);
-            if (index >= 0) { matched = true; matchSnippet = text.slice(Math.max(0, index - 25), index + 130); break; }
+            if (index >= 0) { matched = true; matchTurnId = turn.id; matchSnippet = text.slice(Math.max(0, index - 25), index + 130); break; }
           }
           if (!matched) for (const production of record.productions || []) { textBudget += production.instruction.length; const index = normalizeHistory(production.instruction).indexOf(input.query); if (index >= 0) { matched = true; matchSnippet = production.instruction.slice(Math.max(0, index - 25), index + 130); break; } }
         } catch (error) { if (!['CHAT_RECORD_MISSING', 'CHAT_RECORD_CHANGED'].includes(error.code)) throw error; }
       }
-      if (matched) { const { ledger: _ledger, ledgerKey: _ledgerKey, recordHash: _recordHash, ...item } = info; items.push({ ...clone(item), ...(matchSnippet ? { matchSnippet } : {}) }); }
+      if (matched) { const { ledger: _ledger, ledgerKey: _ledgerKey, recordHash: _recordHash, ...item } = info; items.push({ ...clone(item), ...(matchSnippet ? { matchSnippet } : {}), ...(matchTurnId ? { matchTurnId } : {}) }); }
     }
     return { items, total: pool.length, scanned, ...(cursor < pool.length ? { nextCursor: cursor } : {}) };
+  }
+  function searchHistory(raw) {
+    const input = checkedHistory(raw); if (!input.requestId) return searchHistoryPage(input);
+    const key = input.workspaceId + '/' + input.requestId; if (historySearches.has(key)) return historySearches.get(key).task;
+    const controller = new AbortController(), task = searchHistoryPage(input, controller.signal); historySearches.set(key, { controller, task });
+    void task.finally(() => historySearches.delete(key)).catch(() => undefined); return task;
+  }
+  function cancelSearch(input) {
+    if (!input || !idValid(input.workspaceId) || !idValid(input.requestId)) throw Error('聊天搜索取消范围无效。');
+    const request = historySearches.get(input.workspaceId + '/' + input.requestId); request?.controller.abort(); return { cancelled: !!request };
   }
   async function manageHistory(raw) {
     const input = checkedManage(raw); await recover(input.workspaceId);
     return serial(input.workspaceId, async () => {
       const key = keyOf(input), state = await loadWorkspace(input.workspaceId), info = state.items.get(input.conversationId);
       if (!info) throw Error('这段聊天尚未保存，不能整理空白会话。');
-      if (active.has(key) || info.activeTurnId) throw Error('这段对话仍在回答，请先停止后再整理；不会自动取消或重发。');
+      if (active.has(key) || info.activeTurnId || info.queuedCount) throw Error('这段对话仍有回复或待发消息，请先停止或处理队列后再整理；不会自动取消或重发。');
       if (dirty.has(key)) throw Error('这段对话尚未可靠保存，请先免费重试保存后再整理。');
       let record;
       try { record = clone(await loadRecord(input)); }
@@ -561,11 +587,12 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
   }
   async function linkProduction(input) {
     checkedScope(input);
-    if (!idValid(input.runId) || !targetValid(input.target) || typeof input.instruction !== 'string' || !input.instruction.trim() || input.instruction.length > 10000 || typeof readRun !== 'function') throw Error('制作关联信息无效，请先读取已提交的任务；不会重复制作。');
+    if (!idValid(input.runId) || !targetValid(input.target) || typeof input.instruction !== 'string' || !input.instruction.trim() || input.instruction.length > 10000 || input.sourceTurnId !== undefined && !idValid(input.sourceTurnId) || typeof readRun !== 'function') throw Error('制作关联信息无效，请先读取已提交的任务；不会重复制作。');
     return serial(input.workspaceId, async () => {
       const record = clone(await loadRecord(input)), existing = record.productions?.find(item => item.runId === input.runId);
       if (existing) { if (signature(existing.target) !== signature(input.target) || existing.instruction !== input.instruction.trim()) throw Error('这项制作已关联不同修改目标，原费用与内容保留。'); return publicConversation(record); }
       if (record.trashedAt) throw Error('请先恢复聊天，再关联已有制作；不会自动重做。');
+      if (input.sourceTurnId && !record.turns.some(turn => turn.id === input.sourceTurnId)) throw Error('原沟通轮次已不可用，未关联到其他消息。');
       const inspection = await inspectTarget(input), run = await readRun(input.runId), first = run?.snapshot?.steps?.find(step => step.enabled !== false);
       const transformed = input.target.kind === 'image' && ['image/svg+xml', 'image/gif'].includes(inspection.artifact.mimeType) && run?.snapshot?.sourceArtifactTarget?.id === input.target.artifactId && run.snapshot.sourceArtifactTarget.sha256 === input.target.sha256 && first?.referenceArtifactIds?.length;
       if (!run || run.id !== input.runId || run.mode !== 'live' || run.workspaceId !== input.workspaceId || run.projectId !== input.target.projectId || ['automation-plan', 'business-assist'].includes(run.purpose) || !first?.referenceArtifactIds?.includes(input.target.artifactId) && !transformed) throw Error('制作任务没有绑定当前成品，尚未关联；请读取正确任务。');
@@ -574,7 +601,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
         if (!reference || reference.projectId !== input.target.projectId || reference.mimeType !== 'image/png' || reference.trashedAt || reference.unavailable || !(reference.buffer instanceof Uint8Array)) throw Error('转换后的静态参照已不可用，制作关联尚未保存。');
       }
       if ((record.productions?.length || 0) >= 1000) throw Error('本段聊天关联制作较多，请新建对话，原记录与费用保留。');
-      record.productions = [...(record.productions || []), { runId: input.runId, target: clone(input.target), instruction: input.instruction.trim(), createdAt: now() }];
+      record.productions = [...(record.productions || []), { runId: input.runId, target: clone(input.target), instruction: input.instruction.trim(), createdAt: now(), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}) }];
       if (!record.turns.length && record.title === '新对话') record.title = input.instruction.trim().replace(/\s+/g, ' ').slice(0, 36);
       record.updatedAt = now(); await persist(record); emit(record);
       return publicConversation(record);
@@ -588,8 +615,8 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       return publicConversation(record);
     });
   }
-  async function validateRestore(value) {
-    const snapshot = validateWorkspaceSnapshot(value); await recover(snapshot.workspaceId);
+  async function validateRestore(value, sources = false) {
+    const snapshot = validateWorkspaceSnapshot(value, { sources }); await recover(snapshot.workspaceId);
     if ([...active.keys()].some(key => key.startsWith(`${snapshot.workspaceId}/`)) || [...dirty.keys()].some(key => key.startsWith(`${snapshot.workspaceId}/`))) throw Error('请先结束本工作区的回答并保存记录，再恢复聊天备份。');
     const state = await loadWorkspace(snapshot.workspaceId), items = new Map([...state.items].map(([id, info]) => { const { ledger: _ledger, ...metadata } = info; return [id, { ...metadata, ledgerKey: metadata.ledgerKey || '0'.repeat(64) }]; }));
     for (const record of snapshot.conversations) {
@@ -599,8 +626,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     if (items.size > HISTORY_LIMIT) throw Error('恢复后聊天数量超过保存上限，尚未恢复任何聊天。'); checkSize(indexValue(state, items), '恢复后的聊天索引', indexLimitBytes);
     return snapshot;
   }
+  const queuedChat = createChatQueue({ checkedStart, recover, serial, loadRecord, persist, publicConversation, readAttachments: scope => attachments.list(scope), active, dirty, start, closing: () => closing, bindingState: getQueuedBindings ? async input => queuedBindingFingerprint(input, await getQueuedBindings(), checkedStart) : undefined, emit: record => emit(record) });
   return {
-    start, search: searchHistory, manage: manageHistory, selectTarget, inspectTarget, linkProduction, linkExport,
+    start, enqueue: queuedChat.enqueue, manageQueue: queuedChat.manage, cancelSearch, search: searchHistory, manage: manageHistory, selectTarget, inspectTarget, linkProduction, linkExport,
     importAsset: input => importSource(input, 'asset'), importProjectArtifact: input => importSource(input, 'project'),
     async importBytes(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有添加新附件。'); return serial(input.workspaceId, () => attachments.importBytes(input, input.files)); },
     async importAttachments(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有导入新附件。'); return serial(input.workspaceId, () => attachments.importPaths(input, input.paths)); },
@@ -618,7 +646,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     },
     async attachToProject(input) { checkedScope(input); if (closing) throw Error('应用正在退出，没有复制新附件。'); return serial(input.workspaceId, () => attachments.copyToProject(input, input.attachmentIds, input.projectId, attachFiles, verifyProjectAttachment)); },
     async list(workspaceId) { await recover(workspaceId); return [...(await loadWorkspace(workspaceId)).items.values()].map(({ ledger: _ledger, ledgerKey: _ledgerKey, recordHash: _recordHash, ...info }) => clone(info)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
-    async read(input) { checkedScope(input); if (!records.has(keyOf(input))) await queues.get(input.workspaceId)?.catch(() => undefined); await recover(input.workspaceId); return publicConversation(await loadRecord(input)); },
+    async read(input) { checkedScope(input); await queuedChat.waitForScope(input); if (!records.has(keyOf(input))) await queues.get(input.workspaceId)?.catch(() => undefined); await recover(input.workspaceId); return publicConversation(await loadRecord(input)); },
     async cancel(input) {
       checkedScope(input); if (!idValid(input.turnId)) throw Error('消息编号无效。');
       const operation = active.get(keyOf(input));
@@ -635,6 +663,49 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     },
     ledger, recalculateCosts, reconcile,
     validateWorkspaceSnapshot: validateRestore,
+    async exportWorkspaceSources(workspaceId, options = {}) {
+      if (!idValid(workspaceId)) throw Error('工作区编号无效。');
+      const maximum = options.metadataLimitBytes ?? STORE_LIMIT;
+      if (!Number.isSafeInteger(maximum) || maximum < 0 || maximum > STORE_LIMIT) throw Error('聊天备份管理数据预算无效。');
+      const limited = () => Object.assign(Error('聊天正文与索引达到本次备份的内存预算，本次快照未完成；原聊天、费用和上次成功快照均保留。可先逐段导出聊天，或只备份所选项目。'), { code: 'CHAT_BACKUP_CAPTURE_LIMIT' });
+      const check = () => { if (options.signal?.aborted) throw Object.assign(Error('聊天备份捕获已取消。'), { name: 'AbortError' }); };
+      check(); const headerBytes = Buffer.byteLength(JSON.stringify({ version: 1, workspaceId, conversations: [], attachmentFiles: [] })) + 1;
+      if (headerBytes > maximum) throw limited();
+      return serial(workspaceId, async () => {
+        if ([...active.keys()].some(key => key.startsWith(workspaceId + '/')) || [...dirty.keys()].some(key => key.startsWith(workspaceId + '/'))) throw Error('请先结束回答并保存记录，再备份聊天。');
+        const conversations = [], attachmentFiles = []; let captured = headerBytes;
+        for (const info of (await loadWorkspace(workspaceId)).items.values()) {
+          check(); const input = { workspaceId, conversationId: info.id };
+          let stat; try { stat = await checkedFile(fileSystem, filename(input)); } catch { throw missingConversation(); }
+          if (captured + stat.size + 2 > maximum) throw limited();
+          captured += stat.size + 2; check();
+          const record = clone(await loadRecord(input)); conversations.push(record);
+          const refs = [...new Set([...record.turns.flatMap(turn => [...(turn.attachments || []), ...(turn.contextAttachments || [])]), ...(record.queue || []).flatMap(item => item.attachments)].map(item => item.id))];
+          for await (const file of attachments.sources(input, refs, { signal: options.signal })) {
+            check(); const row = { conversationId: info.id, ...file }, metadataBytes = Buffer.byteLength(JSON.stringify({ conversationId: info.id, attachment: row.attachment })) + 2;
+            if (captured + metadataBytes > maximum) throw limited(); captured += metadataBytes; attachmentFiles.push(row);
+          }
+        }
+        check(); return validateWorkspaceSnapshot({ version: 1, workspaceId, conversations, ...(attachmentFiles.length ? { attachmentFiles } : {}) }, { sources: true });
+      });
+    },
+    validateWorkspaceSnapshotSources: value => validateRestore(value, true),
+    async restoreWorkspaceSources(value) {
+      const snapshot = await validateRestore(value, true);
+      return serial(snapshot.workspaceId, async () => {
+        await validateRestore(snapshot, true); const state = await loadWorkspace(snapshot.workspaceId); let restored = 0, skipped = 0;
+        for (const record of snapshot.conversations) {
+          if (state.items.has(record.id)) { skipped++; continue; }
+          for (const file of (snapshot.attachmentFiles || []).filter(item => item.conversationId === record.id)) {
+            if (file.source.kind !== 'xuzuo-stream-file') { const stat = await checkedFile(fileSystem, file.source.path); if (stat.size !== file.attachment.bytes) throw Error('聊天恢复附件大小不匹配。'); }
+            const buffer = file.source.kind === 'xuzuo-stream-file' ? await file.source.readBytes() : await fileSystem.readFile(file.source.path); await attachments.restore({ workspaceId: snapshot.workspaceId, conversationId: record.id }, [{ attachment: file.attachment, buffer }]);
+          }
+          for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.error = '从备份恢复了未结束的回答，不会自动继续或重发。'; turn.costState = 'unknown'; }
+          queuedChat.recoverRecord(record); await persist(record); restored++; emit(record, true);
+        }
+        return { restored, skipped };
+      });
+    },
     async exportWorkspace(workspaceId) {
       await recover(workspaceId);
       return serial(workspaceId, async () => {
@@ -642,7 +713,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
         const conversations = [], attachmentFiles = [];
         for (const info of (await loadWorkspace(workspaceId)).items.values()) {
           const record = clone(await loadRecord({ workspaceId, conversationId: info.id })); conversations.push(record);
-          const refs = new Set(record.turns.flatMap(turn => [...(turn.attachments || []), ...(turn.contextAttachments || [])]).map(item => item.id));
+          const refs = new Set([...record.turns.flatMap(turn => [...(turn.attachments || []), ...(turn.contextAttachments || [])]), ...(record.queue || []).flatMap(item => item.attachments)].map(item => item.id));
           for (const id of refs) { const file = await attachments.read({ workspaceId, conversationId: info.id }, id); attachmentFiles.push({ conversationId: info.id, attachment: Object.fromEntries(['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt', 'provenance'].filter(key => file[key] !== undefined).map(key => [key, file[key]])), buffer: file.buffer }); }
         }
         return { version: 1, workspaceId, conversations, ...(attachmentFiles.length ? { attachmentFiles } : {}) };
@@ -652,7 +723,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       const snapshot = await validateRestore(value);
       return serial(snapshot.workspaceId, async () => {
         await validateRestore(snapshot); const state = await loadWorkspace(snapshot.workspaceId); let restored = 0, skipped = 0;
-        for (const record of snapshot.conversations) { const files = (snapshot.attachmentFiles || []).filter(file => file.conversationId === record.id); if (files.length) await attachments.restore({ workspaceId: snapshot.workspaceId, conversationId: record.id }, files); if (state.items.has(record.id)) { skipped++; continue; } for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.error = '从备份恢复了未结束的回答，不会自动继续或重发。'; turn.costState = 'unknown'; } await persist(record); restored++; emit(record, true); }
+        for (const record of snapshot.conversations) { const files = (snapshot.attachmentFiles || []).filter(file => file.conversationId === record.id); if (files.length) await attachments.restore({ workspaceId: snapshot.workspaceId, conversationId: record.id }, files); if (state.items.has(record.id)) { skipped++; continue; } for (const turn of record.turns.filter(isActive)) { turn.status = 'interrupted'; turn.error = '从备份恢复了未结束的回答，不会自动继续或重发。'; turn.costState = 'unknown'; } queuedChat.recoverRecord(record); await persist(record); restored++; emit(record, true); }
         return { restored, skipped };
       });
     },
@@ -660,6 +731,9 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
     resume() { closing = false; },
     async shutdown() {
       closing = true;
+      for (const request of historySearches.values()) request.controller.abort();
+      await Promise.allSettled([...historySearches.values()].map(request => request.task));
+      await queuedChat.drain();
       for (const operation of active.values()) operation.controller.abort();
       await Promise.allSettled([...queues.values()]);
       for (const operation of active.values()) operation.controller.abort();
@@ -672,4 +746,4 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
   };
 }
 
-module.exports = { createChatService, checkedStart, contextMessages, entriesFor, validateWorkspaceSnapshot };
+module.exports = { createChatService, checkedStart, contextMessages, entriesFor, validateWorkspaceSnapshot, validateWorkspaceSnapshotSources: value => validateWorkspaceSnapshot(value, { sources: true }) };

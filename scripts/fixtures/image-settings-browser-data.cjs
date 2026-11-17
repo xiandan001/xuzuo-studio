@@ -58,7 +58,7 @@ async function createImageSettingsFixture({ directory, nativeImage, BrowserWindo
     for (const file of [source, clearSource]) sources.push({ id: file.id, sha256: hash((await artifactStore.read(file.id)).buffer), unchanged: hash((await artifactStore.read(file.id)).buffer) === original.get(file.id) });
     return { calls: { ...calls }, workers: workers.map(row => ({ ...row })), sources, sourceUnchanged: sources.every(file => file.unchanged), clearPreviews: [...clearPreviews], providerCalls: 0, ledger: [] };
   }
-  return { project, source, clearSource, run, calls, clearPreviews, artifactStore, commerce, preview, snapshot,
+  return { project, source, clearSource, run, calls, clearPreviews, artifactStore, commerce, cpuTasks, preview, snapshot,
     context: { workspaceId, project, source, clearSource, run, workspaceDirectory: workspace, ledger: [], configuration: { version: 1, models: [], connections: [], credentials: [], workflows: [], categories: [], studioActions: [], useTemplates: [], vaultStatus: { available: false } } },
     async close() { await commerce.prepareClose(); await commerce.shutdown(); await Promise.all([cpuTasks.drain(), artifactStore.drain()]); const end = Date.now() + 2500; while (workers.some(row => !row.exited) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 25)); assert(workers.every(row => row.exited), 'Owned CPU worker remains after teardown'); },
   };

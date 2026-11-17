@@ -4,10 +4,10 @@ import type { StudioAsset } from '../asset-types';
 import { BUILTIN_ASSETS } from './builtin-assets';
 import { isActiveProject } from './workspace-state';
 
-export interface SearchTarget { token: string; kind: 'asset' | 'prompt' | 'workflow'; id: string; name: string; workspaceId?: string; }
-export type SearchGroupKind = 'project' | 'file' | 'asset' | 'prompt' | 'workflow' | 'page';
-export interface LocalSearchItem { key: string; id: string; kind: SearchGroupKind; name: string; description: string; text: string; view?: ViewId; projectId?: string; file?: ArtifactMetadata; builtin?: boolean; }
-export const SEARCH_GROUPS: { kind: SearchGroupKind; label: string }[] = [{ kind: 'project', label: '项目' }, { kind: 'file', label: '已登记项目文件' }, { kind: 'asset', label: '素材' }, { kind: 'prompt', label: '提示词模板' }, { kind: 'workflow', label: '工作流' }, { kind: 'page', label: '页面与功能' }];
+export interface SearchTarget { token: string; kind: 'asset' | 'prompt' | 'workflow' | 'chat' | 'document'; id: string; name: string; workspaceId?: string; conversationId?: string; turnId?: string; projectId?: string; artifactId?: string; documentUnitId?: string; documentKind?: 'word' | 'ppt' | 'excel'; sourceRevision?: number; editDocument?: boolean; }
+export type SearchGroupKind = 'project' | 'file' | 'document' | 'chat' | 'asset' | 'prompt' | 'workflow' | 'page';
+export interface LocalSearchItem { key: string; id: string; kind: SearchGroupKind; name: string; description: string; text: string; view?: ViewId; projectId?: string; file?: ArtifactMetadata; builtin?: boolean; conversationId?: string; turnId?: string; matchedQuery?: string; }
+export const SEARCH_GROUPS: { kind: SearchGroupKind; label: string }[] = [{ kind: 'project', label: '项目' }, { kind: 'file', label: '已登记项目文件' }, { kind: 'chat', label: '聊天正文' }, { kind: 'document', label: '文档正文' }, { kind: 'asset', label: '素材' }, { kind: 'prompt', label: '提示词模板' }, { kind: 'workflow', label: '工作流' }, { kind: 'page', label: '页面与功能' }];
 export const normalizeSearch = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 const indexed = (item: Omit<LocalSearchItem, 'text'>, description = item.description): LocalSearchItem => ({ ...item, text: normalizeSearch(`${item.name} ${description.slice(0, 2000)}`) });
 const formatTerms = { word: 'Word DOCX 文档', ppt: 'PPT PPTX 演示 幻灯片', excel: 'Excel XLSX 表格 工作簿', image: '图片 PNG JPG 图像' };
@@ -39,6 +39,6 @@ export function searchOwnAssetItems(assets: StudioAsset[], workspaceId: string):
 export function groupedLocalSearch(items: LocalSearchItem[], query: string, limits: Partial<Record<SearchGroupKind, number>> = {}) {
   const normalized = normalizeSearch(query.slice(0, 120)), tokens = normalized.split(' ').filter(Boolean);
   const grouped = new Map<SearchGroupKind, { item: LocalSearchItem; rank: number; index: number }[]>();
-  items.forEach((item, index) => { if (tokens.some(token => !item.text.includes(token))) return; const name = normalizeSearch(item.name), rank = !normalized ? 4 : name === normalized ? 0 : name.startsWith(normalized) ? 1 : name.includes(normalized) ? 2 : 3; const group = grouped.get(item.kind) || []; group.push({ item, rank, index }); grouped.set(item.kind, group); });
+  items.forEach((item, index) => { if (item.matchedQuery !== normalized && tokens.some(token => !item.text.includes(token))) return; const name = normalizeSearch(item.name), rank = !normalized ? 4 : name === normalized ? 0 : name.startsWith(normalized) ? 1 : name.includes(normalized) ? 2 : 3; const group = grouped.get(item.kind) || []; group.push({ item, rank, index }); grouped.set(item.kind, group); });
   return SEARCH_GROUPS.map(group => { const matches = grouped.get(group.kind) || [], limit = Math.max(1, Math.min(50, limits[group.kind] || 6)); matches.sort((left, right) => left.rank - right.rank || left.index - right.index); return { ...group, total: matches.length, items: matches.slice(0, limit).map(match => match.item) }; });
 }

@@ -14,9 +14,10 @@ export const ANIMATION_MOTIONS: readonly AnimationMotion[] = ['nod','jump','sway
 
 function checkedFrame(input: unknown): AnimationFrame {
   if (!object(input) || !animationId(input.id) || !animationId(input.atlasArtifactId) || !Array.isArray(input.cell) || input.cell.length !== 2 || !Array.isArray(input.grid) || input.grid.length !== 2 || input.grid.some(value => !integer(value, 1, 16)) || input.grid[0] * input.grid[1] > 120 || input.cell.some((value, index) => !integer(value, 0, Number((input.grid as unknown[])[index]) - 1)) || !integer(input.durationMs, 10, 6000) || input.durationMs % 10 !== 0) throw Error('动画关键帧的来源、格数或时长无效。');
+  if (input.templatePlaceholder !== undefined && typeof input.templatePlaceholder !== 'boolean') throw Error('模板源帧的占位标识无效。');
   let crop: [number, number, number, number] | undefined;
   if (input.crop !== undefined) { if (!Array.isArray(input.crop) || input.crop.length !== 4 || input.crop.some(value => !integer(value, 0, 16384)) || input.crop[2] <= input.crop[0] || input.crop[3] <= input.crop[1] || (input.crop[2] - input.crop[0]) * (input.crop[3] - input.crop[1]) > 16777216) throw Error('关键帧裁切框无效。'); crop = [...input.crop] as [number, number, number, number]; }
-  return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell] as [number, number], grid: [...input.grid] as [number, number], ...(crop ? { crop } : {}), durationMs: input.durationMs };
+  return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell] as [number, number], grid: [...input.grid] as [number, number], ...(crop ? { crop } : {}), durationMs: input.durationMs, ...(input.templatePlaceholder ? { templatePlaceholder: true } : {}) };
 }
 
 function checkedEntry(input: unknown): AnimationEntry {

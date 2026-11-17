@@ -14,3 +14,15 @@
 .data-management details .data-management-block{border:0;padding:4px 0}
 .data-management-location{margin-top:2px}
 .data-management-buttons{display:flex;flex-wrap:wrap;gap:10px}
+.data-auto-backup{margin:16px 0;padding:18px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-surface-subtle)}
+.data-auto-backup>header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.data-auto-backup>header h3{margin:0 0 7px;font-size:16px}
+.data-auto-backup>header p{margin:0;font-size:14px;line-height:1.7;color:var(--ui-fg-secondary)}
+.data-backup-state{flex-shrink:0;padding:4px 8px;border:1px solid var(--ui-border);border-radius:7px;font-size:12px;color:var(--ui-fg-secondary)}
+.data-backup-state.is-enabled{color:var(--ui-accent);background:var(--ui-surface-active)}
+.data-backup-last{display:flex;align-items:center;gap:10px;margin:17px 0;color:var(--ui-fg-secondary)}
+.data-backup-last strong{display:block;font-size:14px;font-weight:600;color:var(--ui-fg)}
+.data-backup-last small{display:block;margin-top:4px;font-size:12px;line-height:1.6}
+.data-backup-path{overflow-wrap:anywhere;font-size:13px}
+.data-auto-backup .data-management-buttons .btn{white-space:normal;min-height:38px}
+@media(max-width:700px){.data-auto-backup{padding:14px}.data-auto-backup>header{flex-wrap:wrap}.data-auto-backup .data-management-buttons{gap:8px}}

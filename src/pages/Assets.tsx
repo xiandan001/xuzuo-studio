@@ -100,15 +100,16 @@ export function Assets(props: PageProps) {
     try {
       const imported = await bridge.import({ workspaceId: id }); if (currentWorkspace.current !== id || !imported.length) return;
       let assignmentFailed = false;
-      if (category) for (const asset of imported) {
+      if (category) for (const asset of imported.filter(asset => !asset.reused)) {
         try { await bridge.assignCategory!({ workspaceId: id, id: asset.id, categoryId: category.id }); }
         catch { assignmentFailed = true; }
         if (currentWorkspace.current !== id) return;
       }
-      setQuery(''); setFilter('all'); setOwnLimit(24); setSelectedCategory(category && !assignmentFailed ? category.id : 'all');
+      const reused = imported.filter(asset => asset.reused).length;
+      setQuery(reused && imported.length === 1 ? imported[0].name : ''); setFilter('all'); setOwnLimit(24); setSelectedCategory(category && !assignmentFailed && !reused ? category.id : 'all');
       await loadCategories(); if (currentWorkspace.current !== id) return;
       if (tab === 'mine') await load(); else setTab('mine');
-      notify(assignmentFailed ? `已导入 ${imported.length} 份素材，但部分归类未完成；已显示全部，可在素材详情继续归类。` : category ? `已导入 ${imported.length} 份素材到“${category.name}”。` : `已将 ${imported.length} 份真实文件保存到工作区，重启后仍可使用。`, assignmentFailed ? 'info' : 'success');
+      notify(assignmentFailed ? `已导入 ${imported.length} 份素材，但部分归类未完成；已显示全部，可在素材详情继续归类。` : reused ? `已使用 ${reused} 份已有素材${imported.length > reused ? `，新增 ${imported.length - reused} 份` : ''}；原分类与项目引用保持。` : category ? `已导入 ${imported.length} 份素材到“${category.name}”。` : `已将 ${imported.length} 份真实文件保存到工作区，重启后仍可使用。`, assignmentFailed ? 'info' : 'success');
     }
     catch (cause) { if (currentWorkspace.current === id) setError(workflowPublicError(cause, '导入未完成。')); }
     finally { if (currentWorkspace.current === id) setBusy(''); }
