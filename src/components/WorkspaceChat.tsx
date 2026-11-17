@@ -136,8 +136,9 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const summary = useMemo(() => summarizeCosts(turns.map(turn => ({ ...turn, billingMode: 'live' as const }))), [costSignature]);
   useEffect(() => { if (latestPlan) setActivePlan(latestPlan.id); }, [latestPlan?.id]);
   useEffect(() => {
-    if (!pinned.current) return;
-    const frame = requestAnimationFrame(() => { if (thread.current) thread.current.scrollTop = thread.current.scrollHeight; });
+    const element = thread.current;
+    if (!pinned.current || !element) return;
+    const frame = requestAnimationFrame(() => { if (pinned.current && thread.current === element) element.scrollTop = element.scrollHeight; });
     return () => cancelAnimationFrame(frame);
   }, [latest?.updatedAt, latest?.text, turns.length]);
   useEffect(() => {
