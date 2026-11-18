@@ -7,6 +7,7 @@ const { exportAutomationBackup, mergeAutomationBackup } = require('./automation-
 const { ruleCreationFingerprint } = require('./automation-rule-identity.cjs');
 const { normalizePreparation, assertPreparation } = require('./automation-rule-preparation.cjs');
 const { validReplacement, sameContinuation, resolveContinuation, replacementRequest } = require('./automation-continuation.cjs');
+const { isFinalManualReview } = require('./workflow-final-review.cjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(value);
 const active = run => ['running', 'paused', 'waiting-review'].includes(run.status);
@@ -53,7 +54,15 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     return { project, workflow: { ...structuredClone(frozen), workspaceId: project.workspaceId } };
   }
   const nativeRun = (runs, job) => runs.find(run => run.projectId === job.projectId && (run.id === job.runId || run.dispatchKey === job.dispatchKey));
-  const reviewPending = (value, projectId, exceptJobId, replacedJobId) => value.decisions.some(card => card.projectId === projectId && card.kind === 'review' && !card.resolvedAt && card.jobId !== exceptJobId && card.jobId !== replacedJobId && value.jobs.some(job => job.id === card.jobId && !['complete', 'cancelled'].includes(job.status)));
+  const reviewPending = (value, projectId, exceptJobId, replacedJobId, passiveReviews) => value.decisions.some(card => card.projectId === projectId && card.kind === 'review' && !card.resolvedAt && card.jobId !== exceptJobId && card.jobId !== replacedJobId && value.jobs.some(job => job.id === card.jobId && !['complete', 'cancelled'].includes(job.status) && !passiveReviews?.has(job.runId)));
+  function manualWithoutReplacement(value, job) {
+    return !job.replacement && value.events.some(event => event.id === job.eventId && event.trigger === 'manual' &&
+      event.projectId === job.projectId && event.workspaceId === job.workspaceId);
+  }
+  function finalReviews(runs, job) {
+    return new Set(runs.filter(run => run.projectId === job.projectId && run.workspaceId === job.workspaceId &&
+      isFinalManualReview(run)).map(run => run.id));
+  }
   function resolveCards(value, jobId, action) { for (const card of value.decisions.filter(card => card.jobId === jobId && !card.resolvedAt)) { card.resolvedAt = now(); card.action = action; } }
   function terminalJob(value, job, run) {
     if (job.runId === run.id && job.nativeStatus === run.status && !job.cancellationPending && job.status === (run.status === 'complete' ? 'complete' : 'cancelled') && !value.decisions.some(card => card.jobId === job.id && !card.resolvedAt)) return false;
@@ -170,14 +179,17 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     return [...new Map([...retained, ...incoming].map(item => [item.id, item])).values()];
   }
   async function continueJob(job, action) {
-    if (reservations.has(job.projectId) || dispatchClaims.has(job.projectId) || archived(state, job.projectId) || reviewPending(state, job.projectId, job.id, job.replacement?.jobId)) throw Error('项目正在整理目录或等待其他检查，请完成后再继续。');
+    if (reservations.has(job.projectId) || dispatchClaims.has(job.projectId) || archived(state, job.projectId)) throw Error('项目正在整理目录或启动任务，请稍后再继续。');
     const claim = Symbol(job.projectId); dispatchClaims.set(job.projectId, claim);
     try {
       const current = state.jobs.find(item => item.id === job.id); if (current.cancelRequestedAt) throw Error('此任务已请求取消，不能继续或重新派工；请先核对取消结果。');
       assertPreparation(current.ruleSnapshot || state.rules.find(rule => rule.id === current.ruleId) || {});
       const candidates = await runsFor(job.projectId), run = nativeRun(candidates, current);
       const replacement = !run && current.replacement ? await resolveContinuation(state, current.ruleSnapshot, { previousRuleId: current.replacement.ruleId, previousRunId: current.replacement.runId }, liveEngine, current.replacement) : undefined;
-      if (candidates.some(other => other.projectId === job.projectId && other.id !== run?.id && other.id !== replacement?.runId && active(other))) throw Error('项目已有其他运行或待检查任务，未执行续跑。');
+      const passiveReviews = run || manualWithoutReplacement(state, current) ? finalReviews(candidates, current) : undefined;
+      if (reviewPending(state, job.projectId, job.id, replacement?.jobId, passiveReviews) || candidates.some(other =>
+        other.projectId === job.projectId && other.id !== run?.id && other.id !== replacement?.runId &&
+        active(other) && !passiveReviews?.has(other.id))) throw Error('项目已有其他运行或待检查任务，未执行续跑。');
       if (!run) {
         if (current.runId) throw Error('原运行记录暂时找不到，请先重新读取或恢复原记录，未重新派工。');
         if (action !== 'continue') throw Error('请先重新核对派工状态，再明确继续。');
@@ -260,7 +272,12 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         try { replacement = await resolveContinuation(state, pending.ruleSnapshot, { previousRuleId: pending.replacement.ruleId, previousRunId: pending.replacement.runId }, liveEngine, pending.replacement); }
         catch (error) { await mutate(next => { const job = next.jobs.find(item => item.id === pending.id); if (job.status === 'cancelled' || job.cancelRequestedAt) return false; return addDecision(next, job, 'failure', '接续制作需要重新确认', error.message); }); continue; }
       }
-      if (reservations.has(pending.projectId) || dispatchClaims.has(pending.projectId) || archived(state, pending.projectId) || reviewPending(state, pending.projectId, pending.id, replacement?.jobId) || snapshot.runs.some(run => run.projectId === pending.projectId && run.id !== replacement?.runId && active(run)) || state.jobs.some(job => job.id !== pending.id && job.id !== replacement?.jobId && job.projectId === pending.projectId && (['dispatching', 'running'].includes(job.status) || job.cancellationPending))) continue;
+      const allowPendingFinalReview = manualWithoutReplacement(state, pending);
+      const passiveReviews = allowPendingFinalReview ? finalReviews(snapshot.runs, pending) : undefined;
+      if (reservations.has(pending.projectId) || dispatchClaims.has(pending.projectId) || archived(state, pending.projectId) ||
+        reviewPending(state, pending.projectId, pending.id, replacement?.jobId, passiveReviews) ||
+        snapshot.runs.some(run => run.projectId === pending.projectId && run.id !== replacement?.runId && active(run) && !passiveReviews?.has(run.id)) ||
+        state.jobs.some(job => job.id !== pending.id && job.id !== replacement?.jobId && job.projectId === pending.projectId && (['dispatching', 'running'].includes(job.status) || job.cancellationPending))) continue;
       let request; const claim = Symbol(pending.projectId); dispatchClaims.set(pending.projectId, claim);
       try {
         const rule = pending.ruleSnapshot || state.rules.find(rule => rule.id === pending.ruleId); if (!rule) throw Error('来源规则不存在。');
@@ -269,11 +286,11 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         const remembered = memories.length ? `\n\n【用户明确保存的本项目偏好与决定】\n${memories.map(memory => `${memory.createdAt}：${memory.note}`).join('\n')}` : '';
         assertPreparation(rule);
         request = safeRequest({ ...context, ...replacementRequest(replacement), models: state.context.models, connections: state.context.connections, input: pending.input + remembered, variables: rule.variables, attachmentIds: requestAttachments(pending, context.project, context.workflow), dispatchKey: pending.dispatchKey, acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
-        const claimed = await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); if (!contextSynced || !job || job.status !== 'queued' || job.cancelRequestedAt || reservations.has(job.projectId) || dispatchClaims.get(job.projectId) !== claim || archived(next, job.projectId) || reviewPending(next, job.projectId, job.id, replacement?.jobId)) return false; jobContext(next, job); job.status = 'dispatching'; job.updatedAt = now(); return true; });
+        const claimed = await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); if (!contextSynced || !job || job.status !== 'queued' || job.cancelRequestedAt || reservations.has(job.projectId) || dispatchClaims.get(job.projectId) !== claim || archived(next, job.projectId) || reviewPending(next, job.projectId, job.id, replacement?.jobId, passiveReviews)) return false; jobContext(next, job); job.status = 'dispatching'; job.updatedAt = now(); return true; });
         if (!claimed) continue;
         if (closed || !contextSynced || reservations.has(pending.projectId) || state.jobs.find(job => job.id === pending.id)?.cancelRequestedAt || archived(state, pending.projectId)) continue;
         if (replacement) await resolveContinuation(state, rule, { previousRuleId: replacement.ruleId, previousRunId: replacement.runId }, liveEngine, replacement);
-        const run = await start(request);
+        const run = await start(request, { allowPendingFinalReview });
         if (!run || !validId(run.id) || run.projectId !== pending.projectId || run.dispatchKey && run.dispatchKey !== pending.dispatchKey) throw Error('派工返回的运行编号或项目归属无效，请重新读取后台记录。');
         await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); job.runId = run.id; job.nativeStatus = run.status; if (job.cancelRequestedAt) cancellationCard(next, job, '已关联运行记录，正在核对取消结果。'); else if (run.status === 'complete' || run.status === 'cancelled') terminalJob(next, job, run); else if (['waiting-review', 'failed', 'interrupted', 'paused'].includes(run.status)) addDecision(next, job, run.status === 'waiting-review' ? 'review' : 'failure', '检查这次执行结果', run.error || `后台状态：${run.status}`); else job.status = 'running'; job.updatedAt = now(); });
         if (state.jobs.find(job => job.id === pending.id)?.cancelRequestedAt) await confirmCancellation(pending.id);

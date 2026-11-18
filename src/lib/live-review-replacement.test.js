@@ -97,6 +97,75 @@ describe('待检查流程的原子替代', () => {
     expect((await f.engine.snapshot()).runs).toEqual(cancelled.runs); expect(f.calls).toHaveLength(1);
   });
 
+  it('一次性制作可保留同项目的末步待检查；两条结果分别确认，同一派工编号不重复启动', async () => {
+    const f = await fixture();
+    const previous = refinement(undefined);
+    previous.workflow.steps.push({ id: 'disabled-export', name: '已经停用的导出', kind: 'export', prompt: '', inputSource: 'previous', enabled: false });
+    const old = await f.engine.start(previous);
+    await waitFor(f.engine, value => value.runs.find(run => run.id === old.id)?.status === 'waiting-review');
+    await f.engine.flush();
+    const before = await f.engine.snapshot();
+    const original = before.runs.find(run => run.id === old.id);
+    const originalFile = original.attempts[0].artifacts[0];
+    const originalBytes = (await f.store.read(originalFile.id)).buffer;
+    const request = refinement(undefined);
+    request.workflow.id = 'one-time-chat-plan';
+    request.dispatchKey = 'f'.repeat(64);
+    await expect(f.engine.start({ ...request, allowPendingFinalReview: true })).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
+    const options = { allowPendingFinalReview: true };
+    const started = await f.engine.start(request, options);
+    expect((await f.engine.start(request, options)).id).toBe(started.id);
+    await waitFor(f.engine, value => value.runs.find(run => run.id === started.id)?.status === 'waiting-review');
+    await f.engine.flush();
+    const both = await f.engine.snapshot();
+    expect(both.runs.find(run => run.id === original.id)).toEqual(original);
+    expect(both.runs.find(run => run.id === started.id).attempts[0].artifacts[0].id).not.toBe(originalFile.id);
+    expect(both.ledger.filter(entry => entry.workflowRunId === original.id)).toEqual(before.ledger);
+    expect((await f.store.read(originalFile.id)).buffer).toEqual(originalBytes);
+    expect(both.runs.every(run => !run.supersedesRunId && !run.supersededByRunId)).toBe(true);
+    for (const id of [original.id, started.id]) {
+      await f.engine.control({ id, action: 'resume' });
+      await waitFor(f.engine, value => value.runs.find(run => run.id === id)?.status === 'complete');
+      await f.engine.flush();
+    }
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it('一次性制作仍阻止未到末步的待检查任务，不改写其结果或强制替代', async () => {
+    const f = await fixture(), before = await waiting(f);
+    await f.engine.flush();
+    const options = { allowPendingFinalReview: true };
+    await expect(f.engine.start(refinement(undefined), options)).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
+    await expect(f.engine.start(refinement(before.run.id), options)).rejects.toThrow('不能同时替换');
+    expect((await f.engine.snapshot()).runs).toEqual(before.snapshot.runs);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('新任务在中途检查后仍能继续，旧任务的末步检查保留并可分别通过', async () => {
+    const f = await fixture(), old = await f.engine.start(refinement(undefined));
+    await waitFor(f.engine, value => value.runs.find(run => run.id === old.id)?.status === 'waiting-review');
+    await f.engine.flush();
+    const previous = (await f.engine.snapshot()).runs.find(run => run.id === old.id);
+    const next = request();
+    next.workflow.id = 'staged-chat-plan';
+    next.workflow.steps = next.workflow.steps.slice(0, 4);
+    const started = await f.engine.start(next, { allowPendingFinalReview: true });
+    await waitFor(f.engine, value => value.runs.find(run => run.id === started.id)?.status === 'waiting-review');
+    await f.engine.flush();
+    await expect(f.engine.control({ id: old.id, action: 'resume' })).rejects.toThrow('其它真实任务');
+    await f.engine.control({ id: started.id, action: 'resume' });
+    const both = await waitFor(f.engine, value => value.runs.some(run => run.id === started.id && run.status === 'waiting-review' && run.stepIndex === 3));
+    await f.engine.flush();
+    expect(both.runs.find(run => run.id === old.id)).toEqual(previous);
+    expect(f.calls.map(call => call.prompt)).toEqual(['新一轮精修', '生成初稿', '旧流程后续步骤']);
+    for (const id of [old.id, started.id]) {
+      await f.engine.control({ id, action: 'resume' });
+      await waitFor(f.engine, value => value.runs.some(run => run.id === id && run.status === 'complete'));
+      await f.engine.flush();
+    }
+    expect(f.calls).toHaveLength(3);
+  });
+
   it('真正running及paused不能被替代，不会中断或重复已有请求', async () => {
     const entered = deferred(), release = deferred(); let aborted = false;
     const f = await fixture({ execute: async (_input, { signal }) => { signal.addEventListener('abort', () => { aborted = true; }); entered.resolve(); await release.promise; } });

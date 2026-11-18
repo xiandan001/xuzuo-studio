@@ -12,16 +12,16 @@ const stamp = '2026-11-03T00:00:00.000Z';
 async function directory() { const result = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-automation-test-')); owned.push(result); return result; }
 afterEach(async () => { await Promise.all(centers.splice(0).map(center => center.shutdown())); for (const root of owned.splice(0)) { if (!path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'xuzuo-automation-test-')) throw Error('Unowned test cleanup'); await fs.rm(root, { recursive: true, force: true }); } });
 async function setup(extra = {}) {
-  const root = await directory(), runs = [], calls = []; let revision = 1, time = Date.parse(stamp);
+  const root = await directory(), runs = [], calls = [], admissions = []; let revision = 1, time = Date.parse(stamp);
   const context = { workspaces: [{ id: 'workspace', name: 'Fixture' }], projects: [1, 2, 3].map(n => ({ id: `project-${n}`, workspaceId: 'workspace', kind: 'word', name: `Project${n}`, description: '', costCents: 17 })), workflows: [{ id: 'flow', workspaceId: 'workspace', name: 'Fixture', outputKind: 'word', steps: [] }], models: [], connections: [] };
   const snapshot = async after => after >= revision ? null : { revision, runs: structuredClone(runs), ledger: [] };
-  const start = async request => { calls.push(request); const run = { id: `run-${calls.length}`, dispatchKey: request.dispatchKey, projectId: request.project.id, workspaceId: 'workspace', workflowId: request.workflow.id, status: 'running', attempts: [], createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString() }; runs.push(run); revision++; return structuredClone(run); };
+  const start = async (request, admission) => { calls.push(request); admissions.push(admission); const run = { id: `run-${calls.length}`, dispatchKey: request.dispatchKey, projectId: request.project.id, workspaceId: 'workspace', workflowId: request.workflow.id, status: 'running', attempts: [], createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString() }; runs.push(run); revision++; return structuredClone(run); };
   const control = async input => { const run = runs.find(run => run.id === input.id); run.status = input.action === 'cancel' ? 'cancelled' : 'running'; revision++; };
   const center = createAutomationCenter({ directory: root, liveEngine: { snapshot }, start, control, clock: () => time, ...extra }); centers.push(center);
   await center.syncContext(context);
   const add = changes => center.saveRule({ workspaceId: 'workspace', projectId: 'project-1', workflowId: 'flow', name: 'Rule', enabled: false, trigger: 'manual', input: 'Actual goal', variables: {}, ...changes });
   const settle = async () => { for (let i = 0; i < 4; i++) await center.tick(); };
-  return { center, root, context, runs, calls, add, settle, advance: minutes => { time += minutes * 60000; revision++; }, changed: () => { revision++; } };
+  return { center, root, context, runs, calls, admissions, add, settle, advance: minutes => { time += minutes * 60000; revision++; }, changed: () => { revision++; } };
 }
 describe('自动化事件、派工与恢复', () => {
   it('同规则连续点击只接收一次，不重复派工，队列与事件可重新读取', async () => {
@@ -39,6 +39,37 @@ describe('自动化事件、派工与恢复', () => {
     const f = await setup(); for (const id of [1, 2, 3]) { const rule = await f.add({ projectId: `project-${id}` }); await f.center.trigger({ ruleId: rule.id }); } await f.settle();
     expect(f.calls).toHaveLength(2); expect((await f.center.snapshot('workspace')).jobs.filter(job => job.status === 'queued')).toHaveLength(1);
     f.runs[0].status = 'complete'; f.runs[0].completedAt = stamp; f.changed(); await f.settle(); expect(f.calls).toHaveLength(3);
+  });
+  it('同项目只有最终验收时派发原手动队列，保留旧验收并让自动触发继续等待', async () => {
+    const f = await setup();
+    const older = await f.center.trigger({ ruleId: (await f.add()).id });
+    await f.settle();
+    const queued = await f.center.trigger({ ruleId: (await f.add()).id });
+    await f.settle();
+    expect(f.calls).toHaveLength(1);
+    expect((await f.center.snapshot('workspace')).jobs.find(job => job.id === queued.id).status).toBe('queued');
+    Object.assign(f.runs[0], {
+      mode: 'live', status: 'waiting-review', stepIndex: 0,
+      snapshot: { steps: [{ id: 'review', kind: 'manual-review', enabled: true }, { id: 'tail', kind: 'export', enabled: true }] },
+      attempts: [{ id: 'attempt', stepId: 'review', status: 'waiting-review' }],
+    });
+    f.changed(); await f.settle();
+    expect(f.calls).toHaveLength(1);
+    f.runs[0].snapshot.steps[1].enabled = false;
+    f.changed(); await f.settle();
+    expect(f.calls[1].dispatchKey).toBe(queued.dispatchKey);
+    expect(f.admissions[1]).toEqual({ allowPendingFinalReview: true });
+    const oldReview = (await f.center.snapshot('workspace')).decisions.find(card => card.jobId === older.id);
+    expect(oldReview).toMatchObject({ kind: 'review', runId: f.runs[0].id });
+    expect(oldReview.resolvedAt).toBeUndefined();
+    f.runs[1].status = 'complete'; f.changed(); await f.settle();
+    await f.add({ enabled: true, trigger: 'reference-imported' });
+    await f.center.referenceImported({ projectId: 'project-1', workspaceId: 'workspace', files: [{ id: 'file-1' }] });
+    await f.settle();
+    expect(f.calls).toHaveLength(2);
+    const jobs = (await f.center.snapshot('workspace')).jobs;
+    expect(jobs.find(job => job.id === queued.id).status).toBe('complete');
+    expect(jobs.filter(job => job.status === 'queued')).toHaveLength(1);
   });
   it('派工尚未确认时仅读取不会重发，无记录时保持待办直到明确继续', async () => {
     const requests = []; let calls = 0; const f = await setup({ start: async request => { requests.push(request); calls++; throw Error('lost acknowledgement'); } }); const rule = await f.add(); await f.center.trigger({ ruleId: rule.id }); await f.settle();

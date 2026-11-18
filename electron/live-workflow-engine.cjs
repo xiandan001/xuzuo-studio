@@ -15,6 +15,7 @@ const { replacementReview, assertRefinementSource } = require('./refinement-fork
 const { validateResumeImageSources } = require('./resume-image-sources.cjs');
 const { explicitStepReferences } = require('./workflow-references.cjs');
 const { assertArtifactRefinementTarget } = require('./artifact-refinement-target.cjs');
+const { isFinalManualReview } = require('./workflow-final-review.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const now = () => new Date().toISOString();
@@ -342,6 +343,11 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     const run = record.run;
     return ['automation-plan', 'business-assist'].includes(request.purpose) && !['automation-plan', 'business-assist'].includes(run.purpose) && run.workspaceId === request.project.workspaceId && run.snapshot.outputKind === request.project.kind && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && !controllers.has(run.id) && !run.attempts.some(attempt => attempt.status === 'running');
   }
+  function settledFinalReview(record, project) {
+    const run = record.run;
+    return run.projectId === project.id && run.workspaceId === project.workspaceId && run.snapshot.outputKind === project.kind &&
+      !controllers.has(run.id) && !pumps.has(run.id) && isFinalManualReview(run);
+  }
   return {
     drain, flush: drain,
     async isProjectBusy(projectId, { allowReview = false } = {}) {
@@ -349,11 +355,13 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
       return projectMutations.has(projectId) || [...records.values()].some(record => record.run.projectId === projectId && (controllers.has(record.run.id) || pumps.has(record.run.id) || ['running', 'paused', ...(!allowReview ? ['waiting-review'] : [])].includes(record.run.status)));
     },
     preflight: validation,
-    async start(input) {
+    async start(input, { allowPendingFinalReview = false } = {}) {
       return mutateProject(input?.project?.id, async () => {
         await ready;
         if (shuttingDown) throw new Error('应用正在退出。');
         const request = safeRequest(input);
+        const keepFinalReviews = allowPendingFinalReview === true;
+        if (keepFinalReviews && request.replaceWaitingReviewRunId !== undefined) throw new Error('保留待检查结果时不能同时替换已有运行。');
         await assertProjectAdmission(request.project.id);
         if (request.dispatchKey !== undefined) {
           if (typeof request.dispatchKey !== 'string' || !/^[a-f0-9]{64}$/.test(request.dispatchKey)) throw new Error('自动化派单标识无效。');
@@ -373,7 +381,14 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         const checkpoint = replacementReview(replacement?.run, request.refinementFork), pending = checkpoint?.attempt;
         if (replacementId !== undefined && (typeof replacementId !== 'string' || !replacement || replacement.run.projectId !== request.project.id || replacement.run.workspaceId !== request.project.workspaceId || replacement.run.snapshot.outputKind !== request.project.kind || replacement.run.status !== 'waiting-review' || replacement.run.hiddenAt || replacement.run.trashedAt || !expectedReviewId || pending?.id !== expectedReviewId || controllers.has(replacementId) || replacement.run.attempts.some(attempt => attempt.status === 'running'))) throw new Error('待检查任务已变化，请刷新当前结果后再开始新一轮创作。');
         await assertRefinementSource(request, replacement?.run, artifactStore);
-        if ([...records.values()].some(item => item !== replacement && item.run.projectId === request.project.id && (ACTIVE.has(item.run.status) || controllers.has(item.run.id)) && !planningReview(request, item))) throw Object.assign(new Error('这个项目已有真实运行任务，请先完成或取消。'), { code: 'PROJECT_BUSY' });
+        const busy = [...records.values()].some(item => {
+          if (item === replacement || item.run.projectId !== request.project.id) return false;
+          if (keepFinalReviews) {
+            return (ACTIVE.has(item.run.status) || controllers.has(item.run.id) || pumps.has(item.run.id)) && !settledFinalReview(item, request.project);
+          }
+          return (ACTIVE.has(item.run.status) || controllers.has(item.run.id)) && !planningReview(request, item);
+        });
+        if (busy) throw Object.assign(new Error('这个项目已有真实运行任务，请先完成或取消。'), { code: 'PROJECT_BUSY' });
         const time = now();
         const run = { id: randomUUID(), ...(request.purpose ? { purpose: request.purpose } : {}), ...(request.dispatchKey ? { dispatchKey: request.dispatchKey } : {}), mode: 'live', workspaceId: request.workflow.workspaceId, projectId: request.project.id, workflowId: request.workflow.id, workflowName: request.workflow.name, snapshot: request.workflow, status: 'running', stepIndex: 0, attempts: [], variables: request.variables, input: request.input, attachmentIds: request.attachmentIds, createdAt: time, updatedAt: time };
         const nextRecord = { run, request, ledger: [], legacyBaseCostCents: Math.max(0, request.project.costCents - projectLedgerCost(run.projectId)) };
@@ -550,7 +565,11 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           const cancelledLocalExport = run.status === 'cancelled' && !run.supersededByRunId && (current?.kind === 'animation-compose' || current?.kind === 'export' && (current.wallpaperTarget !== undefined || current.engineeringReferenceId !== undefined));
           if (!(['resume', 'continue'].includes(action) && (['paused', 'failed', 'interrupted'].includes(run.status) || cancelledLocalExport))) throw new Error('当前状态不能执行这个操作。');
         }
-        if ([...records.values()].some(item => item !== record && item.run.projectId === run.projectId && ACTIVE.has(item.run.status))) throw new Error('项目已有其它真实任务。');
+        const busy = [...records.values()].some(item => {
+          if (item === record || item.run.projectId !== run.projectId) return false;
+          return (ACTIVE.has(item.run.status) || controllers.has(item.run.id) || pumps.has(item.run.id)) && !settledFinalReview(item, nextRequest.project);
+        });
+        if (busy) throw new Error('项目已有其它真实任务。');
         nextRequest.workflow = nextRun.snapshot;
         const nextBaseline = project ? Math.max(record.legacyBaseCostCents || 0, project.costCents - projectLedgerCost(project.id)) : record.legacyBaseCostCents || 0;
         const remaining = nextRun.snapshot.steps.map((step, index) => ({ ...step, enabled: step.enabled && (nextRun.retryStepOnly ? index === nextRun.stepIndex : index >= nextRun.stepIndex) }));

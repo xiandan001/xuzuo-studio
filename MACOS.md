@@ -1,5 +1,11 @@
 # macOS 开发与验收
 
+## 2.12.3 修复手动任务滞留队列（2026-11-18）
+
+同项目的旧任务只剩最后一步人工检查时，已经手动提交的任务沿用原任务编号和派单标识继续执行，旧任务可保留待检查状态。运行中、暂停中或检查之后还有步骤的任务继续使用项目锁。定时和事件触发仍按原顺序等待。
+
+用真实 macOS 安装包和本机模型替身验证升级。2.12.2 写出一张 PNG 并停在最终检查，同项目第二个手动任务保持排队。升级到 2.12.3 后，原队列任务仅执行一次并写出另一张 PNG。原文件字节、结果和检查记录保留，重开对话不增加模型请求，两个结果可分别验收。DMG 和 ZIP 核验通过。报告见 `outputs/release-v2.12.3/queued-execution-validation.json`。
+
 ## 2.12.2 对话内执行方案（2026-11-18）
 
 新方案点击「执行方案」后，从当前对话派发一次制作任务。「仅保存为自动化」单独保留。此前已保存的方案可以沿用原规则执行，后台状态刷新不会阻塞按钮。启动回执未确认时可读取原任务状态。生成进度和结果显示在对应方案下。
@@ -152,7 +158,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.2/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.3/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -173,7 +179,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.2/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.3/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。
