@@ -21,14 +21,16 @@ async function createProductionUsabilityData({ directory, nativeImage, BrowserWi
   const workspace = path.join(directory, 'workspace'); await fs.mkdir(workspace);
   await workspaceStorage.bindRoot({ workspaceId, name: '隔离制作验收', directory: workspace, projects: [] });
   for (const id of [projectId, 'usability-word', 'usability-ppt']) await workspaceStorage.ensureProject({ projectId: id, workspaceId, name: id });
-  const workers = [], exports = [], calls = { performanceReads: 0, performanceSaves: 0, previews: [], templateSaves: 0, templateInstantiations: 0, reflowPreviews: 0, reflowExports: 0, createdProjects: 0, provider: 0 };
-  const cpuTasks = require('../../electron/cpu-tasks.cjs').createCpuTasks({ workerFile: path.join(__dirname, 'production-usability-worker.cjs'), createWorker: (file, options) => {
+  const workers = [], exports = [], calls = { performanceReads: 0, performanceSaves: 0, previews: [], templateSaves: 0, templateInstantiations: 0, reflowPreviews: 0, reflowExports: 0, createdProjects: 0, provider: 0, finalComposes: 0, encodingFaults: 0, serviceRestarts: 0 }; let failFinalAt = Infinity;
+  const queuedCpu = require('../../electron/cpu-tasks.cjs').createCpuTasks({ workerFile: path.join(__dirname, 'production-usability-worker.cjs'), createWorker: (file, options) => {
     const worker = new Worker(file, { ...options, workerData: { ...options.workerData, testOwnerFile: ownerFile, testOwnerNonce: ownerNonce } });
     const row = { task: options.workerData.task, threadId: worker.threadId, dependencyBootstrapVerified: false, exited: false }; workers.push(row);
     worker.once('message', message => { row.dependencyBootstrapVerified = message.fixtureDependencyBootstrapVerified === true; }); worker.once('exit', () => { row.exited = true; }); return worker;
   } });
+  const cpuTasks = { ...queuedCpu, async run(task, input, options) { if (task === 'commerce-compose' && options?.priority !== 'interactive' && ++calls.finalComposes === failFinalAt) { failFinalAt = Infinity; calls.encodingFaults++; throw Error('独立验收：第三版本地编码被中断，已保存文件保留。'); } return queuedCpu.run(task, input, options); } };
   const performanceControl = require('../../electron/performance-control.cjs').createPerformanceControl({ directory, cpuTasks, metrics });
-  const commerce = require('../../electron/commerce-images.cjs').createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cpuTasks, BrowserWindow, onExport: async result => { exports.push(result); } });
+  const commerceOptions = { workspaceStorage, artifactStore, nativeImage, cpuTasks, BrowserWindow, onExport: async result => { exports.push(result); } };
+  let commerce = require('../../electron/commerce-images.cjs').createCommerceImages(commerceOptions);
   const editorStore = require('../../electron/editor-store.cjs').createEditorStore({ workspaceStorage, artifactStore });
   const spreadsheetStore = require('../../electron/spreadsheet-store.cjs').createSpreadsheetStore({ workspaceStorage, artifactStore, loadModule });
   const templates = require('../../electron/project-templates.cjs').createProjectTemplates({ directory, workspaceStorage, artifactStore, editorStore, spreadsheetStore, commerceImages: () => commerce, loadModule });
@@ -66,7 +68,9 @@ async function createProductionUsabilityData({ directory, nativeImage, BrowserWi
     for (const kind of ['word', 'ppt']) assert.deepEqual(await editorStore.load({ projectId: `usability-${kind}`, kind }), originalDocuments[kind]);
     return { sourceUnchanged: sources.every(item => item.unchanged), originalDocumentsUnchanged: true, sources, calls, workers, providerCalls: calls.provider, ledger, exports: exports.map(result => ({ ...result })), lastTemplate, lastInstance, lastReflow };
   }
-  return { workspaceStorage, artifactStore, cpuTasks, performanceControl, commerce, editorStore, templates, scope, document, source, projects, calls, exports, preview, createProject, snapshot,
+  return { workspaceStorage, artifactStore, cpuTasks, performanceControl, get commerce() { return commerce; }, editorStore, templates, scope, document, source, projects, calls, exports, preview, createProject, snapshot,
+    failThirdEncodingOnce() { failFinalAt = calls.finalComposes + 3; },
+    async restartCommerce() { await commerce.shutdown(); commerce = require('../../electron/commerce-images.cjs').createCommerceImages(commerceOptions); calls.serviceRestarts++; },
     setTemplate: value => { lastTemplate = value; }, setInstance: value => { lastInstance = value; }, setReflow: value => { lastReflow = value; },
     context: { workspaceId, project, source, scope, revision: document.revision, documents, imageIds, ledger, configuration: { version: 1, models: [], connections: [], credentials: [], workflows: [], categories: [], studioActions: [], useTemplates: [], vaultStatus: { available: false } } },
     async close() { await commerce.prepareClose(); await commerce.shutdown(); await templates.drain(); await Promise.all([cpuTasks.drain(), performanceControl.flush(), editorStore.drain(), spreadsheetStore.drain(), artifactStore.drain()]); const end = Date.now() + 2500; while (workers.some(row => !row.exited) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 25)); assert(workers.every(row => row.exited)); },

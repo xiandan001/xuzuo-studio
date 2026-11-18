@@ -154,6 +154,13 @@ async function scenario() {
     await until('scroll position restored', `Math.abs(document.querySelector('.app-content').scrollTop-${returnPosition})<3`);
     sample('restoreListMemory', memoryBegan); sample('returnToListAndRestore', returnBegan);
     await layout('projects-960-dark'); await capture('projects-return-memory-dark-960');
+    const routesBefore = await evaluate('window.projectFlowBrowserFixture.snapshot().calls.routes.length');
+    const savedTitle = await evaluate('window.projectFlowBrowserFixture.snapshot().record.document.title');
+    await click('[aria-label=' + JSON.stringify('继续编辑 ' + savedTitle) + ']');
+    await until('direct Word editor from project list', 'window.projectFlowBrowserFixture.snapshot().calls.routes.at(-1)==="documents" && document.querySelector(".op-project-table")===null');
+    const routesAfter = await evaluate('window.projectFlowBrowserFixture.snapshot().calls.routes');
+    assert.deepEqual(routesAfter.slice(routesBefore), ['documents']);
+    report.directEditorFromList = true;
   });
   report.simulation = await evaluate('window.projectFlowBrowserFixture.snapshot()');
   assert.equal(report.simulation.calls.provider, 0);

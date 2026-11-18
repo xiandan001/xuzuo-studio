@@ -33,7 +33,9 @@ export interface CommerceReflowPreview {
   previewId: string; sourceRevision: number;
   targets: (CommerceImageSize & { id: string; document: CommerceImageDocument; previewDataUrl: string; warnings: string[] })[];
 }
-export interface CommerceReflowResult extends CommerceImageRenderResult { variants: { targetId: string; documentId: string; width: number; height: number; artifactIds: string[] }[]; }
+export interface CommerceReflowJob { id: string; createdAt: string; sourceRevision: number; total: number; completed: number; canResume: boolean; reason?: string; error?: string; targets: (CommerceImageSize & { id: string; completed: boolean; artifactIds: string[] })[]; }
+export interface CommerceReflowJobs { jobs: CommerceReflowJob[]; errors: string[]; }
+export interface CommerceReflowResult extends CommerceImageRenderResult { jobId?: string; variants: { targetId: string; documentId: string; width: number; height: number; artifactIds: string[] }[]; }
 export interface CommerceAlphaResult {
   artifact: ArtifactMetadata; width: number; height: number; sourceSha256: string;
 }
@@ -51,7 +53,8 @@ export interface CommerceImagePreview {
 }
 export interface CommerceImagesBridge {
   reflowPreview?: (input: CommerceImageScope & { expectedRevision: number; requestId: string; targets: CommerceImageSize[] }) => Promise<CommerceReflowPreview>;
-  reflowExport?: (input: CommerceImageScope & { expectedRevision: number; previewId: string; approvedTargetIds: string[] }) => Promise<CommerceReflowResult>;
+  reflowJobs?: (input: CommerceImageScope & { expectedRevision: number }) => Promise<CommerceReflowJobs>;
+  reflowExport?: (input: CommerceImageScope & { expectedRevision: number; approvedTargetIds: string[] } & ({ previewId: string; jobId?: never } | { jobId: string; previewId?: never })) => Promise<CommerceReflowResult>;
   preview?: (input: CommerceImagePreviewRequest) => Promise<CommerceImagePreview>;
   cancelPreview?: (input: { projectId: string; requestId: string }) => Promise<void>;
   read: (input: CommerceImageScope & { fromSnapshot?: boolean }) => Promise<CommerceImageRead>;

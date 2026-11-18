@@ -4,6 +4,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it } from 'vitest';
+import { chatReferenceRequest } from '../components/ChatPlanReference';
+import { availableChatScenarios, chatScenarioInput } from './chat-scenarios';
 
 const load = createRequire(import.meta.url), { createChatService } = load('../../electron/chat-service.cjs'), { ModelRuntimeError } = load('../../electron/provider-http.cjs');
 const { safeChatBackup, remapChatBackups } = load('../../electron/chat-backup.cjs');
@@ -30,6 +32,21 @@ afterEach(async () => {
   for (const directory of profiles.splice(0)) { const real = await fs.realpath(directory); expect(path.dirname(real)).toBe(await fs.realpath(os.tmpdir())); expect(path.basename(real)).toMatch(/^xuzuo-chat-queue-/); await fs.rm(real, { recursive: true, force: true }); }
 });
 describe('真实聊天待发队列、提交与费用边界', () => {
+  it('原回复引用前置且场景要求仍以本轮正文结尾，编辑真实待发可保留引用附件与原费用', async () => {
+    const f = await fixture(); await f.service.start(request); const original = await complete(f, 'first', 1), source = original.turns[0], paidSourceFees = await f.service.ledger();
+    await f.service.start({ ...request, id: 'held-second', text: '先等待这份当前回复' });
+    const [attachment] = await f.service.importBytes({ ...request, files: [{ name: '引用资料.txt', mimeType: 'text/plain', bytes: Buffer.from('QUOTE_REFERENCE_FILE_4826') }] });
+    const scene = availableChatScenarios(request.workspaceId, []).find(item => item.id === 'document-word'), originalText = 'QUOTE_INITIAL_4751', editedText = 'QUOTE_EDITED_4751';
+    expect(scene).toBeTruthy(); const base = chatScenarioInput(scene, originalText), composed = chatReferenceRequest(base, source, source.text);
+    expect(base.endsWith(originalText)).toBe(true); expect(composed.endsWith(originalText)).toBe(true); expect(composed.indexOf(source.text)).toBeLessThan(composed.indexOf(scene.prompt));
+    await f.service.enqueue({ ...request, id: 'quoted-plan', text: originalText, requestText: composed, mode: 'plan', outputKind: 'word', sceneName: scene.name, attachmentIds: [attachment.id] });
+    const priorFees = await f.service.ledger(); await f.service.manageQueue({ ...request, id: 'quoted-plan', action: 'pause' }); await f.service.manageQueue({ ...request, id: 'quoted-plan', action: 'edit', text: editedText });
+    const saved = await f.service.read(request), pending = saved.queue[0]; expect(pending.requestText).toBe(composed.slice(0, -originalText.length) + editedText); expect(pending.attachments).toEqual([attachment]); expect(pending.requestText).toContain(source.text); expect(pending.requestText).toContain(scene.prompt); expect(pending.requestText).not.toContain(originalText); expect(f.calls).toHaveLength(2); expect(await f.service.ledger()).toEqual(priorFees);
+    await complete(f, 'held-second', 2); await until(() => f.calls.length, count => count === 3); const dispatched = f.calls[2];
+    expect(dispatched.input).toMatchObject({ text: editedText, requestText: pending.requestText, attachmentIds: [attachment.id], mode: 'plan', outputKind: 'word' }); expect(JSON.stringify(dispatched.messages)).toContain('QUOTE_REFERENCE_FILE_4826'); expect(JSON.stringify(dispatched.messages)).toContain(source.text);
+    await f.service.cancel({ ...request, turnId: 'quoted-plan' }); const completed = await f.service.read(request); expect(completed.turns[0]).toEqual(source); expect(f.calls).toHaveLength(3); for (const paid of paidSourceFees) expect((await f.service.ledger()).find(item => item.id === paid.id)).toEqual(paid);
+  }, 10000);
+
   it('两次点击同一排队编号只存一条，快照场景模型思考附件，编辑和撤回均未提前收费', async () => {
     const f = await fixture(); await f.service.start(request);
     const [attachment] = await f.service.importBytes({ ...request, files: [{ name: '本轮资料.txt', mimeType: 'text/plain', bytes: Buffer.from('唯一参考资料 ACORN-289') }] });

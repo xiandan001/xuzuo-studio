@@ -397,6 +397,7 @@ sourceNames.push('src/components/ChatAttachments.tsx', 'src/components/chat-atta
     "src/wallpaper-types.ts",
     "src/workspace-types.ts"
   );
+  sourceNames.push('src/lib/chat-window.ts', 'src/components/ChatPlanReference.tsx', 'src/components/chat-plan-reference.css', 'src/lib/document-image-binding.ts');
   sourceNames.push('scripts/verify-bead-native.cjs', 'src/workers/spreadsheet-calculation.worker.ts', 'src/lib/spreadsheet-incremental.ts', 'assets/library/catalog.json');
   for (const name of sourceNames) sources[name] = hash(await fs.readFile(path.join(root, name)));
   const dependencyRoot = path.join(root, ...(localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
@@ -413,7 +414,7 @@ sourceNames.push('src/components/ChatAttachments.tsx', 'src/components/chat-atta
   for (let index = 0; index < 30 && pids.some(alive); index++) await new Promise(resolve => setTimeout(resolve, 100)); report.residualPids = pids.filter(alive);
   assert(!expired && code === 0 && native.passed, native.errors?.join('\n')); assert.equal(report.residualPids.length, 0); assert.equal(native.externalRequests, 0); assert.equal(native.actualAccountCharges, 0);
   for (const key of ['noProjectChat', 'reasoningBodyVerified', 'multiTurnContextVerified', 'partialStreamDisplayed', 'stopAndRetryPreserveCosts', 'planValidatedBeforeDisplay', 'deferredProjectSelection', 'historyReloadKeepsLedger']) assert.equal(native[key], true, key);
-  assert.equal(native.accountDetailsBeforeSendVerified, true);
+  assert.equal(native.accountDetailsBeforeSendVerified, true); assert.equal(native.planReferencePreservesDraft, true);
   for (const key of ['boundedNaturalGrowth', 'clearsToCompact', 'noCallsOrProjects']) assert.equal(native.composerSizing[key], true, key);
   assert.equal(native.composerSizing.pageZoomFactor, 1);
   assert.equal(native.originalSyntheticPostCount, 6); assert.equal(native.attachmentSyntheticPostCount, 3); assert.equal(native.baselineSyntheticPostCount, 9); assert.equal(native.queueSyntheticPostCount, 2); assert.equal(native.totalSyntheticPostCount, 11); assert.equal(native.fakePostCount, 11); assert.equal(native.syntheticCalls.length, 11);

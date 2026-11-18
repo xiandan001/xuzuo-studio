@@ -57,9 +57,19 @@ function domControl(input) {
 async function point(selector, text, focus = false) {
   const input = { selector, text, focus };
   await until('control ' + (text || selector), `(${domControl.toString()})(${JSON.stringify({ ...input, exists: true })})`);
-  await evaluate(`(${domControl.toString()})(${JSON.stringify(input)})`);
-  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-  const result = await evaluate(`(${domControl.toString()})(${JSON.stringify(input)})`); report.hitTests.push({ selector, ...result }); return result;
+  const probe = '(' + domControl.toString() + ')(' + JSON.stringify(input) + ')';
+  let previous = await evaluate(probe);
+  const deadline = performance.now() + 4000;
+  while (performance.now() < deadline) {
+    await delay(20);
+    const result = await evaluate(probe);
+    if (result.x === previous.x && result.y === previous.y && result.width === previous.width && result.height === previous.height) {
+      report.hitTests.push({ selector, ...result });
+      return result;
+    }
+    previous = result;
+  }
+  throw Error('Control did not settle: ' + selector);
 }
 async function click(selector, text) {
   const hit = await point(selector, text); window.webContents.focus();
@@ -104,7 +114,14 @@ async function managedImage(kind, expectedUnit) {
   await click('.dap-image-open'); await until(kind + ' actual component emits unit id', `window.productionUsabilityFixture.snapshot().unit===${JSON.stringify(expectedUnit)}`);
   const scroll = await evaluate(`(()=>{const box=document.querySelector('.puf-main');box.scrollTop=0;return {height:box.clientHeight,total:box.scrollHeight}})()`); assert(scroll.total > scroll.height + 5);
   const position = await evaluate('(()=>{const box=document.querySelector(".puf-main"),r=box.getBoundingClientRect();return {x:Math.round(r.right-25),y:Math.round(r.top+r.height/2)}})()');
-  window.webContents.sendInputEvent({ type: 'mouseMove', ...position }); window.webContents.sendInputEvent({ type: 'mouseWheel', ...position, deltaX: 0, deltaY: -400, canScroll: true });
+  // Allow Chromium to commit the scroll reset before dispatching a wheel gesture.
+  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  window.webContents.sendInputEvent({ type: 'mouseMove', ...position });
+  for (let count = 0; count < 3; count++) {
+    window.webContents.sendInputEvent({ type: 'mouseWheel', ...position, deltaX: 0, deltaY: -400, canScroll: true });
+    await delay(100);
+    if (await evaluate('document.querySelector(".puf-main").scrollTop>0')) break;
+  }
   await until(kind + ' content scrolls', 'document.querySelector(".puf-main").scrollTop>0'); report.scrollTests.push({ kind, nativeWheel: true, ...scroll });
   await point('.dap-image-open');
   report[kind + 'Preview'] = { managedArtifactId: source.id, sourceSha256: hash(source.buffer), originalPixelsMatch: true, width: displayed.width, height: displayed.height, clickedUnit: expectedUnit, callbackCaptureSeam: true };
@@ -146,7 +163,17 @@ async function scenario() {
     report.performance = { persisted, sample, realCpuScheduler: true, diskReread: true, onDemandOnly: true, switchGeometry: { unchecked, checked, actualThumbTravel: checkedOffset - uncheckedOffset, fixedPill: true, sameRowAndCentred: true, paintedHitTarget: true } }; report.contracts.performancePersisted = true;
     await layout('performance-1440-light', '.performance-settings'); await capture('performance-1440-light');
   });
-  await step('word-real-managed-picture-click-and-native-scroll', async () => { await viewport(960, 'light'); await click('.puf-header button', 'Word 预览'); await managedImage('word', 'word-picture'); await layout('word-960-light', '.dap-preview'); await capture('word-960-light'); });
+  await step('word-real-managed-picture-click-and-native-scroll', async () => { await viewport(960, 'light'); await click('.puf-header button', 'Word 预览'); await managedImage('word', 'word-picture'); await layout('word-960-light', '.dap-preview'); await capture('word-960-light');
+    await click('button', '编辑所选插图');
+    await click('summary', '用 AI 精修这张图片');
+    await click('[aria-label="文档插图精修凭证"]');
+    await click('[role="option"]', '测试账户乙');
+    if (await evaluate('document.querySelector(".document-image-model-settings").open')) await click('.document-image-model-settings summary');
+    await click('.puf-header button', 'Word 预览');
+    await click('button', '编辑所选插图');
+    await until('project image account restores after remount', `document.querySelector('.document-image-model-settings summary')?.textContent.includes('测试账户乙') && !document.querySelector('.document-image-model-settings').open`);
+    report.documentImageBindingRestored = true;
+  });
   await step('ppt-real-managed-picture-click-and-native-scroll', async () => { await viewport(1440, 'dark'); await click('.puf-header button', 'PPT 预览'); await managedImage('ppt', 'ppt-picture'); await layout('ppt-1440-dark', '.dap-preview'); await capture('ppt-1440-dark'); });
   await step('reflow-per-target-approval-and-real-independent-engineering-files', async () => {
     await viewport(960, 'dark'); await click('.puf-header button', '多比例排版');
@@ -158,8 +185,19 @@ async function scenario() {
     const approvals = await evaluate('[...document.querySelectorAll(".commerce-reflow-previews input")].map(input=>input.getAttribute("aria-label"))');
     for (const [index, label] of approvals.entries()) { await click(`[aria-label=${JSON.stringify(label)}]`); assert.equal(await evaluate('document.querySelector(".commerce-reflow-dialog footer .btn-primary").disabled'), index < 2); }
     await layout('reflow-960-dark', '.commerce-reflow-dialog'); await capture('reflow-960-dark');
+    data.failThirdEncodingOnce();
     await click('.commerce-reflow-dialog footer button', '确认并导出 3 版');
+    await until('two actual exports remain resumable after injected third encoder failure', 'document.querySelector(".commerce-reflow-recovery")?.dataset.completed==="2"&&!document.querySelector(".commerce-reflow-recovery button")?.disabled', 25000);
+    const job = (await data.commerce.reflowJobs({ ...data.scope, expectedRevision: data.document.revision })).jobs[0]; assert.equal(job.completed, 2); assert.equal(job.total, 3);
+    const completedHashes = new Map(); for (const id of job.targets.flatMap(target => target.artifactIds)) completedHashes.set(id, hash((await data.artifactStore.read(id)).buffer));
+    await click('.commerce-reflow-dialog footer button', '取消'); await data.restartCommerce();
+    const previewsBeforeResume = data.calls.reflowPreviews, encodingsBeforeResume = data.calls.finalComposes;
+    await click('.puf-header button', '多比例排版'); await until('disk recovery survives actual service recreation', 'document.querySelector(".commerce-reflow-recovery")?.dataset.completed==="2"');
+    await click('.commerce-reflow-recovery button', '继续剩余 1 版');
     await until('three saved independent variants', 'window.productionUsabilityFixture.snapshot().result?.variants.length===3&&!document.querySelector(".commerce-reflow-dialog")', 25000);
+    assert.equal(data.calls.reflowPreviews, previewsBeforeResume); assert.equal(data.calls.finalComposes - encodingsBeforeResume, 1); assert.equal(data.calls.encodingFaults, 1); assert.equal(data.calls.serviceRestarts, 1);
+    for (const [id, sha256] of completedHashes) assert.equal(hash((await data.artifactStore.read(id)).buffer), sha256);
+    report.reflowRecovery = { jobId: job.id, completedBefore: 2, total: 3, injectedLocalEncoderFailure: true, backendServiceRecreated: true, applicationProcessRestarted: false, persistentApprovals: true, oneClickRemainingOnly: true, successfulFilesUnchanged: true, noAdditionalPreview: true, finalEncodings: data.calls.finalComposes - encodingsBeforeResume, savedArtifactIds: [...completedHashes.keys()] };
     const snapshot = await data.snapshot(), result = snapshot.lastReflow; assert.equal(result.variants.length, 3);
     const outputs = [];
     for (const variant of result.variants) {
@@ -231,7 +269,7 @@ async function run() {
   handle('workspace-ensure-project', input => data.createProject(input));
   handle('performance-read', () => { data.calls.performanceReads++; return data.performanceControl.read(); }); handle('performance-save', input => { data.calls.performanceSaves++; return data.performanceControl.save(input); });
   ipcMain.on('runtime:performance-activity', event => { if (!finished && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === fixtureUrl) data.cpuTasks.noteInteraction(); });
-  for (const method of ['read', 'save', 'render', 'history', 'preview', 'cancelPreview', 'cancel', 'reflowPreview', 'reflowExport']) handle('commerce-' + method, async input => { if (method === 'reflowPreview') data.calls.reflowPreviews++; if (method === 'reflowExport') data.calls.reflowExports++; const value = await data.commerce[method](input); if (method === 'reflowExport') data.setReflow(value); return value; });
+  for (const method of ['read', 'save', 'render', 'history', 'preview', 'cancelPreview', 'cancel', 'reflowPreview', 'reflowJobs', 'reflowExport']) handle('commerce-' + method, async input => { if (method === 'reflowPreview') data.calls.reflowPreviews++; if (method === 'reflowExport') data.calls.reflowExports++; const value = await data.commerce[method](input); if (method === 'reflowExport') data.setReflow(value); return value; });
   for (const method of ['list', 'sources', 'save', 'instantiate', 'remove']) handle('project-templates-' + method, async input => { const value = await data.templates[method](input); if (method === 'save') { data.calls.templateSaves++; data.setTemplate(value); } if (method === 'instantiate') { data.calls.templateInstantiations++; data.setInstance(value); } return value; });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault()); window.webContents.on('render-process-gone', (_event, details) => { if (!finished) void finish(Error('Renderer ended: ' + details.reason)); });
   await window.loadFile(path.join(owner.dist, 'production-usability.html')); report.rendererProcessIds.push(window.webContents.getOSProcessId());

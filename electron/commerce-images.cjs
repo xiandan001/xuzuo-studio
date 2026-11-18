@@ -6,6 +6,7 @@ const { createCommerceImageStore, active } = require('./commerce-image-store.cjs
 const { createCommerceRasterReader } = require('./commerce-image-raster.cjs');
 const { createCommerceTextRenderer } = require('./commerce-text-renderer.cjs');
 const { createCommerceReflow } = require('./commerce-reflow-service.cjs');
+const { recoverCommerceRender } = require('./commerce-render-recovery.cjs');
 function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cpuTasks, BrowserWindow, renderTextLayer, onExport, onChanged, dialog, getWindow = () => undefined, store: providedStore }) {
   const store = providedStore || createCommerceImageStore({ workspaceStorage }), reader = createCommerceRasterReader({ artifactStore, nativeImage, cpuTasks });
   const textRenderer = !renderTextLayer && BrowserWindow ? createCommerceTextRenderer({ BrowserWindow }) : undefined;
@@ -73,19 +74,20 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
     const artifact = await artifactStore.write({ projectId: input.projectId, name: '保护区合成-未修改区原像素.png', mimeType: 'image/png', buffer: Buffer.from(result.buffer), signal }); onChanged?.(input.projectId);
     return { artifact, width: result.width, height: result.height, protectedPixelsVerified: true };
   }
-  async function renderDocument(document, sizes, signal, { ensureCurrent, runId = randomUUID(), expectedAssets } = {}) {
+  async function renderDocument(document, sizes, signal, { ensureCurrent, runId = randomUUID(), expectedAssets, recoverRun = false } = {}) {
     document = checkedCommerceDocument(document); if (document.revision < 1) throw Error('请先保存图层工程后导出。');
     if (typeof onExport !== 'function') throw Error('当前后台尚未接通图层成果登记，请更新桌面应用。');
     sizes = sizes?.length ? sizes : [{ width: document.width, height: document.height, label: '原尺寸' }];
     if (!Array.isArray(sizes) || sizes.length > 10 || sizes.reduce((sum, value) => { const size = checkedSize(value); return sum + size.width * size.height; }, 0) > 48000000) throw Error('一次最多导出10个尺寸，合计不超过4800万像素。');
     const source = await reader.read(document.projectId, document.sourceArtifactId, signal); if (source.sha256 !== document.sourceSha256) throw Error('原图已改变，请重新读取工程。');
+    const recovered = recoverRun ? await recoverCommerceRender({ document, sizes, runId, artifactStore, reader, signal }) : {};
     const layers = []; let pixels = 0;
     for (const layer of document.layers) {
       if (!layer.visible || !layer.opacity) continue;
       if (layer.type === 'image' && layer.templatePlaceholder) throw Error('模板中仍有待替换的透明图片，请替换对应图层后再导出成品。');
       let payload;
       if (layer.type === 'image') { const image = await reader.read(document.projectId, layer.artifactId, signal); if (expectedAssets?.has(image.id) && expectedAssets.get(image.id) !== image.sha256) throw Error('预览后配图已改变，请重新检查版式，原稿仍保留。'); pixels += image.width * image.height; payload = image.payload; }
-      else { if (!renderText) throw Error('当前环境不支持准确文字排版，请使用新版桌面应用。'); const png = await renderText(layer, { signal }); payload = { buffer: Buffer.from(png) }; pixels += Math.ceil(layer.width) * Math.ceil(layer.height); }
+      else { if (recovered.png) continue; if (!renderText) throw Error('当前环境不支持准确文字排版，请使用新版桌面应用。'); const png = await renderText(layer, { signal }); payload = { buffer: Buffer.from(png) }; pixels += Math.ceil(layer.width) * Math.ceil(layer.height); }
       if (pixels > 32000000) throw Error('图层图片合计超过3200万像素，请缩小或减少图层。');
       layers.push({ ...layer, source: payload });
     }
@@ -93,12 +95,14 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
     const artifacts = [], sourceHash = commerceDocumentHash(document);
     const current = async () => { active(signal); if (ensureCurrent) await ensureCurrent(); if ((await reader.read(document.projectId, document.sourceArtifactId, signal)).sha256 !== source.sha256) throw Error('制作期间原图已变化，已生成文件保留。'); };
     try {
-      await current(); const json = await artifactStore.write({ projectId: document.projectId, runId, name: `${document.title}-可编辑图层.json`, mimeType: 'application/json', text: JSON.stringify(document, null, 2) + '\n', signal }); artifacts.push(json);
+      await current(); const json = recovered.json || await artifactStore.write({ projectId: document.projectId, runId, name: `${document.title}-可编辑图层.json`, mimeType: 'application/json', text: JSON.stringify(document, null, 2) + '\n', signal }); artifacts.push(json);
       let protectedPixelsVerified = false;
       for (const size of sizes) {
-        await current(); const output = await cpuTasks.run('commerce-compose', { width: document.width, height: document.height, background: document.background, layers, protection, target: checkedSize(size) }, { signal }); await current();
-        const artifact = await artifactStore.write({ projectId: document.projectId, runId, name: `${document.title}-${String(size.label || '成品').slice(0, 30)}-${size.width}x${size.height}.png`, mimeType: 'image/png', buffer: Buffer.from(output.buffer), signal }); artifacts.push(artifact);
-        await store.link(document.projectId, artifact.id, json.id); protectedPixelsVerified ||= Boolean(output.protectedPixelsVerified); onChanged?.(document.projectId);
+        await current(); const output = recovered.png ? undefined : await cpuTasks.run('commerce-compose', { width: document.width, height: document.height, background: document.background, layers, protection, target: checkedSize(size) }, { signal }); await current();
+        const artifact = recovered.png || await artifactStore.write({ projectId: document.projectId, runId, name: `${document.title}-${String(size.label || '成品').slice(0, 30)}-${size.width}x${size.height}.png`, mimeType: 'image/png', buffer: Buffer.from(output.buffer), signal }); artifacts.push(artifact);
+        const linked = recoverRun ? await store.linked(document.projectId, artifact.id) : undefined;
+        if (linked && linked.snapshotId !== json.id) throw Error('成品的回编辑关联与续存快照不同，原文件保持。');
+        if (!linked) await store.link(document.projectId, artifact.id, json.id); protectedPixelsVerified ||= Boolean(output?.protectedPixelsVerified); onChanged?.(document.projectId);
       }
       await current(); const commerceExport = { documentId: document.id, revision: document.revision, sourceArtifactId: json.id, documentSha256: sourceHash, originalSourceArtifactId: document.sourceArtifactId, originalSourceSha256: source.sha256, protectedPixelsVerified, sizes: sizes.map(size => ({ ...checkedSize(size) })) };
       await onExport({ projectId: document.projectId, runId, document, artifacts, commerceExport }); return { artifacts, sourceRevision: document.revision, documentId: document.id, runId };
@@ -150,11 +154,12 @@ function createCommerceImages({ workspaceStorage, artifactStore, nativeImage, cp
     const filename = path.resolve(result.filePath); if (!path.isAbsolute(result.filePath) || filename.split(/[\\/]/).some(part => part === '.xuzuo') || path.extname(filename).toLowerCase() !== '.json') throw Error('请选择普通目录中的JSON文件。');
     const handle = await fs.open(filename, 'wx'); try { await handle.writeFile(JSON.stringify(document, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); } return { saved: true };
   }
-  const reflow = createCommerceReflow({ store, reader, artifactStore, cpuTasks, renderText, saveDocument: save, renderDocument });
+  const reflow = createCommerceReflow({ store, reader, artifactStore, cpuTasks, renderText, workspaceStorage, saveDocument: save, renderDocument });
   const service = {
     preview,
     templateSource: input => operation(input, signal => templateSource(input, signal)),
     reflowPreview: input => operation(input, signal => reflow.preview(input, signal), { preview: true }),
+    reflowJobs: input => operation(input, signal => reflow.jobs(input, signal)),
     reflowExport: input => operation(input, signal => reflow.exportReviewed(input, signal)),
     async cancelPreview(input) { if (!validId(input?.projectId) || !validId(input?.requestId)) throw Error('预览编号无效。'); const selected = [...jobs].filter(job => job.projectId === input.projectId && job.previewRequestId === input.requestId); for (const job of selected) job.controller.abort(); await Promise.allSettled(selected.map(job => job.task)); },
     read: input => operation(input, signal => read(input, signal)), save: input => operation(input, signal => save(input, signal)), render: input => operation(input, signal => render(input, signal)),
