@@ -42,4 +42,13 @@ describe('官方目录连接与计价范围', () => {
     expect(filterModelCatalog({ query: 'gpt-6-luna' }).some(item => item.modelId === 'gpt-6-luna')).toBe(true);
     expect(filterModelCatalog({ providerId: 'openai', capability: 'image-generation' }).every(item => item.capabilities.includes('image-generation'))).toBe(true);
   });
+  it('新增6.2 Astra/Sol复用官方连接与已核对价格，保留旧模型及原核对日期', () => {
+    for (const slug of ['astra', 'sol']) {
+      const item = MODEL_CATALOG.find(entry => entry.modelId === `gpt-6.2-${slug}`)!;
+      const connected = { ...catalogConnectionDraft(item), id: 'existing-openai', status: 'configured' as const }, draft = catalogModelDraft(item, connected);
+      expect(draft.connectionId).toBe('existing-openai'); expect(draft.pricing).toMatchObject({ currency: 'USD', verifiedAt: '2026-11-18', officialUrl: 'https://developers.openai.com/api/docs/pricing', referenceOnly: true });
+      expect(draft.capabilities).toEqual(['text', 'vision']); expect(filterModelCatalog({ query: item.modelId })).toContain(item);
+    }
+    expect(MODEL_CATALOG.find(item => item.modelId === 'gpt-6-astra')!.checkedAt).toBe('2026-10-30');
+  });
 });

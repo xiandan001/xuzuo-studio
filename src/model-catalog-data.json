@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-11-05",
+  "checkedAt": "2026-11-18",
   "models": [
     {
       "id": "openai-gpt-6-luna",
@@ -2727,6 +2727,126 @@
         "note": "仅供查价；编辑用JSON image/image2/image3，最多3图；不支持image_size字段。 规格、地域、账户资格及费用以官方页面和实际账单为准。",
         "example": "仅输出部分的示例：生成 1 张图片为 ¥0.3；不代表编辑或其它附加项目的固定总价。"
       }
+    },
+    {
+      "id": "openai-gpt-6-2-astra",
+      "providerId": "openai",
+      "name": "GPT-6.2 Astra",
+      "modelId": "gpt-6.2-astra",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "region": "官方全球 API · USD",
+      "defaultBaseUrl": "https://api.openai.com/v1",
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "status": "current",
+      "description": "适合复杂推理、专业文档、编码和需要多步骤完成的高难度任务。",
+      "checkedAt": "2026-11-18",
+      "sources": [
+        {
+          "label": "模型与能力",
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
+        },
+        {
+          "label": "官方价格",
+          "url": "https://developers.openai.com/api/docs/pricing"
+        },
+        {
+          "label": "缓存读写计费",
+          "url": "https://developers.openai.com/api/docs/guides/prompt-caching"
+        },
+        {
+          "label": "官方发布说明",
+          "url": "https://openai.com/index/introducing-gpt-6-2-astra-sol/"
+        }
+      ],
+      "support": {
+        "ready": true,
+        "note": "协议格式已适配；目录与价格已按官方资料核对，账户权限、余额和该型号效果尚未实测。推理强度不支持关闭。"
+      },
+      "pricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "8",
+        "output": "40",
+        "referenceOnly": true,
+        "displayLines": [
+          "Standard短上下文：输入 $8 / 输出 $40，每百万 Token。",
+          "缓存读取输入：$0.40 / 百万 Token。",
+          "缓存写入总单价：30分钟 $10 / 12小时 $20，每百万 Token；不再重复按普通输入计费。",
+          "输入超过272,000 Token时，整次请求输入与所有缓存读写价为2倍，输出价为1.5倍；恰272,000不加价。"
+        ],
+        "note": "只对应api.openai.com的Standard按量价；不套用Batch、Flex、Fast、Ultrafast、后台completion窗口折扣或地区端点价。输出含思考Token；账户优惠、工具等费用另计，不代表实际账单。",
+        "example": "算例：1,000 输入 + 1,000 输出 Token（输入均未命中缓存），基础费用 $0.048；不含缓存写入、工具和账户附加项，输入未超过长上下文门槛。"
+      },
+      "releaseDate": "2026-11-17"
+    },
+    {
+      "id": "openai-gpt-6-2-sol",
+      "providerId": "openai",
+      "name": "GPT-6.2 Sol",
+      "modelId": "gpt-6.2-sol",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "region": "官方全球 API · USD",
+      "defaultBaseUrl": "https://api.openai.com/v1",
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "status": "current",
+      "description": "适合日常内容创作、文档协作、编码及兼顾能力与成本的多步骤任务。",
+      "checkedAt": "2026-11-18",
+      "sources": [
+        {
+          "label": "模型与能力",
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+        },
+        {
+          "label": "官方价格",
+          "url": "https://developers.openai.com/api/docs/pricing"
+        },
+        {
+          "label": "缓存读写计费",
+          "url": "https://developers.openai.com/api/docs/guides/prompt-caching"
+        },
+        {
+          "label": "官方发布说明",
+          "url": "https://openai.com/index/introducing-gpt-6-2-astra-sol/"
+        }
+      ],
+      "support": {
+        "ready": true,
+        "note": "协议格式已适配；目录与价格已按官方资料核对，账户权限、余额和该型号效果尚未实测。推理强度不支持关闭。"
+      },
+      "pricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "10",
+        "referenceOnly": true,
+        "displayLines": [
+          "Standard短上下文：输入 $2 / 输出 $10，每百万 Token。",
+          "缓存读取输入：$0.10 / 百万 Token。",
+          "缓存写入总单价：30分钟 $2.50 / 12小时 $5，每百万 Token；不再重复按普通输入计费。",
+          "输入超过272,000 Token时，整次请求输入与所有缓存读写价为2倍，输出价为1.5倍；恰272,000不加价。"
+        ],
+        "note": "只对应api.openai.com的Standard按量价；不套用Batch、Flex、Fast、Ultrafast、后台completion窗口折扣或地区端点价。输出含思考Token；账户优惠、工具等费用另计，不代表实际账单。",
+        "example": "算例：1,000 输入 + 1,000 输出 Token（输入均未命中缓存），基础费用 $0.012；不含缓存写入、工具和账户附加项，输入未超过长上下文门槛。"
+      },
+      "releaseDate": "2026-11-17"
     }
   ]
 }

@@ -1,5 +1,5 @@
 const ADAPTER = 'xuzuo-openai-responses-v1';
-const DEFAULT_CACHE_MODELS = new Set(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']);
+const DEFAULT_CACHE_MODELS = new Set(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']);
 const count = value => Number.isSafeInteger(value) && value >= 0;
 
 function officialResponses(context) {

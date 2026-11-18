@@ -12,9 +12,17 @@ const values = (modelId: string, protocol = 'openai-responses') => reasoningOpti
 describe('模型专属推理强度', () => {
   it('GPT6各型号区分关闭推理能力，不给Astra/Sol发送不支持的none或minimal', () => {
     expect(values('gpt-6.1-terra')).toEqual(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max']);
-    for (const id of ['gpt-6-astra', 'gpt-6.1-sol']) expect(values(id)).toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+    for (const id of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol']) expect(values(id)).toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(values('gpt-6-luna')).toContain('none');
     expect(values('gpt-6.1-terra-2026-10-01')).toEqual(values('gpt-6.1-terra'));
+  });
+  it('6.2切换旧none/minimal偏好按官方迁移为low，显式非法请求仍在联网前拒绝', () => {
+    for (const id of ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.2-sol-2026-11-17']) for (const protocol of ['openai-chat', 'openai-responses']) {
+      expect(values(id, protocol)).toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+      for (const effort of ['none', 'minimal']) { expect(normalizeReasoningEffort(openai(protocol), { modelId: id }, effort)).toBe('low'); expect(native.normalizeReasoningEffort(openai(protocol), { modelId: id }, effort)).toBe('low'); expect(() => reasoningRequestFields(openai(protocol), { modelId: id }, effort)).toThrow('不支持'); }
+      expect(normalizeReasoningEffort(openai(protocol), { modelId: id }, 'auto')).toBe('auto'); expect(reasoningRequestFields(openai(protocol), { modelId: id }, 'auto')).toEqual({});
+    }
+    expect(values('gpt-6.2-sol-unverified')).toEqual(['auto']); expect(reasoningOptions({ providerId: 'other', protocol: 'openai-chat' }, { modelId: 'gpt-6.2-sol' }).map(option => option.value)).toEqual(['auto']);
   });
   it('旧型号、专用型号、未知兼容服务不根据相似名称乱传参数', () => {
     expect(values('gpt-4.1')).toEqual(['auto']);
@@ -41,7 +49,7 @@ describe('模型专属推理强度', () => {
     for (const input of [{ reasoningEffort: 'unlimited' }, { reasoningEffort: { effort: 'high' } }, { reasoningEffort: 'high', secret: 'fixture' }, { credentialId: 'sk-test-fixture', reasoningEffort: 'low' }]) expect(() => normalizeNaturalBinding(input)).toThrow();
   });
   it('前后端使用同一能力数据，auto不加入任何供应商推理字段', () => {
-    const fixtures = [[openai(), 'gpt-6-astra'], [openai('openai-chat'), 'gpt-6.1-terra'], [{ protocol: 'anthropic' }, 'claude-sonnet-4-6'], [{ protocol: 'anthropic' }, 'claude-opus-5-5'], [{ protocol: 'gemini' }, 'gemini-3-pro-preview'], [{ protocol: 'gemini' }, 'gemini-3.7-flash']] as const;
+    const fixtures = [[openai(), 'gpt-6-astra'], [openai('openai-chat'), 'gpt-6.1-terra'], [openai(), 'gpt-6.2-astra'], [openai('openai-chat'), 'gpt-6.2-sol'], [{ protocol: 'anthropic' }, 'claude-sonnet-4-6'], [{ protocol: 'anthropic' }, 'claude-opus-5-5'], [{ protocol: 'gemini' }, 'gemini-3-pro-preview'], [{ protocol: 'gemini' }, 'gemini-3.7-flash']] as const;
     for (const [connection, modelId] of fixtures) {
       const model = { modelId };
       expect(native.reasoningOptions(connection, model)).toEqual(reasoningOptions(connection, model));

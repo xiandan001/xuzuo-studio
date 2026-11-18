@@ -6,14 +6,14 @@ import type { ModelCatalogEntry } from './model-catalog';
 import type { ModelConnection } from './configuration-types';
 
 const entries = snapshot.models as unknown as ModelCatalogEntry[];
-const cutoff = '2026-11-05';
+const cutoff = '2026-11-18';
 const model = (providerId: string, modelId: string, currency?: string) => {
   const entry = entries.find(item => item.providerId === providerId && item.modelId === modelId && (!currency || item.pricing.currency === currency));
   if (!entry) throw new Error(`目录缺少 ${providerId}/${modelId}/${currency || ''}`);
   return entry;
 };
 const connection = (entry: ModelCatalogEntry, baseUrl = entry.defaultBaseUrl): ModelConnection => ({ id: 'fixture-connection', name: '测试连接', providerId: entry.providerId, protocol: entry.protocols[0], baseUrl, enabled: true, status: 'configured' });
-const officialSourceHosts = new Set(['developers.openai.com', 'api-docs.deepseek.com', 'help.aliyun.com', 'docs.volcengine.com', 'console.volcengine.com', 'platform.claude.com', 'ai.google.dev', 'docs.bigmodel.cn', 'platform.kimi.com', 'platform.minimax.cn', 'platform.minimax.io', 'www.minimax.io', 'cloud.tencent.com', 'www.siliconflow.cn', 'api-docs.siliconflow.cn', 'docs.siliconflow.cn']);
+const officialSourceHosts = new Set(['developers.openai.com', 'openai.com', 'api-docs.deepseek.com', 'help.aliyun.com', 'docs.volcengine.com', 'console.volcengine.com', 'platform.claude.com', 'ai.google.dev', 'docs.bigmodel.cn', 'platform.kimi.com', 'platform.minimax.cn', 'platform.minimax.io', 'www.minimax.io', 'cloud.tencent.com', 'www.siliconflow.cn', 'api-docs.siliconflow.cn', 'docs.siliconflow.cn']);
 const capabilities = new Set(['text', 'vision', 'image-generation', 'image-editing', 'transcription', 'speech', 'video-understanding', 'video-generation']);
 const protocols = new Set(['openai-chat', 'openai-responses', 'anthropic', 'gemini', 'image', 'audio', 'video', 'custom']);
 
@@ -25,7 +25,8 @@ describe('官方模型目录数据快照', () => {
     expect(new Set(entries.map(item => item.id)).size).toBe(entries.length);
     expect(new Set(entries.map(item => item.providerId))).toEqual(new Set(['openai', 'anthropic', 'google', 'deepseek', 'aliyun', 'volcengine', 'tencent', 'zhipu', 'moonshot', 'minimax', 'siliconflow']));
     for (const entry of entries) {
-      expect(entry.checkedAt).toBe(/^gpt-image-2\.6-(sunburst|flare)$/.test(entry.modelId) ? cutoff : '2026-10-30');
+      const checkedAt = /^gpt-6\.2-(astra|sol)$/.test(entry.modelId) ? cutoff : /^gpt-image-2\.6-(sunburst|flare)$/.test(entry.modelId) ? '2026-11-05' : '2026-10-30';
+      expect(entry.checkedAt).toBe(checkedAt);
       expect(entry.modelId.trim()).toBe(entry.modelId);
       expect(entry.name).not.toBe(''); expect(entry.region).not.toBe('');
       expect(['current', 'preview', 'older']).toContain(entry.status);
@@ -37,6 +38,17 @@ describe('官方模型目录数据快照', () => {
       if (entry.releaseDate) { expect(entry.releaseDate).toMatch(/^\d{4}-\d{2}-\d{2}$/); expect(entry.releaseDate <= cutoff).toBe(true); }
     }
     expect(model('openai', 'gpt-6.1-terra').releaseDate).toBeUndefined();
+  });
+
+  it('6.2正式别名只新增全球Standard条目，既有图片与其他模型核验日期保持各自分组', () => {
+    for (const slug of ['astra', 'sol']) {
+      const entry = model('openai', `gpt-6.2-${slug}`);
+      expect(entry.releaseDate).toBe('2026-11-17'); expect(entry.checkedAt).toBe(cutoff);
+      expect(entry.allowedHosts).toEqual(['api.openai.com']); expect(entry.region).toBe('官方全球 API · USD'); expect(entry.capabilities).toEqual(['text', 'vision']);
+      expect(entry.pricing.note).toContain('Standard'); expect(entry.pricing.note).toContain('不代表实际账单');
+      expect(entries.filter(item => item.modelId === entry.modelId)).toHaveLength(1);
+    }
+    expect(model('openai', 'gpt-image-2.6-sunburst').checkedAt).toBe('2026-11-05'); expect(model('openai', 'gpt-6-astra').checkedAt).toBe('2026-10-30');
   });
 
   it('来源为官方HTTPS页面，模型和价格可追溯，默认地址可实际填写', () => {
