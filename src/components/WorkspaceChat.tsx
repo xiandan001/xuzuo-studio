@@ -123,6 +123,8 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const productionLinks = chat.conversation?.productions || [];
   const timeline = useMemo(() => chatTimeline(turns, chat.conversation?.exports || [], productionLinks), [turns, chat.conversation?.exports, productionLinks]);
   const range = chatWindowRange(timeline.length, windowStart), planReference = useChatPlanReference(props.workspaceId + ':' + conversationId, turns);
+  const visibleTimeline = timeline.slice(range.start, range.end);
+  const visibleKeys = visibleTimeline.map(item => item.key).join('\u0000');
   const queued = chat.conversation?.queue || [], willQueue = chat.queue.supported && (chat.running || queued.length > 0);
   const editingTarget = !!targetData && targetAction === 'edit', continuingTool = isTool && !targetData;
   const targetBusy = targetPreparing || discussionPreparing;
@@ -144,6 +146,17 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     const frame = requestAnimationFrame(() => { if (pinned.current && thread.current === element) element.scrollTop = element.scrollHeight; });
     return () => cancelAnimationFrame(frame);
   }, [latest?.updatedAt, latest?.text, turns.length]);
+  useEffect(() => {
+    const element = thread.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current && thread.current === element) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    // The viewport stops growing before its visible turns do.
+    for (const child of element.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [visibleKeys]);
   useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.kind !== 'chat' || target.workspaceId !== props.workspaceId || (target.conversationId || target.id) !== conversationId || consumedSearch.current === target.token || chat.loading) return;
@@ -280,7 +293,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     {!chat.loading && !turns.length && !productionLinks.length && <div className="workspace-chat-welcome"><div className="workspace-chat-welcome-icon"><MessageCircle size={26} /></div><p>问问题、讨论需求，或者把想法变成图片与文档。</p><span>聊天直接开始，只有制作作品时才需要选择保存项目。</span><div>{['帮我把一句产品介绍写得更吸引人', '帮我制作一张产品宣传图，自动检查并精修一轮'].map((text, index) => <button type="button" key={text} onClick={() => { input.setText(text); switchMode(index ? 'plan' : 'chat'); textarea.current?.focus(); }}>{text}</button>)}</div></div>}
     {(!!turns.length || !!productionLinks.length) && <div ref={thread} className="workspace-chat-thread" role="log" aria-label="聊天消息" onScroll={() => { const element = thread.current; if (!element) return; const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 90; pinned.current = windowStart === undefined && atBottom; if (!atBottom && windowStart === undefined && timeline.length > CHAT_WINDOW_SIZE) setWindowStart(range.start); }}>
       {timeline.length > CHAT_WINDOW_SIZE && <div className="chat-window-controls"><span>第 {range.start + 1}–{range.end} 条 · 共 {timeline.length} 条记录</span><nav>{range.before > 0 && <button type="button" className="text-button" onClick={() => moveWindow(Math.max(0, range.start - CHAT_WINDOW_SIZE))}>查看前 {Math.min(CHAT_WINDOW_SIZE, range.before)} 条</button>}{windowStart !== undefined && <button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button>}</nav></div>}
-      {timeline.slice(range.start, range.end).map(item => item.kind === 'legacy' ? <ChatTimelineResults key={item.key} props={props} outputs={[item.output]} legacy /> : <div key={item.key} className={'chat-turn-container' + (searchMatch === item.turn.id ? ' is-search-match' : '')} data-chat-turn-id={item.turn.id} tabIndex={-1}><ChatMessagePair turn={item.turn} workspaceId={props.workspaceId} conversationId={conversationId} canRetry={!chat.running && !chat.pending && !queued.length && item.turn.id === latest?.id} onRetry={retryTurn} onMake={makeTurn} onCopy={copyTurn} onSaveFile={setSaveTurn} />{item.turn.plan && <div className="workspace-chat-plan-action">{activePlan === item.turn.id ? <Suspense fallback={<p role="status">正在打开已保存的制作方案…</p>}><ChatPlanProduction props={props} turn={item.turn} conversationId={conversationId} planner={{ modelConfigId: item.turn.modelConfigId, credentialId: item.turn.credentialId, reasoningEffort: item.turn.reasoningEffort }} /></Suspense> : <button type="button" className="btn btn-secondary" onClick={() => setActivePlan(item.turn.id)}>查看这份方案与作品</button>}</div>}{item.outputs.length > 0 && <ChatTimelineResults props={props} outputs={item.outputs} />}</div>)}
+      {visibleTimeline.map(item => item.kind === 'legacy' ? <ChatTimelineResults key={item.key} props={props} outputs={[item.output]} legacy /> : <div key={item.key} className={'chat-turn-container' + (searchMatch === item.turn.id ? ' is-search-match' : '')} data-chat-turn-id={item.turn.id} tabIndex={-1}><ChatMessagePair turn={item.turn} workspaceId={props.workspaceId} conversationId={conversationId} canRetry={!chat.running && !chat.pending && !queued.length && item.turn.id === latest?.id} onRetry={retryTurn} onMake={makeTurn} onCopy={copyTurn} onSaveFile={setSaveTurn} />{item.turn.plan && <div className="workspace-chat-plan-action">{activePlan === item.turn.id ? <Suspense fallback={<p role="status">正在打开已保存的制作方案…</p>}><ChatPlanProduction props={props} turn={item.turn} conversationId={conversationId} planner={{ modelConfigId: item.turn.modelConfigId, credentialId: item.turn.credentialId, reasoningEffort: item.turn.reasoningEffort }} /></Suspense> : <button type="button" className="btn btn-secondary" onClick={() => setActivePlan(item.turn.id)}>查看这份方案与作品</button>}</div>}{item.outputs.length > 0 && <ChatTimelineResults props={props} outputs={item.outputs} />}</div>)}
       {range.after > 0 && <div className="chat-window-controls chat-window-after"><span>后面还有 {range.after} 条沟通与结果</span><nav><button type="button" className="text-button" onClick={() => moveWindow(range.start + CHAT_WINDOW_SIZE)}>查看后 {Math.min(CHAT_WINDOW_SIZE, range.after)} 条</button><button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button></nav></div>}
     </div>}
     {saveTurn && <Suspense fallback={<p role="status">正在准备保存文件…</p>}><ChatReplyExportDialog props={props} conversationId={conversationId} turn={saveTurn} onClose={() => setSaveTurn(undefined)} onSaved={chat.reload} /></Suspense>}

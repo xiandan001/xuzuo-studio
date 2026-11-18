@@ -13,7 +13,7 @@ async function click(label: string) { const button = [...host.querySelectorAll<H
 async function render(status: WorkflowRun['status'], changes: Partial<WorkflowRun> = {}) {
   const run = { id: 'run', workspaceId: 'workspace', projectId: 'project', status, ...changes } as WorkflowRun;
   const project = { id: 'project', workspaceId: 'workspace', kind: 'image' } as Project;
-  const fresh = { ...run, status: 'complete' as const }, read = vi.fn(async () => fresh), control = vi.fn(async () => undefined), onRead = vi.fn(), navigate = vi.fn();
+  const fresh = { ...run, status: 'complete' as const }, read = vi.fn(async () => fresh), control = vi.fn(async (_input: Parameters<NonNullable<typeof window.desktop>['runtime']['control']>[0]) => undefined), onRead = vi.fn(), navigate = vi.fn();
   const props = { workspaceId: 'workspace', configuration: { connections: [], models: [] }, workflowRunner: {}, navigate } as unknown as PageProps;
   Object.defineProperty(window, 'desktop', { configurable: true, value: { runtime: { control, runDetail: read } } });
   await act(async () => { root = createRoot(host); root.render(<HomeProductionRecovery run={run} project={project} props={props} onRead={onRead} />); });
@@ -35,6 +35,22 @@ describe('首页异常任务就地处理', () => {
   });
   it('账户或Key异常定位模型设置，已取消任务不会误给继续按钮', async () => {
     const f = await render('failed', { error: '凭证无效 HTTP 401' }); await click('修复模型设置'); expect(f.navigate).toHaveBeenCalledWith('models', 'project'); expect(f.control).not.toHaveBeenCalled();
+  });
+  it.each([2048, 1600])('旧记录输出 %i Token 后未完整返回时，继续原任务并只在达到上限时提高本步骤上限', async outputTokens => {
+    const error = '模型未完整生成结果，可能达到上限或仍需继续处理；已保留返回片段与用量，未自动重试。';
+    const f = await render('failed', {
+      error,
+      stepIndex: 1,
+      snapshot: { steps: [{ id: 'plan' }, { id: 'check', kind: 'vision', enabled: true, maxOutputTokens: 2048 }] } as WorkflowRun['snapshot'],
+      attempts: [{ stepId: 'plan', status: 'complete' }, { stepId: 'check', status: 'failed', error, usage: { outputTokens } }] as WorkflowRun['attempts'],
+    });
+    expect(host.textContent).not.toContain('修复模型设置');
+    expect(host.textContent?.includes('从 2048 提高到 4096 Token')).toBe(outputTokens === 2048);
+    expect(f.control).not.toHaveBeenCalled();
+    await click('继续制作');
+    const request = f.control.mock.calls[0][0];
+    expect(request).toMatchObject({ id: 'run', action: 'continue' });
+    expect(request.stepMaxOutputTokens).toBe(outputTokens === 2048 ? 4096 : undefined);
   });
   it('操作失败不假报完成，解除禁用并显示可读错误', async () => {
     const f = await render('interrupted'); f.control.mockRejectedValueOnce(Error('后台暂不可用')); await click('继续制作');

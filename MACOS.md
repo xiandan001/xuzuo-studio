@@ -1,5 +1,13 @@
 # macOS 开发与验收
 
+## 2.12.5 修复制作卡显示和失败续跑（2026-11-18）
+
+创作对话的制作卡独立加载进度条、费用、恢复操作和成品预览样式。进度或预览展开时，已在对话底部的视图会跟随内容，向上查看历史时保留位置。
+
+文本或图片核对达到输出 Token 上限后，可从对话选择「继续制作」。应用只提高当前失败步骤的上限，沿用原任务，保留已完成的步骤、返回片段与费用。续跑仍需通过原预算预检。新版记录接口明确返回的截断原因，旧版根据失败步骤的已记录用量识别上限。
+
+3729 项测试通过，4 项 Windows 专用用例跳过。macOS 安装包通过浅色宽窗、深色窄窗、旧记录升级、出图前中断后续跑和 PNG 预览测试。安装包核验与隔离测试索引见 `outputs/release-v2.12.5/production-recovery-validation.json`。
+
 ## 2.12.4 修复启动时配置同步打断派工（2026-11-18）
 
 如果工作区配置在任务落盘和启动之间更新，已确认尚未调用执行器的任务退回队列并保留派单标识。调度器在配置同步后重新校验。执行器已接收或旧版留下的未知状态仍按原记录核对。
@@ -164,7 +172,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.4/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.5/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -185,7 +193,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.4/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.5/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

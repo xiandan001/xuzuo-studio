@@ -16,10 +16,27 @@ const { validateResumeImageSources } = require('./resume-image-sources.cjs');
 const { explicitStepReferences } = require('./workflow-references.cjs');
 const { assertArtifactRefinementTarget } = require('./artifact-refinement-target.cjs');
 const { isFinalManualReview } = require('./workflow-final-review.cjs');
+const { ModelRuntimeError } = require('./provider-http.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
+const TEXT_OUTPUT_STEPS = new Set(['text', 'vision', 'video-understanding']);
+const DEFAULT_STEP_OUTPUT_TOKENS = 2048;
 const now = () => new Date().toISOString();
 const cnyKnown = cost => cost.costState === 'calculated' && (!cost.calculation || cost.calculation.cnyAmount !== undefined);
+function failedStepOutputLimit(run) {
+  const step = run.snapshot.steps[run.stepIndex];
+  if (run.status !== 'failed' || !step?.enabled || !TEXT_OUTPUT_STEPS.has(step.kind)) return;
+  const attempt = run.attempts.findLast(item => item.stepId === step.id);
+  if (attempt?.status !== 'failed') return;
+  const legacyIncomplete = typeof attempt.error === 'string' &&
+    (attempt.error === 'INCOMPLETE_OUTPUT' || attempt.error.startsWith('模型未完整生成结果，'));
+  const incomplete = attempt.errorCode === 'INCOMPLETE_OUTPUT' || attempt.errorCode === undefined && legacyIncomplete;
+  if (!incomplete) return;
+  const limit = step.maxOutputTokens || DEFAULT_STEP_OUTPUT_TOKENS;
+  if (!Number.isSafeInteger(limit) || limit < 16 || limit >= 16384) return;
+  const output = attempt.usage?.outputTokens;
+  if (attempt.incompleteReason === 'output-limit' || Number.isSafeInteger(output) && output >= limit) return limit;
+}
 function safeRequest(input) {
   const request = structuredClone(input);
   request.project = { ...request.project, budgetCents: request.project.budgetCents ?? undefined };
@@ -178,6 +195,14 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
     const cancelled = record.run.status === 'cancelled' || shuttingDown;
     attempt.status = cancelled ? 'cancelled' : 'failed';
     attempt.error = typeof error.publicMessage === 'string' ? error.publicMessage.slice(0, 500) : error.name === 'ModelRuntimeError' || (!modelStep(record.run.snapshot.steps[record.run.stepIndex]) && /[\u3400-\u9fff]/.test(error.message || '')) ? error.message.slice(0, 500) : '当前步骤未完成，请检查连接、凭证、模型权限或服务状态。';
+    delete attempt.errorCode;
+    delete attempt.incompleteReason;
+    delete attempt.httpStatus;
+    if (error instanceof ModelRuntimeError && typeof error.code === 'string' && /^[A-Z][A-Z_0-9]{0,63}$/.test(error.code)) {
+      attempt.errorCode = error.code;
+      if (error.code === 'INCOMPLETE_OUTPUT' && error.incompleteReason === 'output-limit') attempt.incompleteReason = error.incompleteReason;
+      if (Number.isInteger(error.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599) attempt.httpStatus = error.httpStatus;
+    }
     attempt.summary = error.partialText ? `${attempt.error}\n\n已收到的部分实际结果：\n${String(error.partialText).slice(0, 100000)}` : attempt.error;
     if (Array.isArray(error.artifacts)) attempt.artifacts = error.artifacts;
     const entry = ledgerFor(record, attempt);
@@ -264,7 +289,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             const entry = recovered ? ledgerFor(record, attempt) : { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
             if (previousTask) { entry.queryOnly = true; entry.costState = 'not-incurred'; attempt.costState = 'not-incurred'; }
             if (!recovered) record.ledger.push(entry); mark(record); await persist();
-            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { reasoningEffort: step.reasoningEffort, maxOutputTokens: step.maxOutputTokens || 2048, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, ...(engineeringReferenceId ? { engineeringReferenceId } : {}), onProgress: progress => {
+            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { reasoningEffort: step.reasoningEffort, maxOutputTokens: step.maxOutputTokens || DEFAULT_STEP_OUTPUT_TOKENS, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, ...(engineeringReferenceId ? { engineeringReferenceId } : {}), onProgress: progress => {
               if (attempt.status !== 'running') return;
               attempt.summary = progress.message || '模型正在处理。'; revision++; changedAt.set(run.id, revision);
               if (progress.providerRequestId && attempt.providerRequestId !== progress.providerRequestId) {
@@ -296,6 +321,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             }
           }
           attempt.status = 'complete'; attempt.completedAt = now(); delete attempt.error;
+          delete attempt.errorCode; delete attempt.incompleteReason; delete attempt.httpStatus;
           if (run.status === 'cancelled') { await persist(); break; }
           if (run.repairContext?.stepId === step.id) delete run.repairContext;
           let quality;
@@ -525,7 +551,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         return structuredClone(run);
       });
     },
-    async control({ id, action, stepId, stepBudgetCents, project, connections, models }) {
+    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, project, connections, models }) {
       await ready;
       const target = records.get(id); if (!target) throw new Error('运行记录不存在。');
       return mutateProject(target.run.projectId, async () => {
@@ -539,6 +565,11 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           if (stepBudgetCents !== null && (!Number.isSafeInteger(stepBudgetCents) || stepBudgetCents < 0)) throw new Error('当前步骤金额上限无效，请填写非负金额或留空。');
           if (!run.snapshot.steps[run.stepIndex]) throw new Error('当前没有可调整金额上限的步骤。');
         }
+        if (stepMaxOutputTokens !== undefined) {
+          const previousLimit = failedStepOutputLimit(run);
+          if (!['continue', 'resume'].includes(action) || previousLimit === undefined) throw new Error('只有达到输出 Token 上限的失败模型步骤可以调整后续跑。');
+          if (!Number.isSafeInteger(stepMaxOutputTokens) || stepMaxOutputTokens <= previousLimit || stepMaxOutputTokens > 16384) throw new Error(`本次续跑的输出 Token 上限需要是大于 ${previousLimit} 且不超过 16384 的整数。`);
+        }
         if (action === 'cancel' && ACTIVE.has(run.status)) {
           update(record, { status: 'cancelled', pauseRequested: false });
           for (const attempt of run.attempts) if (attempt.status === 'waiting-review') { attempt.status = 'cancelled'; attempt.summary = '人工检查已取消，既有结果和费用保留。'; }
@@ -550,6 +581,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         const nextRequest = safeRequest({ ...record.request, project: project || record.request.project, connections: connections || record.request.connections, models: models || record.request.models });
         const nextRun = structuredClone(run);
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
+        if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
         if (project && project.workspaceId !== run.workspaceId) { nextRun.originWorkspaceId ||= run.workspaceId; nextRun.workspaceId = project.workspaceId; nextRun.snapshot.workspaceId = project.workspaceId; nextRequest.workflow = nextRun.snapshot; }
         if (action === 'resume' && run.status === 'waiting-review') {
           const attempt = nextRun.attempts.findLast(item => item.stepId === nextRun.snapshot.steps[nextRun.stepIndex]?.id && item.status === 'waiting-review');

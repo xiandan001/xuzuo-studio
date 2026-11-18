@@ -1,4 +1,4 @@
-# 序作工作台 2.12.4
+# 序作工作台 2.12.5
 
 项目只剩最后的人工检查时，已经手动提交的队列任务可继续制作，两个结果都可分别检查。派发前遇到项目配置同步时，任务会保留原派单并等待重新派发。
 
@@ -27,7 +27,7 @@
 
 `develop-macos` 已同步 `develop-owner` 至 `c3c985b`（2.12.1），保留 macOS 13 及以上适配：原生窗口按钮、Command 快捷键、文件与磁盘浏览、跨平台备份恢复、钥匙串延迟授权和独立动画运行时。保留旧版 Mac 聊天附件兼容，首页保留自然高度、防止输入卡覆盖最近作品，并补充页面留白。
 
-Apple Silicon 安装包位于本地 `outputs/release-v2.12.4/`。macOS 使用 DMG 替换应用、通过 Finder 卸载；Windows 安装与维护流程保留。构建与验证范围见 [macOS 开发与验收](MACOS.md)。Intel、外部模型 API 与 LibreOffice 实际转换不计入本机离线验收。
+Apple Silicon 安装包位于本地 `outputs/release-v2.12.5/`。macOS 使用 DMG 替换应用、通过 Finder 卸载；Windows 安装与维护流程保留。构建与验证范围见 [macOS 开发与验收](MACOS.md)。Intel、外部模型 API 与 LibreOffice 实际转换不计入本机离线验收。
 
 ## 2.10.0：更短的创作与交付流程
 

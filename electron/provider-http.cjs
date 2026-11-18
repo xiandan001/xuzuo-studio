@@ -11,6 +11,7 @@ class ModelRuntimeError extends Error {
     if (details.providerRequestId) this.providerRequestId = details.providerRequestId;
     if (details.usage) this.usage = details.usage;
     if (typeof details.partialText === 'string') this.partialText = details.partialText;
+    if (details.incompleteReason === 'output-limit') this.incompleteReason = details.incompleteReason;
   }
 }
 

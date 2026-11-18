@@ -93,6 +93,7 @@ function textRequest(request, files, context) {
 function outputText(data, protocol, context) {
   let text = '';
   let incomplete = false;
+  let outputLimit = false;
   let refused = false;
   if (protocol === 'openai-chat') {
     const message = data.choices?.[0]?.message;
@@ -100,24 +101,29 @@ function outputText(data, protocol, context) {
     const reason = data.choices?.[0]?.finish_reason;
     refused = Boolean(message?.refusal) || reason === 'content_filter';
     incomplete = reason !== 'stop';
+    outputLimit = reason === 'length';
   } else if (protocol === 'openai-responses') {
     if (typeof data.output_text === 'string') text = data.output_text;
     else text = (data.output || []).filter(item => item.type === 'message').flatMap(item => item.content || []).filter(part => part.type === 'output_text').map(part => part.text || '').join('\n');
     refused = (data.output || []).some(item => (item.content || []).some(part => part.type === 'refusal')) || data.incomplete_details?.reason === 'content_filter';
     incomplete = data.status !== 'completed' || (data.output || []).some(item => item.type === 'function_call' || item.type === 'computer_call' || item.type === 'message' && item.status && item.status !== 'completed');
+    outputLimit = data.status === 'incomplete' && data.incomplete_details?.reason === 'max_output_tokens';
   } else if (protocol === 'anthropic') {
     text = (data.content || []).filter(part => part.type === 'text').map(part => part.text || '').join('\n');
     refused = data.stop_reason === 'refusal';
     incomplete = !['end_turn', 'stop_sequence'].includes(data.stop_reason);
+    outputLimit = data.stop_reason === 'max_tokens';
   } else if (protocol === 'gemini') {
     const candidate = data.candidates?.[0];
     text = (candidate?.content?.parts || []).filter(part => typeof part.text === 'string' && !part.thought).map(part => part.text).join('\n');
     refused = Boolean(data.promptFeedback?.blockReason) || ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION'].includes(candidate?.finishReason);
     incomplete = candidate?.finishReason !== 'STOP';
+    outputLimit = candidate?.finishReason === 'MAX_TOKENS';
   }
   const usage = normalizedUsage(data, context);
   const partialText = context.secret ? text.trim().split(context.secret).join('[已隐藏凭证]') : text.trim();
   if (refused) throw failure('PROVIDER_REFUSAL', '模型拒绝或过滤了本次结果，未作为完整成品，未自动重试。', context, { usage, partialText });
+  if (outputLimit) throw failure('INCOMPLETE_OUTPUT', '模型用完了本步骤的输出 Token，结果尚不完整；已保留返回片段与用量，未自动重试。', context, { usage, partialText, incompleteReason: 'output-limit' });
   if (incomplete) throw failure('INCOMPLETE_OUTPUT', '模型未完整生成结果，可能达到上限或仍需继续处理；已保留返回片段与用量，未自动重试。', context, { usage, partialText });
   if (!text.trim()) throw failure('EMPTY_OUTPUT', '模型未返回可用文字，未将本次调用标记为成功；请检查返回状态和模型能力。', context, { usage });
   return { text: partialText, usage };

@@ -10,12 +10,13 @@ import type { ArtifactMetadata, LivePreflight, LiveSnapshot, LiveStartRequest, M
 import type { WorkflowRun } from '../configuration-types';
 
 interface Store { write: (input: { name: string; mimeType: string; text?: string; buffer?: Buffer; runId?: string; projectId?: string }) => Promise<ArtifactMetadata>; read: (id: string) => Promise<ArtifactMetadata & { buffer: Buffer }>; list: (ids: string[]) => Promise<ArtifactMetadata[]>; }
-interface ExecuteRequest { kind: string; input: string; prompt: string; attachments: ArtifactMetadata[]; runId: string; projectId: string; options?: { existingTaskId?: string }; }
+interface ExecuteRequest { kind: string; input: string; prompt: string; attachments: ArtifactMetadata[]; runId: string; projectId: string; options?: { existingTaskId?: string; maxOutputTokens?: number }; }
 interface ModelResult { text: string; artifacts: ArtifactMetadata[]; usage: ModelUsage; }
-interface Engine { recordLocalExport: (input: { projectId: string; workspaceId: string; name: string; kind: string; sourceRevision: number; artifacts: ArtifactMetadata[]; sourceArtifactIds: string[] }) => Promise<WorkflowRun>; manageRun: (input: { id: string; action: 'hide' | 'trash' | 'restore' }) => Promise<void>; preflight: (request: LiveStartRequest) => Promise<LivePreflight>; start: (request: LiveStartRequest) => Promise<WorkflowRun>; snapshot: () => Promise<LiveSnapshot>; control: (input: { id: string; action: string; stepId?: string; stepBudgetCents?: number | null; project?: LiveStartRequest['project'] }) => Promise<void>; reconcile: (input: { entryId: string; costCents: number }) => Promise<void>; shutdown: () => Promise<void>; }
+interface Engine { recordLocalExport: (input: { projectId: string; workspaceId: string; name: string; kind: string; sourceRevision: number; artifacts: ArtifactMetadata[]; sourceArtifactIds: string[] }) => Promise<WorkflowRun>; manageRun: (input: { id: string; action: 'hide' | 'trash' | 'restore' }) => Promise<void>; preflight: (request: LiveStartRequest) => Promise<LivePreflight>; start: (request: LiveStartRequest) => Promise<WorkflowRun>; snapshot: () => Promise<LiveSnapshot>; control: (input: { id: string; action: string; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; project?: LiveStartRequest['project'] }) => Promise<void>; reconcile: (input: { entryId: string; costCents: number }) => Promise<void>; shutdown: () => Promise<void>; }
 const require = createRequire(import.meta.url);
 const { createLiveWorkflowEngine } = require('../../electron/live-workflow-engine.cjs') as { createLiveWorkflowEngine: (options: Record<string, unknown>) => Engine };
 const { createArtifactStore } = require('../../electron/artifact-store.cjs') as { createArtifactStore: (options: { directory: string; loadModule: NodeRequire }) => Store };
+const { ModelRuntimeError } = require('../../electron/provider-http.cjs') as { ModelRuntimeError: new (code: string, message: string, details?: Record<string, unknown>) => Error };
 const { calculateCost } = require('../../electron/live-cost.cjs') as { calculateCost: (pricing: unknown, usage: ModelUsage) => { costCents: number; costState: string } };
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const runtimeManifest = path.join(projectRoot, 'work/ui-build/package.json');
@@ -110,6 +111,79 @@ describe('真实工作流状态、传递、费用与交付', () => {
     const resumed = await waitFor(f.engine, snapshot => snapshot.runs[0].status === 'waiting-review');
     expect(f.calls.filter(call => call.kind === 'text')).toHaveLength(1); expect(f.calls.filter(call => call.kind === 'image-generation')).toHaveLength(2);
     expect(resumed.ledger).toHaveLength(3); await f.engine.control({ id: run.id, action: 'cancel' }); await f.engine.shutdown();
+  });
+  it('明确截断后重开任务，只调整失败步骤的上限并从原位置续跑', async () => {
+    let store: Store;
+    const f = await fixture(async (input, _options, standard) => {
+      if (input.prompt !== '展开正文' || input.options?.maxOutputTokens !== 64) return standard();
+      const partialText = '保留未完成的正文';
+      const partial = await store.write({ name: '未完成结果.txt', mimeType: 'text/plain', text: partialText, runId: input.runId, projectId: input.projectId });
+      throw Object.assign(new ModelRuntimeError('INCOMPLETE_OUTPUT', '模型用完了本步骤的输出 Token', {
+        requestStarted: true, incompleteReason: 'output-limit', partialText, usage: { inputTokens: 100, outputTokens: 40 },
+      }), { artifacts: [partial] });
+    });
+    store = f.store;
+    const input = request();
+    const first = input.workflow.steps[0];
+    input.workflow.steps = [first, { ...first, id: 'expand', name: '展开', prompt: '展开正文', inputSource: 'previous', maxOutputTokens: 64 }, ...input.workflow.steps.slice(2)];
+    const run = await f.engine.start(input);
+    const failed = await waitFor(f.engine, state => state.runs[0]?.status === 'failed');
+    expect(f.calls).toHaveLength(2);
+    expect(failed.runs[0].stepIndex).toBe(1);
+    const [firstAttempt, failedAttempt] = failed.runs[0].attempts;
+    expect(failedAttempt).toMatchObject({ status: 'failed', errorCode: 'INCOMPLETE_OUTPUT', incompleteReason: 'output-limit', usage: { outputTokens: 40 } });
+    expect(failedAttempt.summary).toContain('保留未完成的正文');
+    await f.engine.shutdown();
+
+    const reopened = createLiveWorkflowEngine(f.options);
+    try {
+      expect(f.calls).toHaveLength(2);
+      const resume = { id: run.id, action: 'continue', stepMaxOutputTokens: 256 };
+      await expect(reopened.control({ ...resume, stepBudgetCents: 0 })).rejects.toThrow(/预算|上限/);
+      expect((await reopened.snapshot()).runs[0].snapshot.steps[1].maxOutputTokens).toBe(64);
+      expect(f.calls).toHaveLength(2);
+      const duplicate = await Promise.allSettled([reopened.control(resume), reopened.control(resume)]);
+      expect(duplicate.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+      const recovered = await waitFor(reopened, state => state.runs[0].status === 'waiting-review');
+      expect(f.calls.map(call => call.options?.maxOutputTokens)).toEqual([2048, 64, 256]);
+      expect(recovered.runs[0].snapshot.steps[0].maxOutputTokens).toBeUndefined();
+      expect(recovered.runs[0].snapshot.steps[1].maxOutputTokens).toBe(256);
+      expect(recovered.runs[0].attempts.slice(0, 2)).toEqual([firstAttempt, failedAttempt]);
+      expect(recovered.ledger).toHaveLength(3);
+      for (const entry of failed.ledger) expect(recovered.ledger.find(item => item.id === entry.id)).toMatchObject({ costCents: entry.costCents, status: entry.status });
+      expect((await store.read(failedAttempt.artifacts![0].id)).buffer.toString()).toBe('保留未完成的正文');
+    } finally { await reopened.shutdown(); }
+  });
+  it.each([
+    { label: '旧版文字', outputTokens: 2048, kind: 'text', eligible: true },
+    { label: '旧版用量未达上限', outputTokens: 2047, kind: 'text', eligible: false },
+    { label: '非整数量', outputTokens: 2048.25, kind: 'text', eligible: false },
+    { label: '图片', outputTokens: 2048, kind: 'image-generation', eligible: false },
+  ])('$label 未完成记录仅在上限证据和媒体类型匹配时允许调整', async ({ outputTokens, kind, eligible }) => {
+    const f = await fixture(async (input, _options, standard) => {
+      if (input.kind !== kind || input.options?.maxOutputTokens !== 2048) return standard();
+      throw Object.assign(new Error('模型未完整生成结果，可能达到上限或仍需继续处理；已保留返回片段与用量，未自动重试。'), {
+        name: 'ModelRuntimeError', requestStarted: true, usage: { inputTokens: 100, outputTokens },
+      });
+    });
+    try {
+      const run = await f.engine.start(request());
+      const failed = await waitFor(f.engine, state => state.runs[0]?.status === 'failed');
+      const before = f.calls.length;
+      const args = { id: run.id, action: 'continue', stepMaxOutputTokens: 4096 };
+      await expect(f.engine.control({ ...args, action: 'retry', stepId: failed.runs[0].snapshot.steps[failed.runs[0].stepIndex].id })).rejects.toThrow(/续跑/);
+      for (const value of [2048, 16385, 2049.5, Number.NaN]) await expect(f.engine.control({ ...args, stepMaxOutputTokens: value })).rejects.toThrow(/上限/);
+      expect(f.calls).toHaveLength(before);
+      if (eligible) {
+        await f.engine.control(args);
+        await waitFor(f.engine, state => state.runs[0]?.status === 'waiting-review');
+        expect(f.calls.filter(call => call.kind === kind).map(call => call.options?.maxOutputTokens)).toEqual([2048, 4096]);
+      } else {
+        await expect(f.engine.control(args)).rejects.toThrow(/只有达到输出 Token 上限/);
+        expect(f.calls).toHaveLength(before);
+        expect((await f.engine.snapshot()).runs[0]).toEqual(failed.runs[0]);
+      }
+    } finally { await f.engine.shutdown(); }
   });
   it('暂停等待当前真实请求结束，继续时不重新调用已完成步骤', async () => {
     let release: (() => void) | undefined;

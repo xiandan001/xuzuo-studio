@@ -67,6 +67,45 @@ async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = f
   return { start, read, cancel, createProject, update, props, bridge, preflight, startLive, queueEnqueue, queueManage };
 }
 describe('普通聊天的真实组件交互', () => {
+  it('制作结果增高时跟随聊天底部，向上阅读时保留当前位置', async () => {
+    const resizeCallbacks = new Map<Element, () => void>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private readonly resize: () => void) {}
+      observe(element: Element) { resizeCallbacks.set(element, this.resize); }
+      disconnect() {
+        for (const [element, resize] of resizeCallbacks) if (resize === this.resize) resizeCallbacks.delete(element);
+      }
+    });
+    await fixture();
+    await input('保留对话底部');
+    await click('发送聊天消息');
+    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!;
+    const turn = thread.querySelector('.chat-turn-container')!;
+    let height = 500, position = 200;
+    Object.defineProperties(thread, {
+      clientHeight: { value: 300 },
+      scrollHeight: { get: () => height },
+      scrollTop: {
+        get: () => position,
+        set: (value: number) => { position = Math.min(value, height - thread.clientHeight); },
+      },
+    });
+    const resizeTurn = resizeCallbacks.get(turn);
+    expect(resizeTurn).toBeDefined();
+
+    height = 720;
+    resizeTurn?.();
+    expect(thread.scrollTop).toBe(420);
+
+    await act(async () => {
+      thread.scrollTop = 100;
+      thread.dispatchEvent(new Event('scroll'));
+    });
+    height = 910;
+    resizeTurn?.();
+    expect(thread.scrollTop).toBe(100);
+  });
+
   it('copies readable reply content while preserving code and the original stored source', async () => {
     const copied = vi.fn(async (_text: string) => undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copied } });
     const f = await fixture(); await input('整理提示词'); await click('发送聊天消息');
