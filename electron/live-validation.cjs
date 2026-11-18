@@ -4,6 +4,7 @@ const { imageExportSourceError } = require('./image-export-sources.cjs');
 const { validateMarkup } = require('./image-output-formats.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { readEngineeringSource } = require('./engineering-export.cjs');
+const { imageExportSizeError, singleImageExportSourceStepId } = require('./resized-image-export.cjs');
 const { stepReferenceIssue, explicitStepReferences } = require('./workflow-references.cjs');
 const { checkedAnimationWorkflowSettings } = require('./animation-document.runtime.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
@@ -104,6 +105,11 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
       const sourceIds = step.contentSourceStepIds;
       if (!Array.isArray(sourceIds) || !sourceIds.length) addError(`“${step.name}”：请选择本轮图片编辑成功生成的PNG步骤。`, 'inputSource', step.id);
       else if (sourceIds.some(id => { const source = workflow.steps.find(item => item.id === id); return !source || source.kind !== 'image-editing' || source.inputSource !== 'project' || source.imageSourceStepId !== undefined || source.imageMarkupId === step.engineeringReferenceId || (source.imageOutputFormat ?? 'png') !== 'png'; })) addError(`“${step.name}”：工程图片需要以本次首图为主画布进行PNG精修，不能采用纯文字生图或动态来源。`, 'inputSource', step.id);
+    }
+    if (step.imageExportSize !== undefined) {
+      const issue = imageExportSizeError(step.imageExportSize);
+      if (issue) addError(`“${step.name}”：${issue}`, 'imageExportSize', step.id);
+      if (project.kind !== 'image' || step.kind !== 'export' || step.wallpaperTarget !== undefined || step.engineeringReferenceId !== undefined || !completedImageStepIds.has(singleImageExportSourceStepId(step))) addError(`“${step.name}”：图片尺寸适配仅可在续跑中使用本次已完成的单张图片。`, 'imageExportSize', step.id);
     }
     if (step.qualityGate) {
       const policy = step.qualityGate;

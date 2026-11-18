@@ -6,6 +6,8 @@ const { editorDeliveryChecks, imageDeliveryChecks } = require('./delivery-qualit
 const { spreadsheetDeliveryChecks } = require('./spreadsheet-delivery.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { engineeringSourceError, readEngineeringSource } = require('./engineering-export.cjs');
+const { imageType, rasterDimensions } = require('./image-output-formats.cjs');
+const { imageExportSizeError, singleImageExportSourceStepId, singleProducedPng, isRunPng } = require('./resized-image-export.cjs');
 const MIME = { word: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ppt: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', excel: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 const hash = value => createHash('sha256').update(value).digest('hex');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value);
@@ -14,6 +16,12 @@ function checkedSelection(input) {
   return { ...input, artifactIds: [...new Set(input.artifactIds)] };
 }
 function currentAdaptedOutput(run, step, attempt) {
+  if (step.imageExportSize !== undefined) {
+    if (step.wallpaperTarget !== undefined || step.engineeringReferenceId !== undefined || imageExportSizeError(step.imageExportSize)) return false;
+    const source = singleProducedPng(run, step, run.snapshot.steps.indexOf(step));
+    const images = (attempt.artifacts || []).filter(file => file.kind === 'image');
+    return Boolean(source && attempt.sourceArtifactIds?.length === 1 && attempt.sourceArtifactIds[0] === source.id && images.length === 1 && images[0].id !== source.id && isRunPng(images[0], run.projectId, run.id));
+  }
   const engineering = step.engineeringReferenceId !== undefined;
   if (engineering ? step.wallpaperTarget !== undefined || engineeringSourceError(attempt.engineeringSource) || attempt.engineeringSource.referenceId !== step.engineeringReferenceId || run.attachmentIds?.[0] !== step.engineeringReferenceId : wallpaperTargetError(step.wallpaperTarget)) return false;
   if (!Array.isArray(step.contentSourceStepIds) || !step.contentSourceStepIds.length || step.contentSourceStepIds.length > 20 || new Set(step.contentSourceStepIds).size !== step.contentSourceStepIds.length) return false;
@@ -34,8 +42,9 @@ function completedOutputs(runs, projectId, kind) {
     const step = run.snapshot.steps.find(item => item.id === attempt.stepId);
     const exporter = run.snapshot.steps.findLast(item => item.enabled && item.kind === 'export');
     const imageSources = Array.isArray(exporter?.contentSourceStepIds) ? exporter.contentSourceStepIds : exporter?.contentSourceStepId ? [exporter.contentSourceStepId] : undefined;
-    const currentImageAttempt = !Array.isArray(exporter?.contentSourceStepIds) || attempt === run.attempts.findLast(item => item.stepId === attempt.stepId && item.status === 'complete');
-    const adapted = exporter?.wallpaperTarget !== undefined || exporter?.engineeringReferenceId !== undefined;
+    const resized = exporter?.imageExportSize !== undefined;
+    const currentImageAttempt = !resized && !Array.isArray(exporter?.contentSourceStepIds) || attempt === run.attempts.findLast(item => item.stepId === attempt.stepId && item.status === 'complete');
+    const adapted = resized || exporter?.wallpaperTarget !== undefined || exporter?.engineeringReferenceId !== undefined;
     const animations = !exporter ? run.snapshot.steps.filter(item => item.enabled && item.kind === 'animation-compose') : [];
     const accepted = kind === 'image' ? animations.length ? animations.includes(step) && attempt === run.attempts.findLast(item => item.stepId === step?.id && item.status === 'complete') : adapted ? step === exporter && currentImageAttempt && currentAdaptedOutput(run, step, attempt) : ['image-generation', 'image-editing'].includes(step?.kind) && (!imageSources || imageSources.includes(step.id)) && currentImageAttempt : step?.kind === 'export';
     if (!accepted || attempt.status !== 'complete') return [];
@@ -84,11 +93,18 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
       files.push({ id, name: file.name, mimeType: file.mimeType, bytes: bytes.length, sha256: hash(bytes) });
       if (input.kind === 'image') {
         const owner = selectedOutputs.find(item => item.artifacts.some(artifact => artifact.id === id));
-        const dimensions = inspectImage ? await inspectImage(bytes, file.mimeType) : {};
-        const target = owner?.step.engineeringReferenceId !== undefined ? owner.attempt.engineeringSource : owner?.step.wallpaperTarget;
+        let dimensions = inspectImage ? await inspectImage(bytes, file.mimeType) : {};
+        const resized = owner?.step.imageExportSize;
+        const target = resized ?? (owner?.step.engineeringReferenceId !== undefined ? owner.attempt.engineeringSource : owner?.step.wallpaperTarget);
         if (target && (file.mimeType !== 'image/png' || file.runId !== owner.run.id)) throw Error('本地适配成品类型或来源发生变化，请重新读取本次导出。');
+        if (resized) {
+          if (imageType(bytes).mimeType !== 'image/png') throw Error('本地适配成品实际类型发生变化，请重新读取本次导出。');
+          dimensions = { ...dimensions, ...rasterDimensions(bytes) };
+        }
         const animation = owner?.step.kind === 'animation-compose' ? owner.step.animation : undefined;
-        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: animation ? `${animation.width}x${animation.height}` : target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency: !target && (animation ? animation.background === 'transparent' : owner?.step.imageBackground === 'transparent') });
+        const resizeSource = resized ? owner.run.snapshot.steps.find(step => step.id === singleImageExportSourceStepId(owner.step)) : undefined;
+        const requiresTransparency = resized ? resizeSource?.imageBackground === 'transparent' : !target && (animation ? animation.background === 'transparent' : owner?.step.imageBackground === 'transparent');
+        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: animation ? `${animation.width}x${animation.height}` : target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency });
         imageChecks.push(...checks.filter(check => check.status !== 'manual').map(check => ({ ...check, id: `${check.id}-${id.slice(0, 8)}`, label: `${file.name.slice(0, 80)} · ${check.label}` })));
         for (const check of checks.filter(check => check.status === 'manual')) if (!imageChecks.some(item => item.id === check.id)) imageChecks.push(check);
       }

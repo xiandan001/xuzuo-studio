@@ -6,7 +6,12 @@ import { HomeProductionResult } from './HomeProductionResult';
 
 function fixture(kind: ProjectKind, changes: Partial<WorkflowRun> = {}) {
   const file = { id: 'body', projectId: 'project', runId: 'run', name: 'result.txt', kind: 'text', mimeType: 'text/plain', bytes: 200 };
-  const run = { id: 'run', workspaceId: 'workspace', projectId: 'project', mode: 'live', status: 'waiting-review', snapshot: { outputKind: kind, steps: [{ id: 'make', kind: 'text', role: 'producer', enabled: true }] }, attempts: [{ stepId: 'make', status: 'complete', artifacts: [file] }], ...changes } as WorkflowRun;
+  const run = {
+    id: 'run', workspaceId: 'workspace', projectId: 'project', mode: 'live', status: 'waiting-review', stepIndex: 1,
+    snapshot: { outputKind: kind, steps: [{ id: 'make', kind: 'text', role: 'producer', enabled: true }, { id: 'accept', kind: 'manual-review', enabled: true }] },
+    attempts: [{ stepId: 'make', status: 'complete', artifacts: [file] }, { stepId: 'accept', status: 'waiting-review' }],
+    ...changes,
+  } as WorkflowRun;
   const props = { workspaceId: 'workspace', projects: [{ id: 'project', workspaceId: 'workspace', name: '说明书' }], ledger: [], workflowRunner: { runs: [run], trashedArtifacts: [] } } as unknown as PageProps;
   return { props, run };
 }
@@ -32,5 +37,17 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
     }
     const trash = fixture('word'); trash.props.workflowRunner.trashedArtifacts = [trash.run.attempts[0].artifacts![0]];
     expect(renderToStaticMarkup(<HomeProductionResult {...trash} kind="word" />)).not.toContain('打开编辑器');
+  });
+  it('未通过质检时显示原因和样稿，保留进度与进入任务的入口', () => {
+    const data = fixture('word', { error: '原稿未满足范围', qualityReviews: [{ passed: false, issues: ['范围缺失'], summary: '未通过', stepId: 'accept', attemptId: 'check', reviewedAt: '' }] });
+    Object.assign(data.run.snapshot.steps[1], { kind: 'text', role: 'reviewer', qualityGate: {} });
+    Object.assign(data.run.attempts[1], { id: 'check', status: 'complete' });
+    const html = renderToStaticMarkup(<HomeProductionResult {...data} kind="word" />);
+    expect(html).toContain('质检未通过');
+    expect(html).toContain('原稿未满足范围');
+    expect(html).toContain('查看质检原因');
+    expect(html).toContain('当前样稿');
+    expect(html).not.toContain('检查并交付');
+    expect(html).not.toContain('文稿已生成 · 尚未导出');
   });
 });

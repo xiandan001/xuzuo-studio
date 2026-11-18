@@ -24,7 +24,7 @@ export interface CredentialsBridge {
   setEnabled: (input: { id: string; enabled: boolean }) => Promise<CredentialMetadata>;
 }
 export type WorkflowStepKind = ModelCapability | 'manual-review' | 'export' | 'animation-compose';
-export interface WorkflowStep extends ImageOutputOptions { reasoningEffort?: ReasoningEffort; animation?: AnimationWorkflowSettings; referenceArtifactIds?: string[]; beadBaseRequestId?: string; engineeringReferenceId?: string; wallpaperTarget?: WallpaperTarget | null; imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
+export interface WorkflowStep extends ImageOutputOptions { imageExportSize?: { width: number; height: number }; reasoningEffort?: ReasoningEffort; animation?: AnimationWorkflowSettings; referenceArtifactIds?: string[]; beadBaseRequestId?: string; engineeringReferenceId?: string; wallpaperTarget?: WallpaperTarget | null; imageSourceStepId?: string; role?: 'planner' | 'producer' | 'reviewer'; qualityGate?: { repairStepId?: string; maxRepairs: number; minScore?: number }; id: string; name: string; kind: WorkflowStepKind; prompt: string; promptTemplateId?: string; modelConfigId?: string; credentialId?: string; inputSource: 'project' | 'previous'; budgetCents?: number; enabled: boolean; maxOutputTokens?: number; imageSize?: string; imageBackground?: 'auto' | 'opaque' | 'transparent'; voice?: string; count?: number; contentSourceStepId?: string; contentSourceStepIds?: string[]; documentImageSource?: 'references' | 'previous'; documentImageStepIds?: string[]; }
 export interface WorkflowDefinition { sourceChat?: { conversationId: string; turnId: string; sha256: string }; sourceArtifactTarget?: { id: string; sha256: string }; goalBrief?: import('./lib/automation-recipes').GoalBrief; foundationVersion?: string; id: string; workspaceId: string; name: string; description: string; outputKind: ProjectKind; businessCategoryId?: string; steps: WorkflowStep[]; updatedAt: string; }
 export type WorkflowDraft = Omit<WorkflowDefinition, 'id' | 'workspaceId' | 'updatedAt'>;
 export interface StudioAction { id: string; workspaceId: string; name: string; description: string; studio: 'documents' | 'images'; outputKind: ProjectKind; workflowId: string; enabled: boolean; }
@@ -92,6 +92,7 @@ export interface WorkflowRunner {
   start: (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>) => boolean;
   pause: (id: string) => void;
   resume: (id: string, stepBudgetCents?: number | null) => void;
+  resumeResizedImage?: (id: string, size: { width: number; height: number }) => Promise<void>;
   cancel: (id: string) => void;
   retry: (id: string, stepId: string) => void;
 }

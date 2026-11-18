@@ -15,6 +15,8 @@ import { CostTotal } from './CostAmount';
 import { attemptCostRecord, costPrimary, runCostRecords, summarizeCosts } from '../lib/cost-display';
 import '../pages/workflows.css';
 import { canResumeLocalImageExport } from '../lib/local-image-export';
+import { workflowPublicError } from '../lib/studio-run';
+import { workflowReviewState } from '../lib/workflow-review';
 import { RUN_LABELS, isModelStep, kindLabel, StepIcon, WorkflowDialog } from './workflow-shared';
 
 function AttemptDetails({ attempts, props, live, projectId, stepRole }: { attempts: WorkflowAttempt[]; props: PageProps; live: boolean; projectId: string; stepRole?: WorkflowStep['role'] }) {
@@ -28,8 +30,33 @@ function AttemptDetails({ attempts, props, live, projectId, stepRole }: { attemp
   return <div className="wf-attempt-details">{attempt.recoveredFromReceiptAt && <p className="wf-run-safety-note"><ShieldCheck size={14} />此步骤已从确认回执恢复，未重新调用模型；原调用费用保留。</p>}{attempts.length > 1 && <label className="wf-attempt-picker">查看尝试<Select aria-label={`查看步骤 ${attempt.stepName} 的历史尝试`} value={attempt.id} onValueChange={setSelectedId} options={attempts.map((item, index) => ({ value: item.id, label: `第 ${index + 1} 次 · ${item.status === 'complete' ? '完成' : item.status === 'failed' ? '失败' : item.status === 'cancelled' ? '取消' : '处理中'} · ${costPrimary(attemptCostRecord(item, props.ledger, live))}` }))} /></label>}{attempt.error && <p className="wf-attempt-error" role="status"><AlertCircle size={13} />{attempt.error}</p>}{attempt.summary && (documentResult ? <p className="wf-attempt-summary">文档内容已生成，点击下方“查看文档”即可检查与编辑完整内容。</p> : <p className="wf-attempt-summary">{attempt.summary}</p>)}{attempt.costState === 'unknown' && <p className="wf-unknown-cost">本次费用尚未完整计算，不能按零元或免费处理。</p>}{attempt.usage && <p className="wf-usage">{typeof attempt.usage.inputTokens === 'number' ? `输入 ${attempt.usage.inputTokens} Token` : ''}{typeof attempt.usage.outputTokens === 'number' ? ` · 输出 ${attempt.usage.outputTokens} Token` : ''}{typeof attempt.usage.images === 'number' ? ` · ${attempt.usage.images} 张图` : ''}{typeof attempt.usage.seconds === 'number' ? ` · ${attempt.usage.seconds} 秒` : ''}</p>}<RememberedDetails rememberKey={`workflow-attempt:${attempt.id}:raw-log`}><summary>查看本次输入、提示词与{live ? '结果' : '模拟结果'}</summary><b>本次输入</b><pre>{attempt.input}</pre>{attempt.prompt && <><b>本次提示词</b><pre>{attempt.prompt}</pre></>}<b>结果正文或摘要</b><pre>{attempt.summary || '当前尝试尚未返回内容。'}</pre>{attempt.providerRequestId && <><b>供应商请求编号</b><pre>{attempt.providerRequestId}</pre></>}</RememberedDetails>{attempt.artifacts?.length ? <ArtifactResults key={attempt.id} fileScope="attempt" artifacts={attempt.artifacts} runner={props.workflowRunner} projectId={projectId} documentKind={documentKind === 'image' || ['planner', 'reviewer'].includes(stepRole || '') ? undefined : documentKind} onEditDocument={documentResult ? () => props.navigate('documents', projectId) : undefined} /> : null}</div>;
 }
 
-export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0 }: { props: PageProps; run: WorkflowRun; referenceFilesRequest?: number }) {
-  const [detailsOpen, setDetailsOpen] = useRememberedBoolean(`task:${summary.id}:workflow-details`, !summary.contentTruncated && summary.projectId === props.activeProject.id);
+function canAdjustReviewPng(run: WorkflowRun) {
+  const steps = run.snapshot.steps;
+  const current = steps[run.stepIndex];
+  const remaining = steps.slice(run.stepIndex + 1).filter(step => step.enabled);
+  const [exportStep, finalReview] = remaining;
+  if (run.snapshot.outputKind !== 'image' || run.retryStepOnly || run.supersededByRunId || run.attempts.some(attempt => attempt.status === 'running')
+    || current?.kind !== 'vision' || current.role !== 'reviewer' || current.inputSource !== 'previous' || current.referenceArtifactIds !== undefined || remaining.length !== 2
+    || exportStep?.kind !== 'export' || finalReview?.kind !== 'manual-review' || exportStep.imageExportSize !== undefined
+    || exportStep.wallpaperTarget !== undefined || exportStep.engineeringReferenceId !== undefined) return false;
+  const sourceId = exportStep.contentSourceStepIds === undefined ? exportStep.contentSourceStepId
+    : exportStep.contentSourceStepId === undefined && exportStep.contentSourceStepIds.length === 1 ? exportStep.contentSourceStepIds[0] : undefined;
+  const priorSteps = steps.slice(0, run.stepIndex);
+  const producer = priorSteps.find(step => step.id === sourceId);
+  if (!producer?.enabled || !['image-generation', 'image-editing'].includes(producer.kind)
+    || producer.role === 'reviewer' || producer.role === 'planner' || (producer.count ?? 1) !== 1 || (producer.imageOutputFormat ?? 'png') !== 'png') return false;
+  const previous = priorSteps.filter(step => step.enabled && step.kind !== 'manual-review' && step.kind !== 'export'
+    && run.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete')).at(-1);
+  if (previous?.id !== producer.id) return false;
+  const attempt = run.attempts.filter(item => item.stepId === producer.id && item.status === 'complete').at(-1);
+  const files = (attempt?.artifacts || []).filter(file => file.kind === 'image');
+  const [file] = files;
+  return files.length === 1 && !!file?.id && file.mimeType === 'image/png'
+    && file.projectId === run.projectId && file.runId === run.id && !file.trashedAt && !file.unavailable;
+}
+
+export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0, embedded = false }: { props: PageProps; run: WorkflowRun; referenceFilesRequest?: number; embedded?: boolean }) {
+  const [detailsOpen, setDetailsOpen] = useRememberedBoolean(`task:${summary.id}:${embedded ? 'activity-steps' : 'workflow-details'}`, !embedded && !summary.contentTruncated && summary.projectId === props.activeProject.id);
   const [detail, setDetail] = useState<WorkflowRun>();
   const [detailRead, setDetailRead] = useState<{ key: string; loading: boolean; error: string }>();
   const [detailRequest, setDetailRequest] = useState(0), detailPending = useRef(false);
@@ -78,11 +105,64 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
   const terminal = ['complete', 'cancelled', 'interrupted', 'failed'].includes(run.status);
   const live = run.mode === 'live';
   const localExport = isLocalExportRun(run);
+  const review = workflowReviewState(run);
+  const [reviewKey, setReviewKey] = useState('');
+  const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
+  const [reviewSize, setReviewSize] = useState({ width: '', height: '' });
+  const [reviewError, setReviewError] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const reviewPending = useRef(false);
   const labels: Record<WorkflowRun['status'], string> = live ? { running: '正在执行', paused: '已暂停', 'waiting-review': '等待人工检查', complete: '已完成', cancelled: '已取消', interrupted: '已中断', failed: '执行失败' } : RUN_LABELS;
-  const runLabel = run.status === 'cancelled' && run.supersededByRunId ? '已由后续创作替代' : run.retryStepOnly && run.status === 'complete' ? '单步重试完成' : labels[run.status];
+  const runLabel = review === 'quality-failed' ? '独立检查未通过' : review === 'blocked' ? '检查需要处理'
+    : run.status === 'cancelled' && run.supersededByRunId ? '已由后续创作替代' : run.retryStepOnly && run.status === 'complete' ? '单步重试完成' : labels[run.status];
   const cost = summarizeCosts(runCostRecords(run, props.ledger));
   const project = props.projects.find(item => item.id === run.projectId);
-  const editableReview = run.mode === 'live' && run.status === 'waiting-review' && !!project && ['word', 'ppt', 'excel'].includes(project.kind);
+  const editableReview = live && review === 'manual' && !!project && ['word', 'ppt', 'excel'].includes(project.kind);
+  const resize = props.workflowRunner.resumeResizedImage;
+  const canResizeReview = live && review === 'quality-failed' && !!resize && !!project && canAdjustReviewPng(run);
+  const qualitySource = review === 'quality-failed' ? run.snapshot.steps.slice(0, run.stepIndex).filter(step =>
+    step.enabled && !['planner', 'reviewer'].includes(step.role || '') &&
+    run.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && attempt.artifacts?.some(file => !file.trashedAt && !file.unavailable))).at(-1) : undefined;
+  function openQualityReview() {
+    setReviewAcknowledged(false);
+    setReviewSize({ width: '', height: '' });
+    setReviewError('');
+    setReviewKey(detailKey);
+  }
+  async function confirmQualityReview() {
+    if (!reviewAcknowledged || reviewPending.current) return;
+    if (reviewKey !== detailKey || review !== 'quality-failed' || archived || run.referenceIssue) {
+      setReviewError('任务状态已变化，请关闭后重新检查。');
+      return;
+    }
+    if (!reviewSize.width && !reviewSize.height) {
+      setReviewKey('');
+      props.workflowRunner.resume(run.id);
+      return;
+    }
+    const width = Number(reviewSize.width), height = Number(reviewSize.height);
+    if (![width, height].every(value => Number.isSafeInteger(value) && value >= 64 && value <= 8192) || width * height > 16000000) {
+      setReviewError('宽度和高度均须填写 64–8192 的整数，总像素数最多 1600 万。');
+      return;
+    }
+    if (!canResizeReview || !resize) {
+      setReviewError('当前任务无法调整 PNG 交付尺寸，请重新查看任务。');
+      return;
+    }
+    reviewPending.current = true;
+    setReviewBusy(true);
+    setReviewError('');
+    try {
+      await resize(run.id, { width, height });
+      setReviewKey('');
+      props.notify('已提交本地 PNG 尺寸调整。');
+    } catch (cause) {
+      setReviewError(workflowPublicError(cause, '本地 PNG 尺寸调整未开始，原样稿已保留。'));
+    } finally {
+      reviewPending.current = false;
+      setReviewBusy(false);
+    }
+  }
   function retry(stepId: string, name: string) { if (live && !props.preferences.confirmGeneration) { props.workflowRunner.retry(run.id, stepId); return; } if (live) { setAcknowledged(false); setConfirmation({ action: 'retry', stepId, name }); } else props.workflowRunner.retry(run.id, stepId); }
   function continueRun() {
     if (!live || !props.preferences.confirmGeneration) { props.workflowRunner.resume(run.id); return; }
@@ -101,15 +181,54 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
     }
     setConfirmation(null);
   }
-  return <section className={`panel wf-run-card ${live ? 'wf-real-run' : ''}`}><header><span className={`wf-run-state-icon ${run.status}`}>{run.status === 'running' ? <LoaderCircle size={20} className="spin" /> : run.status === 'complete' ? <CheckCircle2 size={20} /> : run.status === 'waiting-review' ? <ShieldCheck size={20} /> : run.status === 'failed' ? <AlertCircle size={20} /> : <CirclePause size={20} />}</span><div><h3>{run.workflowName}<span className={`wf-run-mode ${live ? 'live' : ''}`}>{localExport ? '本地导出' : live ? '真实' : '模拟'}</span></h3><p>{project?.name || '关联项目'}<i />{Number.isNaN(Date.parse(run.createdAt)) ? run.createdAt : new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</p></div><span className={`wf-run-badge ${run.status}`}>{runLabel}</span><strong>{localExport ? '未调用模型 ' : live ? '调用费用 ' : '模拟费用 '}<CostTotal summary={cost} /></strong></header>
+  return <section className={`panel wf-run-card ${live ? 'wf-real-run' : ''}`}>{!embedded && <header><span className={`wf-run-state-icon ${review === "quality-failed" ? "failed" : run.status}`}>{run.status === 'running' ? <LoaderCircle size={20} className="spin" /> : run.status === 'complete' ? <CheckCircle2 size={20} /> : run.status === 'waiting-review' ? <ShieldCheck size={20} /> : run.status === 'failed' ? <AlertCircle size={20} /> : <CirclePause size={20} />}</span><div><h3>{run.workflowName}<span className={`wf-run-mode ${live ? 'live' : ''}`}>{localExport ? '本地导出' : live ? '真实' : '模拟'}</span></h3><p>{project?.name || '关联项目'}<i />{Number.isNaN(Date.parse(run.createdAt)) ? run.createdAt : new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</p></div><span className={`wf-run-badge ${run.status}`}>{runLabel}</span><strong>{localExport ? '未调用模型 ' : live ? '调用费用 ' : '模拟费用 '}<CostTotal summary={cost} /></strong></header>}
     {run.referenceIssue ? <RunReferenceRecovery issue={run.referenceIssue} message={run.error} onShowFiles={showReferenceFiles} onRefreshFiles={props.workflowRunner.listProjectArtifacts ? () => { void refreshReferenceFiles(); } : undefined} onReturnToStudio={() => props.navigate(project?.kind === 'image' ? 'images' : 'documents', run.projectId)} refreshing={refreshingReferences} feedback={referenceFeedback} /> : run.error && <div className="wf-run-error" role="status"><AlertCircle size={15} /><span>{run.error}</span></div>}{run.pauseRequested && <div className="wf-retry-notice"><CirclePause size={13} /><span>已请求暂停，将在当前请求结束后停止后续步骤；已经发出的请求仍可能收费。</span></div>}
     <button className="btn btn-ghost" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{detailsOpen ? '收起步骤与结果' : '查看步骤与结果'}</button>{detailsOpen && currentRead?.error && <div className="wf-run-error" role="alert"><span>{currentRead.error}</span>{props.workflowRunner.loadRunDetail && <button type="button" className="btn btn-secondary" onClick={rereadDetail} title="只读取已有记录，不调用模型或新增费用">重新读取详情</button>}</div>}{detailsOpen && currentRead?.loading && run.contentTruncated && <p role="status">正在按需读取完整执行详情…</p>}{detailsOpen && !run.contentTruncated && <div className="wf-run-steps">{run.snapshot.steps.map((step, index) => {
       const attempts = run.attempts.filter(attempt => attempt.stepId === step.id); const last = attempts.at(-1); const current = index === run.stepIndex;
-      const state = !step.enabled ? '已停用' : (current && run.status === 'waiting-review') || last?.status === 'waiting-review' ? '待人工确认' : last?.status === 'running' ? run.status === 'paused' ? '已暂停' : live ? '处理中' : '模拟中' : last?.status === 'complete' ? '已完成' : last?.status === 'failed' ? '执行失败' : last?.status === 'cancelled' ? '本次已取消' : run.retryStepOnly ? '未重新执行' : terminal ? '未执行' : '待执行';
+      const state = !step.enabled ? '已停用' : current && review === 'quality-failed' ? '独立检查未通过' : current && review === 'blocked' ? '需要处理' : (current && review === 'manual') || last?.status === 'waiting-review' ? '待人工确认' : last?.status === 'running' ? run.status === 'paused' ? '已暂停' : live ? '处理中' : '模拟中' : last?.status === 'complete' ? '已完成' : last?.status === 'failed' ? '执行失败' : last?.status === 'cancelled' ? '本次已取消' : run.retryStepOnly ? '未重新执行' : terminal ? '未执行' : '待执行';
       const stepCost = summarizeCosts(attempts.map(attempt => attemptCostRecord(attempt, props.ledger, live)));
       return <div id={`workflow-source-${run.id}-${step.id}`} tabIndex={-1} className={`wf-run-step ${current && !terminal ? 'current' : ''} ${!step.enabled ? 'disabled' : ''}`} key={step.id}><span className="wf-run-step-mark">{state === '已完成' ? <Check size={14} /> : <StepIcon kind={step.kind} size={14} />}</span><div className="wf-run-step-info"><div><strong>{step.name}</strong><span>{state}</span></div><small>{kindLabel(step.kind)}{attempts.length > 0 && <> · {attempts.length} 次尝试 · <CostTotal summary={stepCost} /></>}</small><AttemptDetails stepRole={step.role} attempts={attempts} props={props} live={live} projectId={run.projectId} /></div>{step.enabled && isModelStep(step.kind) && attempts.length > 0 && terminal && !archived && <button className="btn btn-ghost wf-retry-step" aria-label={`重试步骤 ${step.name}`} onClick={() => retry(step.id, step.name)} title={live ? '再次向服务商请求，可能再次收费' : '新增模拟调用与费用'}><RotateCcw size={13} />重试此步</button>}</div>;
     })}</div>}{run.retryStepOnly && <div className="wf-retry-notice"><RotateCcw size={13} /><span>{run.status === 'complete' ? '本次仅完成单步重试，后续步骤未重新运行；已有结果和历史费用仍保留。' : '本次仅重试所选步骤，后续步骤不会自动重新运行。'}</span></div>}
-    <footer><span><ShieldCheck size={13} />{canResumeLocalImageExport(run) ? '继续本地适配不调用模型，已发生费用保留' : live ? '每次重试独立计费，返回用量后自动累计花费' : '演示费用按尝试累计，历史记录保留'}</span><div><TaskRunActions run={run} runner={props.workflowRunner} notify={props.notify} />{!archived && canResumeLocalImageExport(run) && <button type="button" className="btn btn-primary" title="不调用模型，不新增API费用" onClick={() => props.workflowRunner.resume(run.id)}>继续本地适配</button>}{!archived && <>{run.status === 'running' && <button className="btn btn-secondary" disabled={run.pauseRequested} onClick={() => props.workflowRunner.pause(run.id)}><CirclePause size={14} />{run.pauseRequested ? '正在暂停…' : '暂停'}</button>}{run.status === 'paused' && <button className="btn btn-primary" onClick={() => live ? continueRun() : props.workflowRunner.resume(run.id)}><Play size={14} />继续运行</button>}{run.status === 'waiting-review' && (editableReview ? <><button className="btn btn-primary" onClick={() => props.navigate('documents', run.projectId)}><Pencil size={14} />编辑并交付</button><RememberedDetails rememberKey={`task:${run.id}:retry-parameters`} className="wf-advanced-settings"><summary>更多检查操作</summary><p>使用原结果继续不会采用尚未绑定的人工编辑稿，后续步骤按原工作流执行。</p><button className="btn btn-secondary" onClick={() => props.workflowRunner.resume(run.id)}>使用原结果继续</button></RememberedDetails></> : <button className="btn btn-primary" onClick={() => props.workflowRunner.resume(run.id)}><Check size={14} />确认通过，继续</button>)}{live && (run.status === 'failed' || run.status === 'interrupted') && <button className="btn btn-primary" onClick={continueRun}><Play size={14} />从当前位置继续</button>}{!terminal && <button className="btn btn-secondary" onClick={() => props.workflowRunner.cancel(run.id)}><Square size={12} />取消运行</button>}{run.status === 'complete' && project && project.status !== 'complete' && <button className="btn btn-secondary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}><Check size={13} />验收并交付当前版本</button>}</>}<button className="btn btn-ghost" onClick={() => props.navigate(project?.kind === 'image' ? 'images' : 'documents', run.projectId)}>查看项目<ArrowRight size={13} /></button></div></footer>
+    <footer>
+      {!embedded && <span><ShieldCheck size={13} />{canResumeLocalImageExport(run) ? '继续本地适配不调用模型，已发生费用保留' : live ? '每次重试独立计费，返回用量后自动累计花费' : '演示费用按尝试累计，历史记录保留'}</span>}
+      <div>
+        {!archived && <>
+          {canResumeLocalImageExport(run) && <button type="button" className="btn btn-primary" title="不调用模型，不新增API费用" onClick={() => props.workflowRunner.resume(run.id)}>继续本地适配</button>}
+          {run.status === 'running' && <button className="btn btn-secondary" disabled={run.pauseRequested} onClick={() => props.workflowRunner.pause(run.id)}><CirclePause size={14} />{run.pauseRequested ? '正在暂停…' : '暂停'}</button>}
+          {run.status === 'paused' && <button className="btn btn-primary" onClick={() => live ? continueRun() : props.workflowRunner.resume(run.id)}><Play size={14} />继续运行</button>}
+          {review === 'manual' && (editableReview ? <>
+            <button className="btn btn-primary" onClick={() => props.navigate('documents', run.projectId)}><Pencil size={14} />编辑并交付</button>
+            <RememberedDetails rememberKey={`task:${run.id}:retry-parameters`} className="wf-advanced-settings"><summary>更多检查操作</summary><p>使用原结果继续不会采用尚未绑定的人工编辑稿，后续步骤按原工作流执行。</p><button className="btn btn-secondary" onClick={() => props.workflowRunner.resume(run.id)}>使用原结果继续</button></RememberedDetails>
+          </> : <button className="btn btn-primary" onClick={() => props.workflowRunner.resume(run.id)}><Check size={14} />确认通过，继续</button>)}
+          {review === 'quality-failed' && <>
+            {qualitySource && <button type="button" className="btn btn-secondary" onClick={() => { setDetailsOpen(true); setReferenceFocus(qualitySource.id); }}>查看当前样稿</button>}
+            {!run.referenceIssue && <button type="button" className="btn btn-secondary" onClick={openQualityReview}>{canResizeReview ? '核对后继续或调整尺寸…' : '人工确认后继续…'}</button>}
+          </>}
+          {live && (run.status === 'failed' || run.status === 'interrupted') && <button className="btn btn-primary" onClick={continueRun}><Play size={14} />从当前位置继续</button>}
+          {!terminal && <button className="btn btn-ghost" onClick={() => props.workflowRunner.cancel(run.id)}><Square size={12} />取消运行</button>}
+          {run.status === 'complete' && project && project.status !== 'complete' && <button className="btn btn-secondary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}><Check size={13} />验收并交付当前版本</button>}
+        </>}
+        {project && <button className="btn btn-ghost" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', run.projectId)}>查看项目<ArrowRight size={13} /></button>}
+        <TaskRunActions run={run} runner={props.workflowRunner} notify={props.notify} />
+      </div>
+    </footer>
+    {reviewKey && <WorkflowDialog title="核对独立检查结果" subtitle={run.snapshot.steps[run.stepIndex]?.name || '独立检查'} className="wf-charge-dialog" onClose={() => { if (!reviewPending.current) setReviewKey(''); }}
+      footer={<><button type="button" className="btn btn-secondary" disabled={reviewBusy} onClick={() => setReviewKey('')}>返回</button><button type="button" className="btn btn-primary" disabled={!reviewAcknowledged || reviewBusy} onClick={() => { void confirmQualityReview(); }}>{reviewBusy ? '正在处理…' : '确认继续后续步骤'}</button></>}>
+      <div className="wf-charge-body">
+        <AlertCircle size={24} />
+        <p>{run.error || '独立检查未通过，制作已停在检查步骤。'}</p>
+        {canResizeReview ? <>
+          <p>核对样稿后，可以按当前尺寸继续，也可填写交付 PNG 的像素尺寸。尺寸调整由本机完成，保留透明背景与原图。</p>
+          <div className="wf-two-fields">
+            <label className="wf-field"><span>交付宽度（像素）</span><input className="field" aria-label="交付宽度（像素）" type="number" min={64} max={8192} step={1} value={reviewSize.width} disabled={reviewBusy} onChange={event => setReviewSize(current => ({ ...current, width: event.target.value }))} /></label>
+            <label className="wf-field"><span>交付高度（像素）</span><input className="field" aria-label="交付高度（像素）" type="number" min={64} max={8192} step={1} value={reviewSize.height} disabled={reviewBusy} onChange={event => setReviewSize(current => ({ ...current, height: event.target.value }))} /></label>
+          </div>
+          <p>如填写尺寸，宽高都需填写。继续后，本机导出并等待最后一次人工验收。</p>
+        </> : <p>继续会跳过本次未通过的独立检查，沿用已经保存的结果。后续模型调用可能产生费用。</p>}
+        <label><input type="checkbox" checked={reviewAcknowledged} disabled={reviewBusy} onChange={event => setReviewAcknowledged(event.target.checked)} />我已检查当前样稿，确认可以继续后续步骤。</label>
+        {reviewError && <p className="form-error" role="alert">{reviewError}</p>}
+      </div>
+    </WorkflowDialog>}
     {confirmation && <WorkflowDialog title={confirmation.action === 'retry' ? '确认单步重试' : '确认继续执行'} subtitle={confirmation.name} className="wf-charge-dialog" onClose={() => setConfirmation(null)} footer={<><button className="btn btn-secondary" onClick={() => setConfirmation(null)}>取消</button><button className="btn btn-primary" disabled={!acknowledged} onClick={confirm}>确认，接受可能再次收费</button></>}><div className="wf-charge-body"><AlertCircle size={28} /><p>{confirmation.action === 'retry' ? '会重新向该步骤配置的服务商发送请求，可能再次收费；后续步骤不会自动重新执行。' : run.status === 'paused' ? '会从暂停位置继续当前及后续步骤，新的请求可能产生费用。' : '会从失败或中断位置重新尝试，然后继续后续步骤，可能再次收费。'}</p><p>会保留本次运行的步骤参数；相同 ID 的模型、连接和凭证使用当前配置。修改了流程模板中的提示词或尺寸时，请重新运行流程。之前发生的费用仍保留，超时或中断不代表供应商未计费。</p>{confirmation.action === 'continue' && <div className="wf-continue-budget"><label className="wf-field"><span>当前步骤金额上限（元，选填）</span><input className="field" aria-label="继续执行当前步骤金额上限" type="number" min="0" step="0.01" value={continueBudget} placeholder="选填，留空不设上限" onChange={event => { setContinueBudget(event.target.value); setContinueBudgetError(''); }} /><small>留空会清除本次运行当前步骤上限，填写 0 表示零上限。已保存流程模板、项目上限及其它提示词与参数保持不变。</small></label><p>项目金额上限独立保留：<b>{budgetLabel(project?.budgetCents)}</b></p>{continueBudgetError && <p className="form-error" role="alert">{continueBudgetError}</p>}</div>}<label><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />我已检查现有记录，接受重新发送请求可能产生的费用。</label></div></WorkflowDialog>}
   </section>;
 }

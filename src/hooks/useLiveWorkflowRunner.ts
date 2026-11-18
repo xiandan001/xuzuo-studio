@@ -174,19 +174,34 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     const bridge = window.desktop?.runtime;
     return prepareLiveStartSource(input, async id => { const old = bridge?.runDetail ? await bridge.runDetail(id) : liveRunsRef.current.find(run => run.id === id); if (!old) throw new Error('上一轮任务暂不能可靠读取，原记录与费用保留。'); return old; }, listProjectArtifacts);
   }
-  const liveControl = async (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue', stepId?: string, stepBudgetCents?: number | null) => {
+  const liveControl = async (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue', stepId?: string, stepBudgetCents?: number | null, imageExportSize?: { width: number; height: number }) => {
     const bridge = window.desktop?.runtime;
     const current = optionsRef.current;
     const run = liveRunsRef.current.find(item => item.id === id && current.projects.some(project => project.id === item.projectId && project.workspaceId === current.workspaceId && !project.trashedAt && !project.purgedAt));
-    if (!bridge || !run) return;
-    if (['resume', 'retry', 'continue'].includes(action) && current.isOtherTaskRunning(run.projectId)) { current.notify('项目正在处理其他任务，请等待操作完成。', 'info'); return; }
-    const project = current.projects.find(item => item.id === run.projectId);
-    try { await bridge.control({ id, action, stepId, stepBudgetCents, project, connections: current.configuration.connections, models: current.configuration.models }); const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot) mergeRef.current(snapshot); }
-    catch (error) {
-      try { const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot()); if (snapshot && alive.current) mergeRef.current(snapshot); } catch { /* The original action error remains available even when refresh is unavailable. */ }
-      current.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作未完成，请检查运行记录。', 'error');
+    if (!bridge || !run) {
+      if (imageExportSize) throw Error('当前项目的桌面任务不可用，请重新读取任务。');
+      return;
     }
-    finally { if (alive.current) wakePolling.current(); }
+    if (['resume', 'retry', 'continue'].includes(action) && current.isOtherTaskRunning(run.projectId)) {
+      const message = '项目正在处理其他任务，请等待操作完成。';
+      if (imageExportSize) throw Error(message);
+      current.notify(message, 'info');
+      return;
+    }
+    const project = current.projects.find(item => item.id === run.projectId);
+    try {
+      await bridge.control({ id, action, stepId, stepBudgetCents, ...(imageExportSize ? { imageExportSize } : {}), project, connections: current.configuration.connections, models: current.configuration.models });
+    }
+    catch (error) {
+      if (imageExportSize) throw error;
+      current.notify(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '操作未完成，请检查运行记录。', 'error');
+    } finally {
+      try {
+        const snapshot = await (bridge.pollSnapshot ? bridge.pollSnapshot(-1) : bridge.snapshot());
+        if (snapshot && alive.current) mergeRef.current(snapshot);
+      } catch { /* Refresh errors do not change the result of the task action. */ }
+      if (alive.current) wakePolling.current();
+    }
   };
   const workspaceProjectIds = new Set(options.projects.filter(project => project.workspaceId === options.workspaceId && !project.purgedAt).map(project => project.id));
   const visibleRuns = useMemo(() => {
@@ -222,6 +237,7 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     readStartResult: projectId => starts.read(projectId),
     pause(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'pause'); else simulation.pause(id); },
     resume(id, stepBudgetCents) { const run = liveRunsRef.current.find(item => item.id === id); if (run) void liveControl(id, ['failed', 'interrupted'].includes(run.status) ? 'continue' : 'resume', undefined, stepBudgetCents); else simulation.resume(id, stepBudgetCents); },
+    resumeResizedImage: window.desktop?.runtime ? (id, size) => liveControl(id, 'resume', undefined, undefined, size) : undefined,
     cancel(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'cancel'); else simulation.cancel(id); },
     retry(id, stepId) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'retry', stepId); else simulation.retry(id, stepId); },
     async importFiles(projectId) { return window.desktop?.runtime ? window.desktop.runtime.importFiles(projectId) : []; },

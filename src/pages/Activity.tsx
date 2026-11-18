@@ -22,6 +22,7 @@ import type { TaskOrganizeAction } from '../lib/bulk-task-management';
 import { canOrganizeRun } from '../lib/task-visibility';
 import { registerEditorSession } from '../lib/editor-session-guard';
 import './operations.css';
+import { workflowReviewState } from '../lib/workflow-review';
 import './activity.css';
 import '../components/studio-run.css';
 
@@ -36,32 +37,50 @@ function TaskRow({ run, props, bulkMode, selected, locked, onSelect, openRequest
   }, [openRequest]);
   const project = props.projects.find(item => item.id === run.projectId);
   const archived = Boolean(run.hiddenAt || run.trashedAt);
-  const action = taskNextAction(run);
+  const review = workflowReviewState(run);
+  const group = taskGroup(run);
   const planning = run.purpose === 'automation-plan';
   const steps = run.snapshot.steps.filter(step => step.enabled);
+  const currentStep = run.snapshot.steps[run.stepIndex];
   const localExport = isLocalExportRun(run);
   const completeCount = steps.filter(step => run.attempts.filter(attempt => attempt.stepId === step.id).at(-1)?.status === 'complete').length;
-  const Icon = run.status === 'running' ? LoaderCircle : run.status === 'complete' ? CheckCircle2 : taskGroup(run) === 'attention' ? CircleAlert : Clock3;
-  const canOpenResult = !archived && project && action === 'project';
+  const currentStepLabel = currentStep?.enabled && group !== 'finished' ? currentStep.name : undefined;
+  const Icon = run.status === 'running' ? LoaderCircle : run.status === 'complete' ? CheckCircle2 : group === 'attention' ? CircleAlert : Clock3;
+  const statusLabel = review === 'quality-failed' ? '独立检查未通过' : review === 'blocked' ? '检查需要处理' : review === 'manual' ? '等待人工检查'
+    : planning && run.status === 'complete' ? '方案已准备好' : taskStatusLabel(run);
+  const canOpenResult = !archived && !!project && !run.referenceIssue && (run.status === 'complete' || review === 'manual') && taskNextAction(run) === 'project';
+  const problem = run.error || (run.referenceIssue ? '参考资料需要处理' : '');
   const detailLabel = archived ? '查看与恢复' : planning ? '查看方案与记录'
-    : canOpenResult ? '步骤与更多操作' : run.status === 'running' ? '查看进度'
-    : run.status === 'waiting-review' ? '查看检查步骤' : taskGroup(run) === 'attention' ? '查看原因与处理方式' : '查看结果与步骤';
+    : canOpenResult ? '任务详情' : review === 'quality-failed' ? '查看质检原因'
+    : run.status === 'running' ? '查看进度' : review === 'manual' ? '查看检查步骤'
+    : group === 'attention' ? '查看与处理' : '查看结果与步骤';
   const detailId = `task-detail-${run.id}`;
   function toggleDetails() { onStopFollowing?.(); setExpanded(value => !value); }
-  return <article ref={row} tabIndex={-1} data-task-id={run.id} className={`panel activity-task ${taskGroup(run)}${selected ? ' bulk-selected-task' : ''}`}>
+  return <article ref={row} tabIndex={-1} data-task-id={run.id} className={`panel activity-task ${group}${selected ? ' bulk-selected-task' : ''}`}>
     {bulkMode && <label className="bulk-selection-label bulk-task-check"><input type="checkbox" aria-label={`选择任务 ${run.id}`} checked={!!selected} disabled={locked || !canOrganizeRun(run)} onChange={event => onSelect?.(event.target.checked)} />{canOrganizeRun(run) ? '选择任务' : '运行中或等待处理，暂不能整理'}</label>}
     <div className="activity-task-summary">
-      <span className={`activity-task-icon ${run.status}`}><Icon size={21} className={run.status === 'running' ? 'spin' : undefined} /></span>
-      <div className="activity-task-name"><div><strong>{project?.name || '项目已移出当前列表'}</strong><span className={`activity-status ${run.status}`}>{planning && run.status === 'complete' ? '方案已准备好' : taskStatusLabel(run)}</span><span className="activity-mode">{planning ? 'AI方案规划' : localExport ? '本地导出' : run.mode === 'live' ? '真实调用' : '模拟'}</span></div><p>{run.workflowName}</p><small>{planning && run.status === 'complete' ? '这次只整理方案，尚未制作文档或图片。' : run.status === 'running' ? run.pauseRequested ? '当前请求结束后暂停' : `正在处理：${run.snapshot.steps[run.stepIndex]?.name || '整理结果'}` : run.error ? '此任务需要处理，展开可查看原因和继续方式' : `${completeCount} / ${steps.length} 步已完成`}</small></div>
-      <div className="activity-task-cost"><span>{localExport ? '未调用模型' : run.mode === 'live' ? '调用花费' : '模拟费用'}</span><CostTotal summary={summarizeCosts(runCostRecords(run, props.ledger))} /><small>{Number.isNaN(Date.parse(run.updatedAt)) ? run.updatedAt : new Date(run.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small></div>
+      <div className="activity-task-name">
+        <span className={`activity-status ${review === 'quality-failed' ? 'failed' : run.status}`}><Icon size={14} className={run.status === 'running' ? 'spin' : undefined} />{statusLabel}</span>
+        <div className="activity-task-title"><strong>{project?.name || '项目已移出当前列表'}</strong><span>{run.workflowName}</span></div>
+        {(steps.length > 0 || currentStepLabel || run.pauseRequested) && <div className="activity-task-progress">
+          {steps.length > 0 && <><progress aria-label="任务步骤进度" value={completeCount} max={steps.length} /><span>{completeCount} / {steps.length} 步已完成</span></>}
+          {run.pauseRequested ? <span>当前请求结束后暂停</span> : currentStepLabel && <span>{currentStepLabel}</span>}
+        </div>}
+        {problem && !expanded && <p className="activity-task-problem" title={problem}>{problem}</p>}
+      </div>
+      <div className="activity-task-cost">
+        <span>{planning ? 'AI 规划' : localExport ? '本地导出' : run.mode === 'live' ? '实际花费' : '模拟费用'}</span>
+        <CostTotal summary={summarizeCosts(runCostRecords(run, props.ledger))} />
+        <small>{Number.isNaN(Date.parse(run.updatedAt)) ? run.updatedAt : new Date(run.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small>
+      </div>
       <div className="activity-task-controls">
-        {canOpenResult && <button className="btn btn-primary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}>{run.status === 'waiting-review' ? '检查并交付' : '查看成品'}<ArrowRight size={15} /></button>}
-        <button type="button" className={canOpenResult ? 'activity-detail-toggle' : 'btn btn-secondary'} aria-label={`${expanded ? '收起' : '展开'}任务详情 ${run.id}`} aria-expanded={expanded} aria-controls={detailId} onClick={toggleDetails}>
+        {canOpenResult && <button type="button" className="btn btn-primary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}>{review === 'manual' ? '检查并交付' : '查看成品'}<ArrowRight size={15} /></button>}
+        <button type="button" className={canOpenResult ? 'activity-detail-toggle' : 'btn btn-secondary activity-detail-toggle'} aria-label={`${expanded ? '收起' : '展开'}任务详情 ${run.id}`} aria-expanded={expanded} aria-controls={detailId} onClick={toggleDetails}>
           {expanded ? '收起详情' : detailLabel}<ChevronDown size={15} className={expanded ? 'is-open' : ''} />
         </button>
       </div>
     </div>
-    {expanded && <div id={detailId} className="activity-task-detail">{planning && <div className="activity-planning-context"><span>方案规划不会直接生成成品。可以回首页继续讨论并确认创建，再明确运行制作。</span><button className="btn btn-secondary" onClick={() => props.navigate('overview', run.projectId)}>回首页继续搭建<ArrowRight size={14} /></button></div>}<WorkflowRunCard props={props} run={run} /></div>}
+    {expanded && <div id={detailId} className="activity-task-detail">{planning && <div className="activity-planning-context"><button className="btn btn-secondary" onClick={() => props.navigate('overview', run.projectId)}>回对话继续完善方案<ArrowRight size={14} /></button></div>}<WorkflowRunCard props={props} run={run} embedded /></div>}
   </article>;
 }
 
@@ -113,14 +132,14 @@ export function Activity(props: PageProps) {
   }
   const groups = [{ value: 'all', label: '全部任务', Icon: ListTodo }, { value: 'attention', label: '需要处理', Icon: CircleAlert }, { value: 'running', label: '执行中', Icon: LoaderCircle }, { value: 'finished', label: '已结束', Icon: CheckCircle2 }] as const;
   return <div className="op-page activity-page">
-    <div className="page-heading"><div><h1 className="page-title">任务中心</h1><p className="page-description">先看需要处理的任务，再查看进度和成品。</p></div><div className="activity-heading-actions"><button type="button" className="btn btn-secondary" aria-pressed={bulkMode} disabled={bulkBusy} onClick={() => { setBulkMode(value => !value); setSelectedIds(new Set()); }}>{bulkMode ? '退出批量整理' : '批量整理任务'}</button><button className="btn btn-secondary" aria-expanded={showBatch} onClick={() => setShowBatch(value => !value)}>批量生产<ChevronDown size={14} /></button><button className="btn btn-secondary" onClick={() => navigate('workflows')}>管理工作流<ChevronRight size={14} /></button></div></div>
+    <div className="page-heading"><h1 className="page-title">任务中心</h1><div className="activity-heading-actions"><button type="button" className="btn btn-secondary" aria-pressed={bulkMode} disabled={bulkBusy} onClick={() => { setBulkMode(value => !value); setSelectedIds(new Set()); }}>{bulkMode ? '退出批量整理' : '批量整理任务'}</button><button className="btn btn-secondary" aria-expanded={showBatch} onClick={() => setShowBatch(value => !value)}>批量生产<ChevronDown size={14} /></button><button className="btn btn-secondary" onClick={() => navigate('workflows')}>管理工作流<ChevronRight size={14} /></button></div></div>
     {showBatch && <BatchProductionPanel workspaceId={props.workspaceId} workflows={props.configuration.workflows} projects={props.projects} configuration={props.configuration} ledger={props.ledger} notify={props.notify} onProjectsCreated={props.onBatchProjectsCreated} onOpenProject={project => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)} />}
     {workflowRunner.runs.length > 0 ? <>
       <div className="activity-status-grid" role="group" aria-label="按任务状态筛选">{groups.map(({ value, label, Icon }) => <button key={value} className={activeGroup === value ? 'active' : ''} aria-pressed={activeGroup === value} onClick={() => { stopFollowing(); setGroup(value); }}><span><Icon size={18} />{label}</span><strong>{scoped.filter(run => value === 'all' || taskGroup(run) === value).length}</strong></button>)}</div>
       <section className="activity-list-section"><TaskScopeFilter runs={workflowRunner.runs} value={taskScope} onChange={value => { stopFollowing(); setTaskScope(value); }} />
         <div className="activity-toolbar"><label className="activity-search"><Search size={17} /><input aria-label="搜索任务" placeholder="搜索项目、工作流或异常原因" value={query} onChange={event => { stopFollowing(); setQuery(event.target.value); }} /></label><Select aria-label="筛选任务项目" value={projectId} onValueChange={value => { stopFollowing(); setProjectId(value); }} options={[{ value: 'all', label: '所有项目' }, ...projects.map(project => ({ value: project.id, label: project.name }))]} /><span>{filtered.length} 个任务</span></div>
         {bulkMode && <div className="bulk-organize-toolbar"><strong>已选 {selectedRuns.length} 个任务</strong><button type="button" className="btn btn-ghost" disabled={bulkBusy || !selectable.length} onClick={() => setSelectedIds(new Set(selectable.map(run => run.id)))}>{selectable.length === 100 ? '选择前100个可整理任务' : '选择全部可整理任务'}</button><button type="button" className="btn btn-ghost" disabled={bulkBusy || !selectedRuns.length} onClick={() => setSelectedIds(new Set())}>清除任务选择</button>{taskScope === 'visible' ? <button type="button" className="btn btn-secondary" disabled={bulkBusy || !workflowRunner.manageRun || !selectedRuns.some(run => taskCanOrganizeAs(run, 'hide'))} onClick={() => requestBulk('hide')}>批量隐藏任务</button> : <button type="button" className="btn btn-secondary" disabled={bulkBusy || !workflowRunner.manageRun || !selectedRuns.some(run => taskCanOrganizeAs(run, 'restore'))} onClick={() => requestBulk('restore')}>批量恢复任务</button>}{taskScope !== 'trash' && <button type="button" className="btn btn-secondary" disabled={bulkBusy || !workflowRunner.manageRun || !selectedRuns.some(run => taskCanOrganizeAs(run, 'trash'))} onClick={() => requestBulk('trash')}>批量移入任务回收站</button>}<span>只整理已结束记录；每次最多整理100项，不取消在途模型。</span></div>}{bulkMessage && <p className="bulk-organize-result" role="status">{bulkMessage}</p>}{filtered.length ? <TaskRunList key={`${props.workspaceId}-${taskScope}-${activeGroup}-${projectId}-${query}-${openedTask?.token || ''}`} runs={filtered} initialRunId={followingRun?.id} followRunId={followingRun?.id} onPageChange={stopFollowing} renderRun={run => <TaskRow props={props} run={run} openRequest={followingRun?.id === run.id ? openedTask?.token : undefined} onStopFollowing={followingRun?.id === run.id ? stopFollowing : undefined} bulkMode={bulkMode} selected={selectedIds.has(run.id)} locked={bulkBusy} onSelect={checked => selectRun(run.id, checked)} />} /> : <div className="panel activity-filter-empty"><Search size={28} /><h3>{query || activeGroup !== 'all' || projectId !== 'all' ? '没有符合筛选条件的任务' : taskScope === 'hidden' ? '没有已隐藏任务' : taskScope === 'trash' ? '任务回收站为空' : '当前没有显示的任务'}</h3><p>隐藏和回收仅整理任务记录，费用和生成文件仍保留。</p><button className="btn btn-secondary" onClick={() => { stopFollowing(); setQuery(''); setGroup('all'); setProjectId('all'); setTaskScope('visible'); }}>查看全部当前任务</button></div>}
-      </section><p className="activity-footnote">继续中断任务或重试会重新请求模型；已经发生的费用始终保留。任务中的步骤、日志和恢复操作可按需展开。</p>
+      </section>
     </> : <section className="panel activity-empty" aria-label="任务记录为空">
       <span className="activity-empty-icon"><ListTodo size={30} /></span><h2>还没有执行记录</h2><p>在项目工作台生成或精修后，执行进度、结果与费用记录会显示在这里。</p><p>下面的操作只创建或打开项目、查看流程，不会开始模型调用。</p>
       {selected && <label className="activity-empty-project"><span>选择要打开的项目</span><Select aria-label="任务空态关联项目" value={selected.id} onValueChange={setEmptyProjectId} options={projects.map(project => ({ value: project.id, label: project.name }))} /></label>}

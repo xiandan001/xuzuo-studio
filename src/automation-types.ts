@@ -3,7 +3,9 @@ import type { Project, Workspace } from './types';
 
 export type AutomationTrigger = 'manual' | 'schedule' | 'reference-imported' | 'run-completed';
 export interface AutomationContinuation { previousRuleId: string; previousRunId: string; }
-export interface AutomationIntent { token: string; workspaceId: string; projectId: string; workflowId: string; input: string; }
+export type AutomationIntent =
+  | { token: string; workspaceId: string; projectId: string; workflowId: string; input: string }
+  | { token: string; workspaceId: string; tab: 'decisions' };
 export interface AutomationRule { preparation?: { questions: string[]; answers: Record<string, string> }; creationKey?: string; id: string; workspaceId: string; projectId: string; workflowId: string; name: string; enabled: boolean; trigger: AutomationTrigger; intervalMinutes?: number; sourceWorkflowId?: string; input: string; variables: Record<string, string>; updatedAt: string; lastTriggeredAt?: string; }
 export type AutomationRuleDraft = Omit<AutomationRule, 'id' | 'updatedAt' | 'lastTriggeredAt'>;
 export interface AutomationEvent { id: string; workspaceId: string; projectId: string; trigger: AutomationTrigger; sourceId: string; input?: string; attachmentIds?: string[]; createdAt: string; }

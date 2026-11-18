@@ -67,7 +67,7 @@ export interface LiveRuntimeBridge {
   snapshot: () => Promise<LiveSnapshot>;
   pollSnapshot?: (afterRevision: number) => Promise<LiveSnapshot | null>;
   runDetail?: (id: string) => Promise<WorkflowRun>;
-  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue'; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
+  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue'; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; imageExportSize?: { width: number; height: number }; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
   reconcile: (input: { entryId: string; costCents: number }) => Promise<void>;
   recalculateCosts?: () => Promise<{ updated: number }>;
   importFiles: (projectId?: string) => Promise<ArtifactMetadata[]>;

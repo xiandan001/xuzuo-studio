@@ -35,6 +35,7 @@ function usedImageIds(document) {
 function createOfficeExporter({ writeArtifact, readArtifact, loadModule = require, convertImage, renderOffice, fitWallpaper, fitEngineering }) {
   return async input => {
     if (!input || !['ppt', 'word', 'excel', 'image'].includes(input.kind)) throw new Error('请选择受支持的实际导出格式。');
+    if (input.imageExportSize !== undefined) return require('./resized-image-export.cjs').createResizedImageExporter({ writeArtifact, readArtifact, fitEngineering })(input);
     if (input.engineeringReferenceId !== undefined) return require('./engineering-export.cjs').createEngineeringExporter({ writeArtifact, readArtifact, fitEngineering })(input);
     if (input.wallpaperTarget !== undefined) return require('./wallpaper-export.cjs').createWallpaperExporter({ writeArtifact, readArtifact, fitWallpaper })(input);
     if (input.kind === 'image') {

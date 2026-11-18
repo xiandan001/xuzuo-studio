@@ -7,6 +7,7 @@ import type { ArtifactMetadata, ArtifactPreview } from '../live-types';
 import { homeCreationArtifacts, homeCreationDocumentSource, homeCreationPreviewUrl, homeCreationProgress } from '../lib/home-creation';
 import { runCostRecords, summarizeCosts } from '../lib/cost-display';
 import { workflowPublicError } from '../lib/studio-run';
+import { workflowReviewState } from '../lib/workflow-review';
 import { CostTotal } from './CostAmount';
 import { HomeResultFilePicker } from './HomeResultFilePicker';
 import { HomeProductionRecovery } from './HomeProductionRecovery';
@@ -92,7 +93,12 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const file = files.find(item => item.id === selectedId) || files[0] || documentSource;
   const project = props.projects.find(item => item.id === run.projectId && item.workspaceId === props.workspaceId && !item.trashedAt && !item.purgedAt);
   if (!project || run.workspaceId !== props.workspaceId || run.purpose === 'automation-plan' || run.mode !== 'live') return null;
-  const Icon = icons[kind], progress = homeCreationProgress(actual), finished = ['complete', 'waiting-review'].includes(actual.status), needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
+  const Icon = icons[kind], progress = homeCreationProgress(actual);
+  const reviewState = workflowReviewState(actual);
+  const blocked = reviewState === 'quality-failed' || reviewState === 'blocked';
+  const finished = actual.status === 'complete' || reviewState === 'manual';
+  const needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
+  const openSteps = () => props.onOpenTask ? props.onOpenTask(actual.id, project.id) : props.navigate('activity', project.id);
   async function save() {
     if (!file || pending.current) return;
     const requested = currentScope.current; pending.current = true; setSaving(true); setError('');
@@ -105,14 +111,16 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
       <div className={`creation-production-icon ${finished && file ? 'is-ready' : ''}`}>{finished && file ? <Check size={18} /> : actual.status === 'running' ? <LoaderCircle size={18} className="spin" /> : <Icon size={19} />}</div>
       <div>
         <div className="creation-production-stage">制作进度</div>
-        <h3>{finished && documentSource ? '文稿已生成 · 尚未导出' : finished && file ? '作品已生成' : actual.status === 'waiting-review' ? '等待检查当前内容' : finished ? '制作已结束' : actual.status === 'cancelled' ? '本次制作已取消' : needsHelp ? '制作需要你处理' : '正在按方案制作'}</h3>
+        <h3>{reviewState === 'quality-failed' ? '质检未通过' : blocked ? '制作需要检查' : finished && documentSource ? '文稿已生成 · 尚未导出' : finished && file ? '作品已生成' : finished ? '制作已结束' : actual.status === 'cancelled' ? '本次制作已取消' : needsHelp ? '制作需要你处理' : '正在按方案制作'}</h3>
         {actual.status === 'failed' && actual.snapshot.steps[actual.stepIndex] && <p className="creation-production-failed-step">失败步骤 · {progress.label}</p>}
-        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${actual.status === 'waiting-review' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : needsHelp ? actual.error || '已完成的步骤和费用保留，不会自动重发模型请求。' : `正在处理：${progress.label}`}</p>
+        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${reviewState === 'manual' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : needsHelp || blocked ? actual.error || '已完成的步骤和费用保留。' : `正在处理：${progress.label}`}</p>
       </div>
       <div className="creation-production-cost"><span>本次制作</span><CostTotal summary={summarizeCosts(runCostRecords(actual, props.ledger))} /></div>
     </header>
-    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div><button type="button" className="text-button" onClick={() => props.navigate('activity', project.id)}>查看步骤{needsHelp ? '与恢复操作' : ''}<ArrowRight size={13} /></button></div>}
+    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div><button type="button" className={blocked ? 'btn btn-primary' : 'text-button'} onClick={openSteps}>{reviewState === 'quality-failed' ? '查看质检原因' : needsHelp ? '查看步骤与恢复操作' : '查看步骤'}<ArrowRight size={13} /></button></div>}
     {needsHelp && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
+    {reviewState === 'manual' && <div className="creation-production-progress"><button type="button" className="btn btn-primary" onClick={openSteps}>检查并交付<ArrowRight size={14} /></button></div>}
+    {file && blocked && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
     {file && finished && <><HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}导出{names[kind]}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}
     {finished && !file && <div className="creation-production-empty"><p>这次制作尚无可用的{names[kind]}成品。已保存的步骤、源内容和费用仍保留。</p><button type="button" className="btn btn-secondary" onClick={() => props.navigate('activity', project.id)}>查看结果与步骤</button></div>}
     {error && <p className="home-plan-error" role="alert">{error}</p>}

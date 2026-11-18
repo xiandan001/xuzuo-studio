@@ -1,5 +1,13 @@
 # macOS 开发与验收
 
+## 2.12.6 简化自动化流程与本地交付（2026-11-18）
+
+流程模板、自动化规则和任务中心采用紧凑列表。模板的步骤、规则设置和待办备注可按需展开，保留使用、运行和处理入口。手动触发后直接跟踪返回的执行记录。已有进行中的任务可从规则行打开。
+
+对话和任务中心展示独立质检的状态、原因与当前样稿。符合条件的单张 PNG 可在人工核对后按指定尺寸在本地导出，保留透明通道、原图和费用，再进入最终人工验收。
+
+Apple Silicon 实机续跑原样片至 6 / 6，在交付步骤把 1254 × 1254 的透明 PNG 适配为 512 × 512，核对保存和重启后的成品预览。3736 项测试通过，4 项 Windows 专用用例跳过。安装与验收见 `outputs/release-v2.12.6/automation-validation.json`。
+
 ## 2.12.5 修复制作卡显示和失败续跑（2026-11-18）
 
 创作对话的制作卡独立加载进度条、费用、恢复操作和成品预览样式。进度或预览展开时，已在对话底部的视图会跟随内容，向上查看历史时保留位置。
@@ -172,7 +180,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.5/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.6/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -193,7 +201,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.5/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.6/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

@@ -10,6 +10,7 @@ const { illustrationAssets, composeDocumentImages } = require('./document-illust
 const { createRunHistoryStore, validateRecords, runSummary } = require('./run-history-store.cjs');
 const { evaluateQuality, repairInput } = require('./automation-quality.cjs');
 const { imageExportAssets } = require('./image-export-sources.cjs');
+const { imageExportSizeError, singleProducedPng, readResizeSource } = require('./resized-image-export.cjs');
 const { startFingerprint } = require('./live-start.cjs');
 const { replacementReview, assertRefinementSource } = require('./refinement-fork.cjs');
 const { validateResumeImageSources } = require('./resume-image-sources.cjs');
@@ -53,6 +54,21 @@ function latestBefore(run, index) {
 }
 function validResults(run) {
   return run.snapshot.steps.filter(step => step.enabled && (modelStep(step) || step.kind === 'animation-compose')).map(step => run.attempts.filter(attempt => attempt.stepId === step.id && attempt.status === 'complete').at(-1)).filter(Boolean);
+}
+function imageResizeAtReview(run) {
+  if (run.mode !== 'live' || run.status !== 'waiting-review' || run.snapshot.outputKind !== 'image' || run.retryStepOnly || run.supersededByRunId || run.attempts.some(attempt => attempt.status === 'running')) return;
+  const step = run.snapshot.steps[run.stepIndex];
+  if (!step?.enabled || step.kind !== 'vision' || step.role !== 'reviewer' || !step.qualityGate) return;
+  const attempt = run.attempts.findLast(item => item.stepId === step.id);
+  const verdict = run.qualityReviews?.findLast(item => item.stepId === step.id);
+  if (attempt?.status !== 'complete' || verdict?.attemptId !== attempt.id || verdict.passed !== false) return;
+  const exportIndex = run.snapshot.steps.findIndex((item, index) => index > run.stepIndex && item.enabled);
+  const exporter = run.snapshot.steps[exportIndex];
+  const remaining = run.snapshot.steps.slice(exportIndex + 1).filter(item => item.enabled);
+  if (exporter?.kind !== 'export' || exporter.imageExportSize !== undefined || exporter.wallpaperTarget !== undefined || exporter.engineeringReferenceId !== undefined || remaining.length !== 1 || remaining[0].kind !== 'manual-review') return;
+  const source = singleProducedPng(run, exporter, run.stepIndex);
+  const previous = step.inputSource === 'previous' && step.referenceArtifactIds === undefined && latestBefore(run, run.stepIndex);
+  if (source && previous?.artifacts?.some(file => file.id === source.id)) return { exportIndex, source };
 }
 function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, readBeadDocument, readAnimationDocument, localAnimationStep, localAnimationStatus, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined, readReferenceText = extractReferenceText }) {
   const historyStore = createRunHistoryStore({ directory, fileSystem });
@@ -266,14 +282,20 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
             const textResult = step.contentSourceStepId ? results.find(item => item.stepId === step.contentSourceStepId) : [...results].reverse().find(item => item.summary && run.snapshot.steps.some(source => source.id === item.stepId && !['planner', 'reviewer'].includes(source.role) && ['text', 'transcription'].includes(source.kind)));
             const assets = imageExportAssets(run, step, results) || (record.request.project.kind === 'image' && step.contentSourceStepId ? results.filter(item => item.stepId === step.contentSourceStepId).flatMap(item => item.artifacts || []) : [...results.flatMap(item => item.artifacts || []), ...context.attachments]).filter(item => item.kind === 'image');
             if (step.wallpaperTarget !== undefined) attempt.sourceArtifactIds = assets.map(file => file.id);
+            if (step.imageExportSize !== undefined) {
+              const source = singleProducedPng(run, step, run.stepIndex);
+              if (!source || assets.length !== 1 || assets[0].id !== source.id) throw Error('尺寸适配的单张图片来源不匹配，原图与费用保留。');
+              attempt.sourceArtifactIds = [source.id]; attempt.modelLabel = '本地尺寸适配'; attempt.action = '本地导出';
+            }
             if (step.engineeringReferenceId !== undefined) { attempt.sourceArtifactIds = assets.map(file => file.id); attempt.engineeringSource = await require('./engineering-export.cjs').readEngineeringSource(id => artifactStore.read(id), { projectId: run.projectId, referenceId: step.engineeringReferenceId, attachmentIds: record.request.attachmentIds }); }
             if (record.request.project.kind === 'image' && step.contentSourceStepId && !assets.length) throw Error('所选最终图片步骤没有可交付的实际图片，未改用历史初稿。');
             const body = record.request.project.kind === 'image' ? `图像交付：${record.request.project.name}。实际图片见本项目已生成产物；交付前核对尺寸、文字和使用范围。` : step.contentSourceStepId ? textResult?.summary || '' : step.inputSource === 'project' ? context.input : textResult?.summary || context.input;
             const media = results.flatMap(item => item.artifacts || []).filter(item => ['audio', 'video'].includes(item.kind));
             if (record.request.project.kind === 'image' && !assets.length) attempt.artifacts = [await artifactStore.write({ name: `${record.request.project.name}-实际结果.md`, mimeType: 'text/markdown', text: body, runId: run.id, projectId: run.projectId }), ...media];
-            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId, ...(step.wallpaperTarget !== undefined ? { wallpaperTarget: step.wallpaperTarget, signal: controller.signal } : {}), ...(step.engineeringReferenceId !== undefined ? { engineeringReferenceId: step.engineeringReferenceId, engineeringSource: attempt.engineeringSource, attachmentIds: record.request.attachmentIds, signal: controller.signal } : {}) }), ...media];
+            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId, ...(step.wallpaperTarget !== undefined ? { wallpaperTarget: step.wallpaperTarget, signal: controller.signal } : {}), ...(step.imageExportSize !== undefined ? { imageExportSize: step.imageExportSize, signal: controller.signal } : {}), ...(step.engineeringReferenceId !== undefined ? { engineeringReferenceId: step.engineeringReferenceId, engineeringSource: attempt.engineeringSource, attachmentIds: record.request.attachmentIds, signal: controller.signal } : {}) }), ...media];
             if (!attempt.artifacts.length) throw new Error('交付步骤没有产生文件。');
             attempt.summary = attempt.engineeringSource ? `已按主原图 ${attempt.engineeringSource.width} × ${attempt.engineeringSource.height} 保存 ${attempt.artifacts.length} 张工程图片，原图和付费编辑结果保留；请对照检查细节。` : step.wallpaperTarget ? `已在本地适配 ${attempt.artifacts.length} 张 ${step.wallpaperTarget.width} × ${step.wallpaperTarget.height} PNG壁纸，原图与调用费用保留。` : `已生成 ${attempt.artifacts.length} 份实际交付文件，请打开检查。`;
+            if (step.imageExportSize !== undefined) attempt.summary = `已在本地保存 ${step.imageExportSize.width} × ${step.imageExportSize.height} PNG，保留原图和已有费用，请检查尺寸、画面和透明边缘。`;
           } else {
             if (!recovered) await assertArtifactRefinementTarget(record.request, artifactStore);
             const model = record.request.models.find(item => item.id === step.modelConfigId);
@@ -551,7 +573,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         return structuredClone(run);
       });
     },
-    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, project, connections, models }) {
+    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, imageExportSize, project, connections, models }) {
       await ready;
       const target = records.get(id); if (!target) throw new Error('运行记录不存在。');
       return mutateProject(target.run.projectId, async () => {
@@ -570,6 +592,14 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           if (!['continue', 'resume'].includes(action) || previousLimit === undefined) throw new Error('只有达到输出 Token 上限的失败模型步骤可以调整后续跑。');
           if (!Number.isSafeInteger(stepMaxOutputTokens) || stepMaxOutputTokens <= previousLimit || stepMaxOutputTokens > 16384) throw new Error(`本次续跑的输出 Token 上限需要是大于 ${previousLimit} 且不超过 16384 的整数。`);
         }
+        let resize;
+        if (imageExportSize !== undefined) {
+          const issue = imageExportSizeError(imageExportSize);
+          if (issue) throw Error(issue);
+          resize = action === 'resume' && stepBudgetCents === undefined && !controllers.has(id) && !pumps.has(id) && imageResizeAtReview(run);
+          if (!resize) throw Error('只有独立图片检查未通过、下一步为单张PNG本地导出且随后仅需人工验收的任务可以调整导出尺寸。');
+          await readResizeSource(artifactId => artifactStore.read(artifactId), resize.source.id, run.projectId, run.id);
+        }
         if (action === 'cancel' && ACTIVE.has(run.status)) {
           update(record, { status: 'cancelled', pauseRequested: false });
           for (const attempt of run.attempts) if (attempt.status === 'waiting-review') { attempt.status = 'cancelled'; attempt.summary = '人工检查已取消，既有结果和费用保留。'; }
@@ -580,6 +610,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
         if (project && (project.id !== run.projectId || project.kind !== run.snapshot.outputKind)) throw new Error('续跑项目与原运行不匹配。');
         const nextRequest = safeRequest({ ...record.request, project: project || record.request.project, connections: connections || record.request.connections, models: models || record.request.models });
         const nextRun = structuredClone(run);
+        if (resize) nextRun.snapshot.steps[resize.exportIndex].imageExportSize = { width: imageExportSize.width, height: imageExportSize.height };
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
         if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
         if (project && project.workspaceId !== run.workspaceId) { nextRun.originWorkspaceId ||= run.workspaceId; nextRun.workspaceId = project.workspaceId; nextRun.snapshot.workspaceId = project.workspaceId; nextRequest.workflow = nextRun.snapshot; }
@@ -594,7 +625,7 @@ function createLiveWorkflowEngine({ directory, credentials, modelRuntime, artifa
           nextRun.stepIndex = index; nextRun.retryStepOnly = true;
         } else {
           const current = nextRun.snapshot.steps[nextRun.stepIndex];
-          const cancelledLocalExport = run.status === 'cancelled' && !run.supersededByRunId && (current?.kind === 'animation-compose' || current?.kind === 'export' && (current.wallpaperTarget !== undefined || current.engineeringReferenceId !== undefined));
+          const cancelledLocalExport = run.status === 'cancelled' && !run.supersededByRunId && (current?.kind === 'animation-compose' || current?.kind === 'export' && (current.wallpaperTarget !== undefined || current.engineeringReferenceId !== undefined || current.imageExportSize !== undefined));
           if (!(['resume', 'continue'].includes(action) && (['paused', 'failed', 'interrupted'].includes(run.status) || cancelledLocalExport))) throw new Error('当前状态不能执行这个操作。');
         }
         const busy = [...records.values()].some(item => {

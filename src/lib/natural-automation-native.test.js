@@ -13,19 +13,21 @@ const { remap, createIdMap } = require('../../electron/backup-format.cjs');
 const { mergeAutomationBackup } = require('../../electron/automation-backup.cjs');
 const { ruleCreationFingerprint } = require('../../electron/automation-rule-identity.cjs');
 const { parseNaturalAutomationPlan } = require('../../electron/natural-automation-plan.runtime.cjs');
+const { PNG: PngImage } = require('pngjs');
+const { fitEngineeringPng } = require('../../electron/wallpaper-worker.cjs');
 const roots = [], services = [], releases = [], base = path.resolve('work');
 const input = { id: 'plan-one', workspaceId: 'workspace', projectId: 'project', modelConfigId: 'text-model', credentialId: 'qa-metadata-key', input: '帮我制作一张产品宣传图，自动检查并精修一轮' };
 const plan = { version: 1, name: '产品宣传', objective: '生成并精修', outputKind: 'image', trigger: { type: 'manual' }, steps: [{ kind: 'image-generation', name: '初稿', instruction: '制作产品海报' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['画面可读'], constraints: [], maxRepairs: 1, questions: [], unsupported: [] };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64');
 afterEach(async () => { for (const release of releases.splice(0)) release(); for (const service of services.splice(0).reverse()) await service.shutdown(); for (const root of roots.splice(0)) { if (path.dirname(root) !== base || (await fs.realpath(root)).toLowerCase() !== root.toLowerCase()) throw Error('Unowned natural automation fixture'); await fs.rm(root, { recursive: true, force: true }); } });
 async function until(read, accept) { const deadline = Date.now() + 4000; while (Date.now() < deadline) { const result = await read(); if (accept(result)) return result; await new Promise(resolve => setTimeout(resolve, 5)); } throw Error('Planning fixture did not settle'); }
-async function fixture({ response = JSON.stringify(plan), startOverride, controlOverride, fetchOverride } = {}) {
+async function fixture({ response = JSON.stringify(plan), startOverride, controlOverride, fetchOverride, fitEngineering } = {}) {
   const root = await fs.mkdtemp(path.join(base, 'natural-automation-')); roots.push(root); const calls = [];
   const credentials = { list: async () => [{ id: 'qa-metadata-key', name: 'fixture', connectionId: 'connection', enabled: true }], withSecret: async (_key, _connection, action) => action('isolated-fixture-value') };
   const project = { id: 'project', workspaceId: 'workspace', name: '已登记项目', kind: 'image', description: '', costCents: 0, version: 0, status: 'draft' };
   const connection = { id: 'connection', name: 'isolated', protocol: 'openai-chat', providerId: 'custom', baseUrl: 'http://127.0.0.1:9000/v1', enabled: true };
   const models = [{ id: 'text-model', name: 'isolated-text', modelId: 'qa-text', connectionId: 'connection', enabled: true, capabilities: ['text', 'vision'], pricing: { unit: 'million-tokens', currency: 'CNY', input: '1000', output: '1000' } }, { id: 'image-model', name: 'isolated-image', modelId: 'qa-image', connectionId: 'connection', enabled: true, capabilities: ['image-generation', 'image-editing'], pricing: { unit: 'image', currency: 'CNY', input: '', output: '0.10' } }];
-  const artifacts = createArtifactStore({ directory: path.join(root, 'artifacts') });
+  const artifacts = createArtifactStore({ directory: path.join(root, 'artifacts'), fitEngineering });
   const fetchImpl = async (url, options) => { calls.push({ url, options }); if (fetchOverride) return fetchOverride(url, options); return new Response(JSON.stringify({ id: 'qa-response-' + calls.length, choices: [{ message: { content: response }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 } }), { status: 200, headers: { 'content-type': 'application/json' } }); };
   const runtime = createModelRuntime({ credentialStore: credentials, artifactStore: artifacts, directory: root, fetchImpl });
   const engine = createLiveWorkflowEngine({ directory: root, credentials, artifactStore: artifacts, modelRuntime: runtime }); services.push(engine);
@@ -239,6 +241,72 @@ describe('真实引擎内的自然语言规划', () => {
     const before = await deliverySource({ projectId: 'project', kind: 'image', artifactIds: [] }); expect(before.files.map(file => file.id)).toEqual([edited.id]);
     await f.engine.control({ id: run.id, action: 'resume' }); await f.service.start(input); await until(() => f.service.read(input), value => value.status === 'failed');
     const after = await deliverySource({ projectId: 'project', kind: 'image', artifactIds: [] }); expect(after.sourceHash).toBe(before.sourceHash); expect(after.files).toEqual(before.files);
+  });
+  it('独立图片验收拦下后明确调整本地导出尺寸，保留透明度、原图和收费，继续等待最终人工验收', async () => {
+    const bitmap = new PngImage({ width: 1254, height: 1254 });
+    for (let y = 340; y < 914; y++) for (let x = 340; x < 914; x++) bitmap.data.set([230, 120, 163, 128], (y * bitmap.width + x) * 4);
+    const original = PngImage.sync.write(bitmap), f = await fixture({ fitEngineering: input => fitEngineeringPng(input), fetchOverride: async url => new Response(JSON.stringify(url.endsWith('/images/generations') ? { data: [{ b64_json: original.toString('base64') }] } : {
+      id: 'review-size', choices: [{ message: { content: '{"passed":false,"score":75,"issues":["需要512×512透明PNG"],"summary":"尺寸待调整"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }) });
+    const workflow = { ...f.workflow, steps: [
+      { ...f.workflow.steps[0], imageBackground: 'transparent' },
+      { id: 'review', name: '独立检查实际结果', kind: 'vision', role: 'reviewer', inputSource: 'previous', enabled: true, prompt: '检查实际图片是否满足验收要求。', modelConfigId: 'text-model', credentialId: 'qa-metadata-key', qualityGate: { maxRepairs: 0, minScore: 80 } },
+      { id: 'export', name: '生成实际交付文件', kind: 'export', inputSource: 'previous', enabled: true, prompt: '', contentSourceStepId: 'make' },
+      { id: 'manual', name: '检查并确认实际交付', kind: 'manual-review', inputSource: 'previous', enabled: true, prompt: '' },
+    ] };
+    const input = { project: f.project, workflow, models: f.models, connections: [f.connection], input: '制作一张512×512透明PNG', variables: {}, attachmentIds: [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true };
+    const preconfigured = structuredClone(input); preconfigured.workflow.steps[2].imageExportSize = { width: 512, height: 512 };
+    await expect(f.engine.start(preconfigured)).rejects.toThrow('仅可在续跑中'); expect(f.calls).toHaveLength(0);
+    const { id } = await f.engine.start(input);
+    await f.engine.drain();
+    const before = await f.engine.snapshot(), old = before.runs.find(run => run.id === id);
+    expect(old).toMatchObject({ status: 'waiting-review', stepIndex: 1, qualityReviews: [{ passed: false }] });
+    expect(f.calls).toHaveLength(2);
+    const source = old.attempts[0].artifacts[0], target = { width: 512, height: 512 };
+    await expect(f.engine.control({ id, action: 'continue', imageExportSize: target })).rejects.toThrow('独立图片检查');
+    for (const size of [{ width: 512 }, { height: 512 }, { width: 512.5, height: 512 }, { width: 8192, height: 8192 }, { ...target, fit: 'cover' }]) await expect(f.engine.control({ id, action: 'resume', imageExportSize: size })).rejects.toThrow('宽度和高度');
+    await f.engine.control({ id, action: 'resume', imageExportSize: target }); await f.engine.drain();
+    const next = await f.engine.runDetail(id), exportAttempt = next.attempts.find(item => item.stepId === 'export'), resized = exportAttempt.artifacts[0];
+    expect(next, next.error).toMatchObject({ status: 'waiting-review', stepIndex: 3, qualityReviews: old.qualityReviews });
+    expect(next.snapshot.steps[2].imageExportSize).toEqual(target);
+    expect(next.attempts.slice(0, 2)).toEqual(old.attempts);
+    expect(exportAttempt).toMatchObject({ status: 'complete', sourceArtifactIds: [source.id], costCents: 0, costState: 'not-incurred', action: '本地导出' });
+    expect(resized).toMatchObject({ projectId: f.project.id, runId: id, mimeType: 'image/png' });
+    expect(resized.id).not.toBe(source.id);
+    const fitted = PngImage.sync.read((await f.artifacts.read(resized.id)).buffer);
+    expect(fitted).toMatchObject(target); expect(fitted.data[3]).toBe(0); expect([...fitted.data.subarray((256 * fitted.width + 256) * 4, (256 * fitted.width + 256) * 4 + 4)]).toEqual([230, 120, 163, 128]);
+    expect((await f.artifacts.read(source.id)).buffer).toEqual(original);
+    const { createDeliverySource } = require('../../electron/delivery-source.cjs');
+    const deliverySource = createDeliverySource({ artifactStore: f.artifacts, liveEngine: f.engine, workspaceStorage: { projectDirectory: async () => ({}), list: async () => ({ projects: [{ projectId: 'project' }] }) }, inspectImage: async bytes => ({ transparency: PngImage.sync.read(bytes).data[3] === 0 ? 'present' : 'opaque' }) });
+    const delivery = await deliverySource({ projectId: f.project.id, kind: 'image', artifactIds: [] });
+    expect(delivery.files.map(file => file.id)).toEqual([resized.id]); expect(delivery.errors).toEqual([]); expect(delivery.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.stringMatching(/^alpha-/), status: 'passed' })]));
+    const oldSelection = await deliverySource({ projectId: f.project.id, kind: 'image', artifactIds: [source.id] }); expect(oldSelection.errors).toHaveLength(1);
+    await expect(f.engine.control({ id, action: 'resume', imageExportSize: target })).rejects.toThrow('独立图片检查');
+    await f.engine.control({ id, action: 'resume' }); await f.engine.drain();
+    expect((await f.engine.runDetail(id)).status).toBe('complete');
+    expect((await f.engine.snapshot()).ledger).toEqual(before.ledger); expect(f.calls).toHaveLength(2);
+    await f.engine.shutdown();
+    const reopened = createLiveWorkflowEngine({ directory: f.root, credentials: f.credentials, artifactStore: f.artifacts, modelRuntime: f.runtime }); services.push(reopened);
+    const saved = await reopened.runDetail(id); expect(saved.snapshot.steps[2].imageExportSize).toEqual(target); expect(saved.attempts.find(item => item.stepId === 'export').artifacts[0].id).toBe(resized.id); expect((await reopened.snapshot()).ledger).toEqual(before.ledger);
+  });
+  it.each(['unreviewed-image', 'trailing-model'])('本地尺寸适配拒绝不匹配的图片来源和会继续收费的后续流程：%s', async conflict => {
+    const f = await fixture({ fitEngineering: input => fitEngineeringPng(input), fetchOverride: async url => new Response(JSON.stringify(url.endsWith('/images/generations') ? { data: [{ b64_json: PNG.toString('base64') }] } : {
+      choices: [{ message: { content: '{"passed":false,"score":75,"issues":["尺寸待调整"]}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }) });
+    const make = f.workflow.steps[0];
+    const workflow = { ...f.workflow, steps: [make,
+      ...(conflict === 'unreviewed-image' ? [{ ...make, id: 'latest' }] : []),
+      { id: 'review', name: '独立检查', kind: 'vision', role: 'reviewer', inputSource: 'previous', enabled: true, prompt: '检查图片', modelConfigId: 'text-model', credentialId: 'qa-metadata-key', qualityGate: { maxRepairs: 0 } },
+      { id: 'export', name: '本地交付', kind: 'export', inputSource: 'previous', enabled: true, prompt: '', contentSourceStepIds: [make.id] },
+      ...(conflict === 'trailing-model' ? [{ ...make, id: 'late-paid' }] : []),
+      { id: 'manual', name: '最终人工验收', kind: 'manual-review', inputSource: 'previous', enabled: true, prompt: '' },
+    ] };
+    const { id } = await f.engine.start({ project: f.project, workflow, models: f.models, connections: [f.connection], input: '制作512×512图片', variables: {}, attachmentIds: [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+    await f.engine.drain();
+    const before = await f.engine.runDetail(id), calls = f.calls.length;
+    expect(before, before.error).toMatchObject({ status: 'waiting-review', qualityReviews: [{ passed: false }] });
+    await expect(f.engine.control({ id, action: 'resume', imageExportSize: { width: 512, height: 512 } })).rejects.toThrow('独立图片检查');
+    expect(await f.engine.runDetail(id)).toEqual(before); expect(f.calls).toHaveLength(calls);
   });
   it('精修失败显式续跑仍使用已完成原图和看图意见，原失败费用流水不会消失', async () => {
     let edits = 0; const pictures = [];
