@@ -1,5 +1,11 @@
 # macOS 开发与验收
 
+## 2.12.4 修复启动时配置同步打断派工（2026-11-18）
+
+如果工作区配置在任务落盘和启动之间更新，已确认尚未调用执行器的任务退回队列并保留派单标识。调度器在配置同步后重新校验。执行器已接收或旧版留下的未知状态仍按原记录核对。
+
+70 项定向回归通过。实际 macOS 签名包在本机模型替身下验证了自动恢复，以及旧版未知派工先读取状态再按原标识继续。完整证据见 `outputs/release-v2.12.4/queued-execution-validation.json`。
+
 ## 2.12.3 修复手动任务滞留队列（2026-11-18）
 
 同项目的旧任务只剩最后一步人工检查时，已经手动提交的任务沿用原任务编号和派单标识继续执行，旧任务可保留待检查状态。运行中、暂停中或检查之后还有步骤的任务继续使用项目锁。定时和事件触发仍按原顺序等待。
@@ -158,7 +164,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.3/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.4/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -179,7 +185,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.3/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.4/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

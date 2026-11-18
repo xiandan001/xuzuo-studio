@@ -71,6 +71,35 @@ describe('自动化事件、派工与恢复', () => {
     expect(jobs.find(job => job.id === queued.id).status).toBe('complete');
     expect(jobs.filter(job => job.status === 'queued')).toHaveLength(1);
   });
+  it('上下文刷新与派工落盘重叠时，未提交的任务沿用原编号重回队列', async () => {
+    let entered, release, held = false;
+    const writingClaim = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const f = await setup({ fileSystem: { ...fs, async writeFile(filename, contents, options) {
+      if (!held && JSON.parse(contents).jobs?.some(job => job.status === 'dispatching')) {
+        held = true;
+        entered();
+        await gate;
+      }
+      return fs.writeFile(filename, contents, options);
+    } } });
+    const job = await f.center.trigger({ ruleId: (await f.add()).id });
+    try {
+      await writingClaim;
+      const next = structuredClone(f.context);
+      next.projects[0].description = '刷新后的项目描述';
+      const sync = f.center.syncContext(next);
+      release();
+      await sync;
+      await f.settle();
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]).toMatchObject({ dispatchKey: job.dispatchKey, project: { description: next.projects[0].description } });
+      const { jobs, decisions } = await f.center.snapshot('workspace');
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({ id: job.id, status: 'running', dispatchKey: job.dispatchKey });
+      expect(decisions).toEqual([]);
+    } finally { release(); }
+  });
   it('派工尚未确认时仅读取不会重发，无记录时保持待办直到明确继续', async () => {
     const requests = []; let calls = 0; const f = await setup({ start: async request => { requests.push(request); calls++; throw Error('lost acknowledgement'); } }); const rule = await f.add(); await f.center.trigger({ ruleId: rule.id }); await f.settle();
     const decision = (await f.center.snapshot('workspace')).decisions[0]; await f.center.resolve({ id: decision.id, action: 'refresh' }); await f.settle(); expect(calls).toBe(1); expect((await f.center.snapshot('workspace')).jobs[0].status).toBe('decision');

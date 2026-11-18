@@ -18,7 +18,7 @@ const empty = () => ({ version: 1, revision: 0, context: { workspaces: [], proje
 function createAutomationCenter({ directory, liveEngine, assertAdmission = async () => true, start, control, fileSystem = fs, clock = () => Date.now(), onChanged = () => undefined }) {
   let purgeGuard = () => false, purgeReady = Promise.resolve();
   const filename = path.join(path.resolve(directory), 'automation-center-v1.json');
-  let state = empty(), issue = '', writes = Promise.resolve(), pumping, closed = false, timer, contextSynced = false;
+  let state = empty(), issue = '', writes = Promise.resolve(), pumping, closed = false, timer, contextSynced = false, contextGeneration = 0;
   let runtimeRevision = -1, watched = ''; const runtimeRuns = new Map();
   const reservations = new Map(), dispatchClaims = new Map();
   const readinessEpochs = new Map();
@@ -278,18 +278,47 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         reviewPending(state, pending.projectId, pending.id, replacement?.jobId, passiveReviews) ||
         snapshot.runs.some(run => run.projectId === pending.projectId && run.id !== replacement?.runId && active(run) && !passiveReviews?.has(run.id)) ||
         state.jobs.some(job => job.id !== pending.id && job.id !== replacement?.jobId && job.projectId === pending.projectId && (['dispatching', 'running'].includes(job.status) || job.cancellationPending))) continue;
-      let request; const claim = Symbol(pending.projectId); dispatchClaims.set(pending.projectId, claim);
+      const generation = contextGeneration;
+      const claim = Symbol(pending.projectId);
+      dispatchClaims.set(pending.projectId, claim);
       try {
         const rule = pending.ruleSnapshot || state.rules.find(rule => rule.id === pending.ruleId); if (!rule) throw Error('来源规则不存在。');
-        const context = jobContext(state, pending); if (!await assertAdmission(context.project)) continue;
+        const context = jobContext(state, pending);
+        if (!await assertAdmission(context.project) || closed || !contextSynced || generation !== contextGeneration) continue;
         const memories = state.memories.filter(memory => memory.workspaceId === pending.workspaceId && memory.projectId === pending.projectId).slice(-20);
         const remembered = memories.length ? `\n\n【用户明确保存的本项目偏好与决定】\n${memories.map(memory => `${memory.createdAt}：${memory.note}`).join('\n')}` : '';
         assertPreparation(rule);
-        request = safeRequest({ ...context, ...replacementRequest(replacement), models: state.context.models, connections: state.context.connections, input: pending.input + remembered, variables: rule.variables, attachmentIds: requestAttachments(pending, context.project, context.workflow), dispatchKey: pending.dispatchKey, acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
-        const claimed = await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); if (!contextSynced || !job || job.status !== 'queued' || job.cancelRequestedAt || reservations.has(job.projectId) || dispatchClaims.get(job.projectId) !== claim || archived(next, job.projectId) || reviewPending(next, job.projectId, job.id, replacement?.jobId, passiveReviews)) return false; jobContext(next, job); job.status = 'dispatching'; job.updatedAt = now(); return true; });
+        const request = safeRequest({ ...context, ...replacementRequest(replacement), models: state.context.models, connections: state.context.connections, input: pending.input + remembered, variables: rule.variables, attachmentIds: requestAttachments(pending, context.project, context.workflow), dispatchKey: pending.dispatchKey, acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+        const canDispatch = (value, job) => !closed && contextSynced && generation === contextGeneration && job && !job.cancelRequestedAt &&
+          !reservations.has(job.projectId) && dispatchClaims.get(job.projectId) === claim && !archived(value, job.projectId) &&
+          !reviewPending(value, job.projectId, job.id, replacement?.jobId, passiveReviews);
+        const claimed = await mutate(next => {
+          const job = next.jobs.find(job => job.id === pending.id);
+          if (!canDispatch(next, job) || job.status !== 'queued') return false;
+          jobContext(next, job);
+          job.status = 'dispatching'; job.updatedAt = now();
+          return true;
+        });
         if (!claimed) continue;
-        if (closed || !contextSynced || reservations.has(pending.projectId) || state.jobs.find(job => job.id === pending.id)?.cancelRequestedAt || archived(state, pending.projectId)) continue;
-        if (replacement) await resolveContinuation(state, rule, { previousRuleId: replacement.ruleId, previousRunId: replacement.runId }, liveEngine, replacement);
+        const claimedJob = () => state.jobs.find(job => job.id === pending.id);
+        if (replacement && canDispatch(state, claimedJob())) await resolveContinuation(state, rule, { previousRuleId: replacement.ruleId, previousRunId: replacement.runId }, liveEngine, replacement);
+        const admitted = claimedJob();
+        if (!canDispatch(state, admitted) || admitted.status !== 'dispatching') {
+          // At this point start has never been invoked. Retain the original key
+          // and put our claim back, rather than reporting a lost acknowledgement.
+          await mutate(next => {
+            const job = next.jobs.find(job => job.id === pending.id);
+            if (dispatchClaims.get(pending.projectId) !== claim || job?.status !== 'dispatching' ||
+              job.dispatchKey !== pending.dispatchKey || job.runId || job.cancelRequestedAt) return false;
+            const ruleAvailable = next.rules.some(rule => rule.id === job.ruleId &&
+              next.context.workflows.some(workflow => workflow.id === rule.workflowId && workflow.workspaceId === rule.workspaceId));
+            job.status = archived(next, job.projectId) || !ruleAvailable ? 'cancelled' : 'queued';
+            if (job.status === 'cancelled') resolveCards(next, job.id, 'reject');
+            job.updatedAt = now();
+            return true;
+          });
+          continue;
+        }
         const run = await start(request, { allowPendingFinalReview });
         if (!run || !validId(run.id) || run.projectId !== pending.projectId || run.dispatchKey && run.dispatchKey !== pending.dispatchKey) throw Error('派工返回的运行编号或项目归属无效，请重新读取后台记录。');
         await mutate(next => { const job = next.jobs.find(job => job.id === pending.id); job.runId = run.id; job.nativeStatus = run.status; if (job.cancelRequestedAt) cancellationCard(next, job, '已关联运行记录，正在核对取消结果。'); else if (run.status === 'complete' || run.status === 'cancelled') terminalJob(next, job, run); else if (['waiting-review', 'failed', 'interrupted', 'paused'].includes(run.status)) addDecision(next, job, run.status === 'waiting-review' ? 'review' : 'failure', '检查这次执行结果', run.error || `后台状态：${run.status}`); else job.status = 'running'; job.updatedAt = now(); });
@@ -355,6 +384,7 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
     },
     async reload() { if (pumping) await pumping; await writes; await load(); tick(); },
     async syncContext(input) {
+      const generation = ++contextGeneration;
       contextSynced = false;
       if (!input || !['workspaces', 'projects', 'workflows', 'models', 'connections'].every(key => Array.isArray(input[key]))) throw Error('自动化上下文不完整。');
       const incoming = { workspaces: input.workspaces.map(({ id, name, removedAt }) => ({ id, name, removedAt })), projects: input.projects.map(({ id, workspaceId, kind, name, description, costCents, budgetCents, trashedAt, referenceFiles, updatedAt }) => ({ id, workspaceId, kind, name, description, costCents, budgetCents, trashedAt, referenceFiles, updatedAt })), workflows: structuredClone(input.workflows), connections: safeRequest({ project: {}, workflow: { steps: [] }, connections: input.connections, models: input.models }).connections, models: safeRequest({ project: {}, workflow: { steps: [] }, connections: input.connections, models: input.models }).models };
@@ -378,7 +408,8 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
           for (const job of next.jobs.filter(job => job.ruleId === rule.id && job.status === 'queued')) { job.status = 'cancelled'; job.updatedAt = now(); resolveCards(next, job.id, 'reject'); changed = true; }
         }
         return changed;
-      }); contextSynced = true; tick();
+      });
+      if (generation === contextGeneration) { contextSynced = true; tick(); }
     },
     async queuedBindings() {
       await ready; await writes;
