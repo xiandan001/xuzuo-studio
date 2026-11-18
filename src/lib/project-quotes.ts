@@ -1,3 +1,5 @@
+import { notifyBackupSourceSaved } from './backup-change-events';
+
 export interface QuoteFields { minutes: string; rate: string; remaining: string; other: string; reserve: string; fee: string; profit: string; price: string; variable: string; }
 export type QuoteMode = 'single' | 'repeat';
 export interface ProjectQuote {
@@ -29,6 +31,7 @@ export function saveProjectQuote(source: QuoteStoreSource, quote: ProjectQuote, 
   if (current.raw !== expectedRaw) throw new Error('这个项目的报价已在另一处变化，请先读取已保存草稿；当前输入仍保留。');
   const raw = JSON.stringify(quote);
   storage.setItem(projectQuoteKey(quote.workspaceId, quote.projectId), raw);
+  notifyBackupSourceSaved(quote.workspaceId);
   return raw;
 }
 export interface LegacyQuote { key: string; raw: string; inputs?: QuoteFields; mode?: QuoteMode; scope?: 'live' | 'simulation'; projectName?: string; error?: string; }

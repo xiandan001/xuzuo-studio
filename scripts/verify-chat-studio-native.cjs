@@ -8,6 +8,7 @@ const { app, BrowserWindow, ipcMain, nativeTheme, nativeImage } = require('elect
 const { Worker } = require('node:worker_threads');
 const root = path.resolve(__dirname, '..'), sha = value => createHash('sha256').update(value).digest('hex'), began = Date.now();
 const workspaceId = 'chat-ui-workspace', channels = [], calls = [], held = new Set();
+const queueTransport = { conversationId: '', text: '', loseAck: false, blockReads: false };
 const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], homeBounds: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 }, attachmentChecks: {} };
 let owner, temporary, window, service, cpuTasks, inputFiles, production, finishing = false, slowCount = 0, importCount = 0;
 const workerTasks = [];
@@ -26,7 +27,7 @@ function prepare() {
   report.dependencyMode = dependencyRoot === path.join(root, 'node_modules') ? 'locked-root' : 'owned-local-build-runtime';
   assert.equal(owner.dist, path.join(root, 'work/chat-studio-dist')); assert.equal(owner.output, path.join(root, 'work/chat-studio-output')); ordinary(owner.output, true); ordinary(owner.dist, true);
   for (const [name, hash] of Object.entries(owner.files)) { assert(!name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(owner.dist, name))), hash); }
-  for (const [name, hash] of Object.entries(owner.sources)) { assert((name === 'vite.config.ts' || /^(?:src|electron|scripts)\//.test(name)) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
+  for (const [name, hash] of Object.entries(owner.sources)) { assert((name === 'vite.config.ts' || name === 'assets/library/catalog.json' || /^(?:src|electron|scripts)\//.test(name)) && !name.split('/').includes('..')); assert.equal(sha(fs.readFileSync(path.join(root, name))), hash); }
   app.setName('序作聊天独立离线验收'); app.setPath('userData', path.join(temporary, 'profile')); app.setPath('sessionData', path.join(temporary, 'profile')); app.disableHardwareAcceleration(); app.commandLine.appendSwitch('disable-background-networking'); nativeTheme.themeSource = 'light';
 }
 async function finish(error) {
@@ -58,13 +59,17 @@ async function select(label, value) { await click(`[aria-label="${label}"]`); aw
 async function chooseScenario(name) { await click('[aria-label="选择使用场景"]'); await click(`[aria-label="使用场景 ${name}"]`); }
 async function localAttachments() { await click('[aria-label="添加聊天附件"]'); await click('[aria-label="附件来源"] button', '本机文件'); }
 async function step(name, action) { report.phase = name; process.stdout.write('Chat studio step: ' + name + '\n'); const start = Date.now(); await action(); report.steps.push({ name, ms: Date.now() - start }); }
-async function currentConversation() { let items; await until(async () => { items = await service.list(workspaceId); return items.length > 0; }, 'conversation index created'); return service.read({ workspaceId, conversationId: items[0].id }); }
+async function currentConversation() {
+  let conversationId; const key = 'xuzuo-disclosure-v1:workspace:' + workspaceId + ':chat-conversation';
+  await until(async () => { conversationId = await evaluate('JSON.parse(localStorage.getItem(' + JSON.stringify(key) + ') || null)?.value'); return typeof conversationId === 'string' && /^[A-Za-z0-9-]{1,160}$/.test(conversationId); }, 'actual selected conversation persisted');
+  return service.read({ workspaceId, conversationId });
+}
 async function settled(count, status = 'complete') { await until(async () => { const value = await currentConversation(); return value.turns.length === count && value.turns.at(-1).status === status; }, `turn ${count} ${status}`); await dom(`document.querySelectorAll('.workspace-chat-turn').length===${count}&&!document.querySelector('[aria-label="停止回复"]')`, 'renderer adopted final turn'); }
 function syntheticStream(body, signal) {
   const contentText = value => typeof value === 'string' ? value : (value || []).filter(part => part.type === 'text').map(part => part.text || '').join('\n');
   const last = contentText(body.messages.at(-1).content), plan = contentText(body.messages[0].content).includes('自动化方案规划员');
   const imagePlan = plan && last.includes('附件验收');
-  const isSlow = last.startsWith('慢慢说明') && ++slowCount === 1;
+  const isSlow = last.startsWith('队列验收首条流式') || last.startsWith('慢慢说明') && ++slowCount === 1;
   const full = plan ? JSON.stringify({ version: 1, name: imagePlan ? '橘猫参考图宣传方案' : '橘猫产品合作说明书', objective: imagePlan ? '依据本轮已提供的参考图规划完整宣传图片。' : '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: imagePlan ? 'image' : 'word', trigger: { type: 'manual' }, steps: [{ kind: imagePlan ? 'image-generation' : 'text', name: imagePlan ? '按原图制作宣传图' : '撰写完整说明正文', instruction: imagePlan ? '以本轮原图为依据，保留产品主体和可见细节，不添加未经确认的价格。' : '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['内容完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? require('./fixtures/chat-markdown-sample.cjs').text : calls.length > 6 ? '已收到本轮实际附图或资料，附件内容已进入这次请求。' : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
   let controller, stopped = false, timer, release; const encoder = new TextEncoder();
   const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (release) held.delete(release); };
@@ -99,12 +104,16 @@ async function initialize() {
   } });
   const connection = { id: 'chat-connection', name: '离线合成服务', providerId: 'openai', protocol: 'openai-chat', baseUrl: 'https://chat-offline.invalid/v1', enabled: true, status: 'configured' };
   const model = { id: 'chat-model', name: 'GPT-6.1 Terra · 离线夹具', modelId: 'gpt-6.1-terra', connectionId: connection.id, enabled: true, capabilities: ['text', 'vision'], pricing: { unit: 'million-tokens', currency: 'CNY', input: '1000', output: '1000' } };
-  const credential = { id: 'chat-metadata-key', connectionId: connection.id, name: '独立测试账户', lastFour: 'test', enabled: true, updatedAt: '' };
+  const credential = { id: 'chat-metadata-key', connectionId: connection.id, name: '独立测试账户', lastFour: 'test', enabled: true, updatedAt: '2026-11-17T00:00:00.000Z' };
   production = await require('./fixtures/chat-studio-production.cjs').createFixtureProduction({ directory: path.join(temporary, 'production-data'), workspaceId, png, nativeImage, credential });
-  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), ...require('../electron/chat-project-attachments.cjs').createChatProjectAttachments(production.artifactStore), readArtifact: production.readArtifact, readRun: id => production.engine.runDetail(id), readAsset: async input => { assert.equal(input.workspaceId, workspaceId); assert.equal(input.assetId, 'fixture-local-asset'); assert.equal(input.builtin, false); return { name: '验收本地纹理.png', mimeType: 'image/png', buffer: await fsp.readFile(inputFiles.png) }; }, extractText: file => cpuTasks.run('reference-text', { name: file.name, mimeType: file.mimeType, buffer: file.buffer }), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
+  service = require('../electron/chat-service.cjs').createChatService({ directory: path.join(temporary, 'data'), getQueuedBindings: async () => ({ connections: structuredClone([connection, production.connection]), models: structuredClone([model, production.model]), credentials: structuredClone([credential, production.credential]) }), ...require('../electron/chat-project-attachments.cjs').createChatProjectAttachments(production.artifactStore), readArtifact: production.readArtifact, readRun: id => production.engine.runDetail(id), readAsset: async input => { assert.equal(input.workspaceId, workspaceId); assert.equal(input.assetId, 'fixture-local-asset'); assert.equal(input.builtin, false); return { name: '验收本地纹理.png', mimeType: 'image/png', buffer: await fsp.readFile(inputFiles.png) }; }, extractText: file => cpuTasks.run('reference-text', { name: file.name, mimeType: file.mimeType, buffer: file.buffer }), credentialStore: { withSecret: async (id, connectionId, action) => { assert.equal(id, credential.id); assert.equal(connectionId, connection.id); return action('offline-fixture-value-not-an-api-key'); } }, fetchImpl: async (url, options) => { assert.equal(url, connection.baseUrl + '/chat/completions'); const body = JSON.parse(options.body); assert.equal(body.stream, true); calls.push({ url, body }); return syntheticStream(body, options.signal); }, onChanged: event => { if (window && !window.isDestroyed()) window.webContents.send('chat:changed', event); } });
   const fixtureUrl = pathToFileURL(path.join(owner.dist, 'chat-studio.html')).href;
   const handle = (name, action) => { const channel = 'runtime:' + name; channels.push(channel); ipcMain.handle(channel, (event, input) => { assert.equal(event.sender, window.webContents); assert.equal(event.senderFrame, window.webContents.mainFrame); assert.equal(event.senderFrame.url, fixtureUrl); return action(input); }); };
-  for (const method of ['list', 'read', 'start', 'cancel', 'flush', 'ledger', 'search', 'manage', 'selectTarget', 'inspectTarget', 'importBytes', 'importAsset', 'importProjectArtifact', 'linkProduction', 'linkExport']) handle('chat-' + method, input => service[method](input));
+  for (const method of ['list', 'start', 'cancel', 'flush', 'ledger', 'search', 'manage', 'selectTarget', 'inspectTarget', 'importBytes', 'importAsset', 'importProjectArtifact', 'linkProduction', 'linkExport']) handle('chat-' + method, input => service[method](input));
+  handle('chat-read', input => { if (queueTransport.blockReads && input.conversationId === queueTransport.conversationId) throw Error('独立合成故障：排队读取暂不可用'); return service.read(input); });
+  handle('chat-enqueue', async input => { const value = await service.enqueue(input); if (queueTransport.loseAck && input.conversationId === queueTransport.conversationId && input.text === queueTransport.text) { queueTransport.loseAck = false; throw Error('独立合成故障：排队确认回包丢失'); } return value; });
+  handle('chat-manage-queue', input => service.manageQueue(input));
+  handle('chat-cancel-search', input => service.cancelSearch(input));
   handle('chat-import-attachments', input => { assert.equal(input.workspaceId, workspaceId); importCount++; return service.importAttachments({ ...input, paths: importCount === 1 ? [inputFiles.png, inputFiles.text, inputFiles.docx] : [inputFiles.text, inputFiles.docx] }); });
   handle('chat-preview-attachment', input => service.previewAttachment(input));
   handle('chat-attach-to-project', input => { assert.equal(input.projectId, production.project.id); return service.attachToProject(input); });
@@ -204,8 +213,10 @@ async function scenario() {
     await click('.workspace-chat-message-actions button', '重新回答'); await settled(4); const retried = await currentConversation(); assert.equal(retried.turns.at(-1).sourceTurnId, priorId); assert.equal(calls.length, 4); for (const row of cancelledLedger) assert.deepEqual((await service.ledger(workspaceId)).find(item => item.id === row.id), row); assert.equal((await service.ledger(workspaceId)).length, 4); report.stopAndRetryPreserveCosts = true;
   });
   await step('chat-to-validated-plan-before-folder-selection', async () => {
-    const before = calls.length; await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案'); await dom(`document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('宣传图')`, 'chat converted to plan scenario'); assert.equal(calls.length, before); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
+    const before = calls.length, quoted = (await currentConversation()).turns.at(-1), draft = '转制作前已经写下的独立要求'; await fill(draft); await click('.workspace-chat-thread>div:last-child .workspace-chat-message-actions button', '转为制作方案');
+    await dom(`document.querySelector('[aria-label="引用的沟通内容"]')`, 'original reply is referenced without replacing the current draft'); assert.equal(await evaluate(`document.querySelector('[aria-label="聊天内容"]').value`), draft); await dom(`document.querySelector('[aria-label="选择使用场景"]')?.textContent.includes('宣传图')`, 'chat converted to plan scenario'); assert.equal(calls.length, before); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
     await chooseScenario('Word 文档'); await fill('把刚才的想法整理为两页Word说明，包含目标与步骤。'); await click('[aria-label="发送聊天消息"]'); await until(() => held.size > 0 && calls.length === before + 1, 'held partial plan response'); await dom(`document.querySelector('.workspace-chat-working')?.textContent.includes('完整校验')`, 'plan partial hidden behind validation state'); assert.equal(await evaluate(`document.querySelectorAll('.home-plan-primary button').length`), 0); assert.equal((await currentConversation()).turns.at(-1).plan, undefined);
+    const planContent = calls.at(-1).body.messages.at(-1).content, planText = typeof planContent === 'string' ? planContent : planContent.filter(item => item.type === 'text').map(item => item.text).join('\n'); assert(planText.includes(quoted.text)); assert(planText.includes('把刚才的想法整理为两页Word说明')); report.planReferencePreservesDraft = true;
     for (const release of [...held]) release(); await settled(5); await dom(`document.querySelector('.home-plan h3')?.textContent==='橘猫产品合作说明书'`, 'complete plan visible without a project'); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0'); assert.equal((await currentConversation()).turns.at(-1).plan.outputKind, 'word'); report.planValidatedBeforeDisplay = true;
     await click('.home-plan-primary .btn-primary'); await dom(`document.querySelector('.chat-fixture').dataset.folderRequests==='1'`, 'only explicit production asks for a folder'); assert.equal(calls.length, before + 1); report.deferredProjectSelection = true;
   });
@@ -274,6 +285,14 @@ async function scenario() {
   assert.equal(calls.length, 9); report.refinementSyntheticPostCount = production.calls.length;
   await require('./fixtures/chat-markdown-acceptance.cjs').verifyMarkdownReply({ service, workspaceId, calls, report, evaluate, click, dom, step });
   assert.equal(calls.length, 9);
+  await require('./fixtures/chat-studio-queue.cjs').verifyChatQueue({ service, workspaceId, calls, held, report, evaluate, dom, click, fill, select, chooseScenario, until, step, currentConversation, inputFiles, outputDirectory: owner.output,
+    armLostQueueAck({ conversationId, text }) { Object.assign(queueTransport, { conversationId, text, loseAck: true, blockReads: true }); },
+    restoreQueueReads() { queueTransport.blockReads = false; },
+    reload: async () => { window.reload(); },
+    viewport: async (width, theme) => { window.setContentSize(width, 1000); nativeTheme.themeSource = theme; if (await evaluate('document.documentElement.dataset.appTheme') !== theme) await click('button', theme === 'dark' ? '切到黑夜' : '切到白天'); await dom('document.documentElement.dataset.appTheme===' + JSON.stringify(theme), 'queue appearance paint'); await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); },
+    capture: async () => { window.webContents.invalidate(); await delay(100); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }); return { buffer: image.toPNG(), ...image.getSize() }; },
+  });
+  assert.equal(report.baselineSyntheticPostCount, 9); assert.equal(report.queueSyntheticPostCount, 2); assert.equal(calls.length, 11); assert.equal(report.fakePostCount, 11);
 }
 async function run() {
   prepare(); await app.whenReady(); await initialize();

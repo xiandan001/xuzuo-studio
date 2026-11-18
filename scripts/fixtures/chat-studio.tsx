@@ -28,7 +28,7 @@ function Fixture() {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { document.documentElement.dataset.chatCopiedText = text; document.documentElement.dataset.chatCopyCount = String(Number(document.documentElement.dataset.chatCopyCount || '0') + 1); } } });
     return () => { if (original) Object.defineProperty(navigator, 'clipboard', original); else Reflect.deleteProperty(navigator, 'clipboard'); };
   }, []);
-  useLayoutEffect(() => { setAppearanceMode(dark ? 'dark' : 'light'); setAppearancePalette('violet'); }, [dark]);
+  useLayoutEffect(() => { document.documentElement.dataset.reduceMotion = 'true'; setAppearanceMode(dark ? 'dark' : 'light'); setAppearancePalette('violet'); }, [dark]);
   useEffect(() => { let current = true; void window.desktop!.runtime.status().then(value => { if (current) setContext(value as unknown as Context); }); return () => { current = false; }; }, []);
   useEffect(() => { if (!runs.some(run => run.status === 'running')) return; let current = true; const timer = setInterval(() => { void window.desktop!.runtime.snapshot().then(value => { if (current) setRuns(value.runs); }); }, 300); return () => { current = false; clearInterval(timer); }; }, [runs.some(run => run.status === 'running')]);
   const props = useMemo(() => {

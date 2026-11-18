@@ -42,6 +42,10 @@ function TaskRow({ run, props, bulkMode, selected, locked, onSelect, openRequest
   const localExport = isLocalExportRun(run);
   const completeCount = steps.filter(step => run.attempts.filter(attempt => attempt.stepId === step.id).at(-1)?.status === 'complete').length;
   const Icon = run.status === 'running' ? LoaderCircle : run.status === 'complete' ? CheckCircle2 : taskGroup(run) === 'attention' ? CircleAlert : Clock3;
+  const canOpenResult = !archived && project && action === 'project';
+  const detailLabel = archived ? '查看与恢复' : planning ? '查看方案与记录'
+    : canOpenResult ? '步骤与更多操作' : run.status === 'running' ? '查看进度'
+    : run.status === 'waiting-review' ? '查看检查步骤' : taskGroup(run) === 'attention' ? '查看原因与处理方式' : '查看结果与步骤';
   const detailId = `task-detail-${run.id}`;
   function toggleDetails() { onStopFollowing?.(); setExpanded(value => !value); }
   return <article ref={row} tabIndex={-1} data-task-id={run.id} className={`panel activity-task ${taskGroup(run)}${selected ? ' bulk-selected-task' : ''}`}>
@@ -50,8 +54,11 @@ function TaskRow({ run, props, bulkMode, selected, locked, onSelect, openRequest
       <span className={`activity-task-icon ${run.status}`}><Icon size={21} className={run.status === 'running' ? 'spin' : undefined} /></span>
       <div className="activity-task-name"><div><strong>{project?.name || '项目已移出当前列表'}</strong><span className={`activity-status ${run.status}`}>{planning && run.status === 'complete' ? '方案已准备好' : taskStatusLabel(run)}</span><span className="activity-mode">{planning ? 'AI方案规划' : localExport ? '本地导出' : run.mode === 'live' ? '真实调用' : '模拟'}</span></div><p>{run.workflowName}</p><small>{planning && run.status === 'complete' ? '这次只整理方案，尚未制作文档或图片。' : run.status === 'running' ? run.pauseRequested ? '当前请求结束后暂停' : `正在处理：${run.snapshot.steps[run.stepIndex]?.name || '整理结果'}` : run.error ? '此任务需要处理，展开可查看原因和继续方式' : `${completeCount} / ${steps.length} 步已完成`}</small></div>
       <div className="activity-task-cost"><span>{localExport ? '未调用模型' : run.mode === 'live' ? '调用花费' : '模拟费用'}</span><CostTotal summary={summarizeCosts(runCostRecords(run, props.ledger))} /><small>{Number.isNaN(Date.parse(run.updatedAt)) ? run.updatedAt : new Date(run.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small></div>
-      <div className="activity-task-controls">{!archived && project && action === 'project' ? <button className="btn btn-primary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}>{run.status === 'waiting-review' ? '检查并交付' : '查看成品'}<ArrowRight size={15} /></button> : <button className="btn btn-secondary" aria-expanded={expanded} aria-controls={detailId} onClick={toggleDetails}>{archived ? '查看与恢复' : planning ? '查看方案与记录' : run.status === 'running' ? '查看进度' : run.status === 'waiting-review' ? '查看检查步骤' : taskGroup(run) === 'attention' ? '处理任务' : '查看结果与步骤'}<ChevronDown size={15} /></button>}
-        <button className="activity-detail-toggle" aria-label={`${expanded ? '收起' : '展开'}任务详情 ${run.id}`} aria-expanded={expanded} aria-controls={detailId} onClick={toggleDetails}>{expanded ? '收起详情' : '步骤与更多操作'}<ChevronDown size={13} className={expanded ? 'is-open' : ''} /></button>
+      <div className="activity-task-controls">
+        {canOpenResult && <button className="btn btn-primary" onClick={() => props.navigate(project.kind === 'image' ? 'images' : 'documents', project.id)}>{run.status === 'waiting-review' ? '检查并交付' : '查看成品'}<ArrowRight size={15} /></button>}
+        <button type="button" className={canOpenResult ? 'activity-detail-toggle' : 'btn btn-secondary'} aria-label={`${expanded ? '收起' : '展开'}任务详情 ${run.id}`} aria-expanded={expanded} aria-controls={detailId} onClick={toggleDetails}>
+          {expanded ? '收起详情' : detailLabel}<ChevronDown size={15} className={expanded ? 'is-open' : ''} />
+        </button>
       </div>
     </div>
     {expanded && <div id={detailId} className="activity-task-detail">{planning && <div className="activity-planning-context"><span>方案规划不会直接生成成品。可以回首页继续讨论并确认创建，再明确运行制作。</span><button className="btn btn-secondary" onClick={() => props.navigate('overview', run.projectId)}>回首页继续搭建<ArrowRight size={14} /></button></div>}<WorkflowRunCard props={props} run={run} /></div>}

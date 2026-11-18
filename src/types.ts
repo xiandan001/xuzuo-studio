@@ -129,6 +129,7 @@ export interface PageProps {
   onAutomateWorkflow?: (workflowId: string) => void;
   searchTarget?: import('./lib/global-search').SearchTarget;
   onSearchTargetConsumed?: (token: string) => void;
+  onOpenDocumentUnit?: (input: { workspaceId: string; projectId: string; artifactId: string; unitId: string; kind: 'word' | 'ppt' | 'excel'; sourceRevision?: number }) => void;
   onBatchProjectsCreated?: (projects: Project[]) => void;
   dataManagement?: ReactNode;
   onBindWorkspace?: () => Promise<boolean>;
@@ -177,6 +178,8 @@ export interface PageProps {
 }
 export interface DesktopBridge {
   readonly platform?: string;
+  performance?: import('./performance-types').ApplicationPerformanceBridge;
+  contentSearch?: import('./content-search-types').ContentSearchBridge;
   projectTemplates?: import('./project-template-types').ProjectTemplatesBridge;
   customerProofing?: import('./proofing-types').CustomerProofingBridge;
   chat?: import('./chat-types').ChatBridge;

@@ -1,9 +1,9 @@
 import type { EditorDocument } from '../editor-types';
 
-export function documentPreviewIds(document: EditorDocument, selectedId: string, visibleIds: string[], selectedImageId?: string): string[] {
+export function documentPreviewIds(document: EditorDocument, selectedId: string, visibleIds: string[], selectedImageId?: string, observeAllPages = false): string[] {
   const current = document.kind === 'ppt' ? document.slides.find(slide => slide.id === selectedId) || document.slides[0] : undefined;
-  const referenced = document.kind === 'word' ? new Set(document.blocks.map(block => block.imageId)) : undefined;
-  const candidates = document.kind === 'ppt' ? [current?.imageId, selectedImageId] : [selectedImageId, ...visibleIds.filter(id => referenced?.has(id))];
+  const referenced = new Set(document.kind === 'word' ? document.blocks.map(block => block.imageId) : document.slides.map(slide => slide.imageId));
+  const candidates = document.kind === 'ppt' ? [current?.imageId, selectedImageId, ...(observeAllPages ? visibleIds.filter(id => referenced.has(id)) : [])] : [selectedImageId, ...visibleIds.filter(id => referenced.has(id))];
   return [...new Set(candidates.filter((id): id is string => !!id))].slice(0, 4);
 }
 export function createDocumentImagePreviewCache(options: { maxEntries?: number; maxBytes?: number } = {}) {

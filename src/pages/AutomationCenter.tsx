@@ -26,10 +26,11 @@ export function AutomationCenter(props: PageProps) {
   const [notes, setNotes] = useState<Record<string, string>>({}), [remember, setRemember] = useState<Record<string, boolean>>({});
   const [selectedRun, setSelectedRun] = useState('');
   const [natural, setNatural] = useState(false);
+  const [recipeProjectId, setRecipeProjectId] = useState('');
   const [readinessRuleId, setReadinessRuleId] = useState('');
   const actionPending = useRef(false), scope = useRef(props.workspaceId); scope.current = props.workspaceId;
   const awaitingRecipe = useRef<{ projectId: string; name: string; input: string } | undefined>(undefined);
-  useEffect(() => { setEditor(undefined); setRecipe(false); setNatural(false); setReadinessRuleId(''); setSelectedRun(''); setNotes({}); setRemember({}); setError(''); setLimit(20); awaitingRecipe.current = undefined; }, [props.workspaceId]);
+  useEffect(() => { setEditor(undefined); setRecipe(false); setRecipeProjectId(''); setNatural(false); setReadinessRuleId(''); setSelectedRun(''); setNotes({}); setRemember({}); setError(''); setLimit(20); awaitingRecipe.current = undefined; }, [props.workspaceId]);
   useEffect(() => { setLimit(20); }, [tab]);
   useEffect(() => {
     const intent = props.automationIntent; if (!intent || intent.workspaceId !== props.workspaceId) return;
@@ -51,7 +52,7 @@ export function AutomationCenter(props: PageProps) {
   const decisions = snapshot.decisions.filter(decision => !decision.resolvedAt), projectName = (id: string) => props.projects.find(project => project.id === id)?.name || '原项目', workflowName = (id: string) => props.configuration.workflows.find(workflow => workflow.id === id)?.name || '原流程';
   function createFirstProject() {
     const workspaceId = props.workspaceId;
-    props.onCreateProject('word', { onCreated: () => { if (scope.current === workspaceId) setRecipe(true); } });
+    props.onCreateProject(undefined, { onCreated: project => { if (scope.current === workspaceId && project.workspaceId === workspaceId) { setRecipeProjectId(project.id); setRecipe(true); } } });
   }
   function needsSetup(rule: AutomationRule) {
     if (rule.preparation?.questions.some(question => !naturalQuestionAnswer(rule.preparation!.answers, question).trim())) return true;
@@ -82,6 +83,6 @@ export function AutomationCenter(props: PageProps) {
     {natural && <NaturalAutomationComposer key={props.workspaceId} props={props} onClose={() => setNatural(false)} onSaved={() => { setTab('rules'); void refresh(); }} />}
     {readinessRule && <AutomationReadinessDialog key={`${props.workspaceId}:${readinessRule.id}`} props={props} rule={readinessRule} onClose={() => setReadinessRuleId('')} onSaved={() => { void refresh(); }} />}
     {selectedRun && <AutomationRunViewer key={`${props.workspaceId}/${selectedRun}`} props={props} runId={selectedRun} onClose={() => setSelectedRun('')} />}
-    {recipe && <AutomationRecipeEditor props={props} onClose={() => setRecipe(false)} onCreated={(projectId, name, input) => { awaitingRecipe.current = { projectId, name, input }; setRecipe(false); }} />}
+    {recipe && <AutomationRecipeEditor props={props} initialProjectId={recipeProjectId} onClose={() => { setRecipe(false); setRecipeProjectId(''); }} onCreated={(projectId, name, input) => { awaitingRecipe.current = { projectId, name, input }; setRecipe(false); setRecipeProjectId(''); }} />}
   </div>;
 }

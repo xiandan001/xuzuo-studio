@@ -22,7 +22,7 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   const executionWorkflow = withCreationFoundation(workflowSelections(workflow, props.configuration));
   const projects = props.projects.filter(project => project.kind === executionWorkflow.outputKind);
   const [mode, setMode] = useState<'live' | 'simulation'>(initial?.mode || 'live');
-  const [projectId, setProjectId] = useState(projects.find(project => project.id === initial?.projectId)?.id || projects.find(project => project.id === props.activeProject.id)?.id || projects[0]?.id || '');
+  const [projectId, setProjectId] = useState(initial?.projectId || projects.find(project => project.id === props.activeProject.id)?.id || projects[0]?.id || '');
   const [input, setInput] = useState(initial?.input ?? projects.find(project => project.id === projectId)?.description ?? '');
   const [values, setValues] = useState<Record<string, string>>(initial?.variables || {});
   const [attachments, setAttachments] = useState<InputAttachment[]>(() => initial?.attachments ? structuredClone(initial.attachments) : (initial?.attachmentIds || []).map((id, index) => ({ id, name: `工作台参考文件 ${index + 1}` })));
@@ -45,9 +45,9 @@ export function RunWorkflowDialog({ props, workflow, initial, onClose, onStarted
   const promptContent = enabledSteps.map(step => step.prompt).join('\n');
   const variables = extractVariables(promptContent);
   const missingVariables = resolvePrompt(promptContent, values).missing;
-  const complete = missingVariables.length === 0 && !!input.trim() && !!projectId;
-  const requiredMessage = !projectId ? '请选择关联项目。' : !input.trim() ? '请填写本次创作需求。' : missingVariables.length ? `请填写本次变量：${missingVariables.join('、')}。` : '';
   const selectedProject = projects.find(project => project.id === projectId);
+  const complete = missingVariables.length === 0 && !!input.trim() && !!selectedProject;
+  const requiredMessage = !selectedProject ? '请选择关联项目。' : !input.trim() ? '请填写本次创作需求。' : missingVariables.length ? `请填写本次变量：${missingVariables.join('、')}。` : '';
   const requestSignature = JSON.stringify({ mode, confirmBeforeRun, project: selectedProject && { id: selectedProject.id, workspaceId: selectedProject.workspaceId, kind: selectedProject.kind, name: selectedProject.name, description: selectedProject.description, budgetCents: selectedProject.budgetCents, referenceFiles: selectedProject.referenceFiles }, projectId, input, values, files: attachments.map(file => file.id), workflow: executionWorkflow, models: props.configuration.models, connections: props.configuration.connections, credentials: props.configuration.credentials.map(({ id, connectionId, enabled }) => ({ id, connectionId, enabled })), replaceWaitingReviewRunId: initial?.replaceWaitingReviewRunId });
   const signatureRef = useRef(requestSignature); signatureRef.current = requestSignature;
   const inspectedSignature = useRef('');

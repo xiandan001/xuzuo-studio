@@ -21,10 +21,11 @@ describe('首页拼豆入口不会付费制作假网格', () => {
     const ui = await mount([project('image')], 'image'); await ui.open();
     expect(ui.onUsePrompt).toHaveBeenCalledWith(expect.objectContaining({ builtin: true, imagePreset: '拼豆', category: 'image' }), '做64×64拼豆图纸，要色号采购', 'image'); expect(ui.onCreateProject).not.toHaveBeenCalled();
   });
-  it('没有图片项目时只请求一次保存位置，回调绑定新项目而不是原文档', async () => {
+  it('没有图片项目时只创建一次目标，需求随quick回调绑定新项目而不是原文档', async () => {
     const ui = await mount([project('word', 'workspace', 'word')], 'word'); await ui.open(); await ui.open();
     expect(ui.onCreateProject).toHaveBeenCalledTimes(1); expect(ui.onUsePrompt).not.toHaveBeenCalled();
     const options = ui.onCreateProject.mock.calls[0][1] as ProjectStartOptions;
+    expect(options).toMatchObject({ quick: true, initial: { name: '拼豆图纸', description: '做64×64拼豆图纸，要色号采购' } });
     await act(async () => options.onCreated!(project('new-image')));
     expect(ui.onUsePrompt).toHaveBeenCalledWith(expect.objectContaining({ imagePreset: '拼豆' }), expect.any(String), 'new-image');
   });

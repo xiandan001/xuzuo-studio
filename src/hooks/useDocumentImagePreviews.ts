@@ -4,7 +4,7 @@ import type { EditorDocument } from '../editor-types';
 import type { ArtifactPreview } from '../live-types';
 import { createDocumentImagePreviewCache, documentPreviewIds } from '../lib/document-image-previews';
 
-interface Options { scope: string; document: EditorDocument; selectedId: string; selectedImageId?: string; allowedIds: string[]; enabled: boolean; root: RefObject<HTMLElement | null>; read: (id: string) => Promise<ArtifactPreview>; }
+interface Options { scope: string; document: EditorDocument; selectedId: string; selectedImageId?: string; allowedIds: string[]; enabled: boolean; root: RefObject<HTMLElement | null>; read: (id: string) => Promise<ArtifactPreview>; observeAllPages?: boolean; }
 /** Canvas image reads follow the viewport and share two slots, including obsolete reads. */
 export function useDocumentImagePreviews(options: Options) {
   const [cache] = useState(createDocumentImagePreviewCache), [visible, setVisible] = useState<{ scope: string; ids: string[] }>({ scope: options.scope, ids: [] });
@@ -13,9 +13,9 @@ export function useDocumentImagePreviews(options: Options) {
   const reader = useRef(options.read); reader.current = options.read;
   if (state.current.scope !== options.scope) { state.current = { ...state.current, scope: options.scope, generation: state.current.generation + 1, desired: [], attempted: new Set(), errors: {} }; cache.clear(); }
   const allowed = new Set(options.allowedIds);
-  const desired = documentPreviewIds(options.document, options.selectedId, visible.scope === options.scope ? visible.ids : [], options.selectedImageId).filter(id => allowed.has(id));
+  const desired = documentPreviewIds(options.document, options.selectedId, visible.scope === options.scope ? visible.ids : [], options.selectedImageId, options.observeAllPages).filter(id => allowed.has(id));
   state.current.enabled = options.enabled; state.current.desired = options.enabled ? desired : [];
-  const desiredKey = desired.join('|'), wordImages = options.document.kind === 'word' ? options.document.blocks.filter(block => block.imageId).map(block => `${block.id}:${block.imageId}`).join('|') : '';
+  const desiredKey = desired.join('|'), observedImages = options.document.kind === 'word' ? options.document.blocks.filter(block => block.imageId).map(block => `${block.id}:${block.imageId}`).join('|') : options.observeAllPages ? options.document.slides.filter(slide => slide.imageId).map(slide => `${slide.id}:${slide.imageId}`).join('|') : '';
   const pumpRef = useRef<() => void>(() => undefined);
   const publish = useCallback(() => {
     const active = state.current; if (!active.mounted) return;
@@ -48,7 +48,7 @@ export function useDocumentImagePreviews(options: Options) {
     return () => { state.current.mounted = false; state.current.generation++; cache.clear(); };
   }, [cache]);
   useEffect(() => {
-    if (options.document.kind !== 'word' || !options.enabled) return;
+    if (options.document.kind !== 'word' && !options.observeAllPages || !options.enabled) return;
     const scope = options.scope, container = options.root.current?.querySelector<HTMLElement>('.sw-canvas-scroll');
     const nodes = Array.from(options.root.current?.querySelectorAll<HTMLElement>('[data-artifact-id]') || []), near = new Set<HTMLElement>(); let frame: number | undefined;
     const update = () => {
@@ -61,7 +61,7 @@ export function useDocumentImagePreviews(options: Options) {
     const observer = new IntersectionObserver(entries => { for (const entry of entries) if (entry.isIntersecting) near.add(entry.target as HTMLElement); else near.delete(entry.target as HTMLElement); schedule(); }, { root: container, rootMargin: '300px 0px' });
     for (const node of nodes) observer.observe(node); container?.addEventListener('scroll', schedule, { passive: true });
     return () => { observer.disconnect(); container?.removeEventListener('scroll', schedule); if (frame !== undefined) cancelAnimationFrame(frame); };
-  }, [options.scope, options.enabled, options.document.kind, wordImages, options.root]);
+  }, [options.scope, options.enabled, options.document.kind, observedImages, options.root, options.observeAllPages]);
   const rememberPreview = useCallback((id: string, dataUrl: string) => { cache.put(id, dataUrl, [id, ...state.current.desired]); publish(); }, [cache, publish]);
   const retryPreviews = useCallback(() => { const active = state.current; active.attempted = new Set([...active.pending.values()].filter(item => item.generation === active.generation).map(item => item.id)); active.errors = {}; pump(); publish(); }, [pump, publish]);
   return { previews: snapshot.scope === options.scope ? snapshot.values : {}, previewErrors: snapshot.scope === options.scope ? snapshot.errors : {}, rememberPreview, retryPreviews };

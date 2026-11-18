@@ -23,8 +23,8 @@ async function fixture(fileSystem = fs) {
   await storage.bindRoot({ workspaceId: 'one', name: '缩略图入队验收', directory: workspace });
   const source = path.join(directory, 'owned.png'); await fs.writeFile(source, blue);
   const library = createAssetLibrary({ workspaceStorage: storage, artifactStore: {}, fileSystem });
-  await library.importPaths({ workspaceId: 'one', paths: Array.from({ length: 12 }, () => source) });
-  await library.importPaths({ workspaceId: 'one', paths: Array.from({ length: 12 }, () => source) });
+  await library.importPaths({ workspaceId: 'one', paths: Array.from({ length: 12 }, () => source), duplicates: 'copy' });
+  await library.importPaths({ workspaceId: 'one', paths: Array.from({ length: 12 }, () => source), duplicates: 'copy' });
   const items = await library.list({ workspaceId: 'one', availabilityIds: [] });
   return { directory, workspace, storage, library, items, source };
 }

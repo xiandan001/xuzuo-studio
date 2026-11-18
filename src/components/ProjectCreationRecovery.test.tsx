@@ -13,7 +13,7 @@ describe('creation connection recovery guidance', () => {
   });
   it('keeps a connected operation resumable after the project picker is canceled', () => {
     const html = renderToStaticMarkup(<ProjectCreationRecovery {...props} connected message="工作区已重新连接。" />);
-    expect(html).toContain('工作区已连接，可以继续'); expect(html).toContain('选择项目文件夹并继续');
+    expect(html).toContain('工作区已连接，可以继续'); expect(html).toContain('继续创建作品');
     expect(html).not.toContain('恢复原工作区'); expect(html).toContain('在新位置新建工作区');
   });
   it('disables close, return and retry while the native operation is pending', () => {

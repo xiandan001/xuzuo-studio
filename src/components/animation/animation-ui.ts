@@ -2,6 +2,7 @@ import type { AnimationDocument, AnimationEntry, AnimationFrame, AnimationMotion
 import type { StudioConfiguration } from '../../configuration-types';
 import { studioCredential, studioModel } from '../../lib/studio-run';
 import { ANIMATION_STYLES as styles, animationArtHash, animationStyle, checkedAnimationDocument } from '../../lib/animation-document';
+import { animationTemplateSourceIds } from '../../lib/template-sources';
 
 export const ANIMATION_STYLES = styles.map(style => ({ value: style.id, label: style.name, description: style.description }));
 export const ANIMATION_MOTIONS: { value: AnimationMotion; label: string }[] = [
@@ -36,6 +37,8 @@ export function animationFrameDurations(weights: number[], loopMs: number): numb
 export function adoptExistingAnimationSources(input: AnimationDocument, kind: 'atlas' | 'sequence', selectedId: string): { document: AnimationDocument; entryIds: string[] } {
   const document = checkedAnimationDocument(input), style = animationStyle(document.style), target = document.entries.find(entry => entry.id === selectedId);
   if (!target) throw Error('请先选择要合成的角色条目。');
+  const placeholders = animationTemplateSourceIds(document);
+  if (document.referenceArtifactIds.some(id => placeholders.has(id))) throw Error('所选参考仍是模板占位，请先上传真实源图集或关键帧，不能把占位图当作成品。');
   let entries = document.entries, entryIds: string[];
   if (kind === 'atlas') {
     if (document.mode !== 'atlas' && style.route !== 'light') throw Error('完整动作或双状态风格请采用按顺序准备好的独立画面。');

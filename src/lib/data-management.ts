@@ -34,7 +34,7 @@ export function persistBackupImport(storage: Storage, current: WorkspaceState, i
   const stored = readWorkspaceState(storage), configuration = loadStoredConfiguration(storage);
   if (stored.issue || configuration.issue) throw new Error('现有工作室或模型配置处于恢复状态，请先恢复读取，再保存导入登记；备份文件及恢复凭据仍保留。');
   const next = mergeBackupImport(current, configuration.state, imported), workspaceRaw = JSON.stringify(next.state), configurationRaw = JSON.stringify(next.configuration);
-  if (readConfigurationResult(configurationRaw).issue || readWorkspaceState({ getItem: name => name === WORKSPACE_STORAGE_KEY ? workspaceRaw : null, setItem: () => undefined }).issue) throw new Error('导入界面索引未通过格式检查，未覆盖现有数据。');
+  if (readConfigurationResult(configurationRaw).issue || readWorkspaceState({ getItem: name => name === WORKSPACE_STORAGE_KEY ? workspaceRaw : null }).issue) throw new Error('导入界面索引未通过格式检查，未覆盖现有数据。');
   const beforeWorkspace = storage.getItem(WORKSPACE_STORAGE_KEY), beforeConfiguration = storage.getItem(CONFIGURATION_KEY), journal = `xuzuo-import-${imported.backupId}`;
   const existingProjects = new Set(current.projects.map(project => project.id));
   const quoteWrites = quoteRestorationWrites(imported.meta.quoteDrafts, imported.meta.projects).filter(item => !existingProjects.has(item.projectId)).map(item => ({ key: item.key, value: item.value, before: storage.getItem(item.key) }));

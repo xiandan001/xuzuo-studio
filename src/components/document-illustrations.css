@@ -28,6 +28,10 @@
 .document-image-tools-preview>div{display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--ui-fg-secondary)}
 .document-image-tools-preview img{display:block;width:100%;height:200px;object-fit:contain;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-subtle)}
 .document-image-tools .document-image-error{color:var(--ui-danger)}
+.document-image-model-settings{margin:12px 0;border:1px solid var(--ui-border);border-radius:8px;padding:10px 12px;background:var(--ui-surface-subtle);min-width:0}
+.document-image-model-settings>summary{overflow-wrap:anywhere;line-height:1.6}
+.document-image-model-settings>summary>small{font-weight:400;color:var(--ui-fg-secondary);margin-left:10px}
+.document-image-tools .document-image-binding-note,.document-image-cost-note{display:block;font-size:12px;line-height:1.6;color:var(--ui-fg-secondary);margin:8px 0 0}
 .simple-studio-drawer>.document-image-tools{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0;border:0;border-radius:0}
 .ed-inspector-body>.document-illustration-options{grid-column:1/-1}
 .ed-word-block img[role=button],.ed-slide-image img[role=button]{cursor:pointer}

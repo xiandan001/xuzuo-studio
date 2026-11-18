@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatAttachment, ChatBridge, ChatChangedEvent, ChatConversation, ChatStartRequest, ChatTurn } from '../chat-types';
+import type { ChatAttachment, ChatBridge, ChatChangedEvent, ChatConversation, ChatQueueManageRequest, ChatQueueRequest, ChatStartRequest, ChatTurn } from '../chat-types';
 import type { PageProps } from '../types';
-import { WorkspaceChat } from './WorkspaceChat';
+import { ChatMessagePair, WorkspaceChat } from './WorkspaceChat';
 const staticReferences = vi.hoisted(() => ({ svg: vi.fn(), gif: vi.fn() }));
 vi.mock('../lib/svg-reference', () => ({ prepareSvgReference: staticReferences.svg }));
 vi.mock('../lib/generated-animation-reference', () => ({ prepareAnimationReference: staticReferences.gif }));
@@ -22,9 +22,9 @@ async function click(label: string) {
   expect(button).toBeTruthy(); await act(async () => button!.click());
 }
 async function addFiles() { await click('添加聊天附件'); await click('本机文件'); }
-async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = false, targetMime = 'image/png') {
+async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = false, targetMime = 'image/png', queueEnabled = false, initial?: { turns: ChatTurn[]; searchIndex: number }) {
   const workspaceId = crypto.randomUUID(), listeners = new Set<(event: ChatChangedEvent) => void>();
-  let record: ChatConversation | undefined;
+  let record: ChatConversation | undefined = initial ? { version: 1, id: 'long-conversation', workspaceId, title: '长聊天验收', createdAt: now(), updatedAt: now(), turnCount: initial.turns.length, turns: initial.turns } : undefined;
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
   const model = { id: 'model', connectionId: 'connection', name: '测试对话模型', modelId, capabilities: vision ? ['text', 'vision'] : ['text'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '2' } };
   const createProject = vi.fn();
@@ -37,8 +37,20 @@ async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = f
   const target = { projectId: 'source-project', artifactId: 'source-artifact', sha256: 'a'.repeat(64), kind: 'image' }, sourceFile = { id: target.artifactId, projectId: target.projectId, name: '保存的海报.' + (targetMime === 'image/gif' ? 'gif' : targetMime === 'image/svg+xml' ? 'svg' : 'png'), mimeType: targetMime, bytes: 100, kind: 'image', path: 'artifact.png', createdAt: now() };
   const material: ChatAttachment = { id: 'source-chat-material', name: targetMime === 'image/png' ? sourceFile.name : '静态参考.png', mimeType: 'image/png', bytes: sourceFile.bytes, kind: 'image', sha256: target.sha256, createdAt: now() };
   const bridge = { read, start, cancel, selectTarget: vi.fn(async () => ({ target, inspection: { artifact: sourceFile, sha256: target.sha256 } })), inspectTarget: vi.fn(async () => ({ artifact: sourceFile, sha256: target.sha256 })), linkProduction: vi.fn(async (request: Parameters<ChatBridge['linkProduction']>[0]) => { record = { ...record!, productions: [{ ...request, createdAt: now() }] }; return record; }), importProjectArtifact: vi.fn(async () => [material]), importBytes: vi.fn(async () => [material]), search: vi.fn(async () => ({ items: [], total: 0, scanned: 0 })), importAttachments: vi.fn(async () => [] as ChatAttachment[]), previewAttachment: vi.fn(async () => ({ mimeType: 'text/plain', text: '本地原文' })), attachToProject: vi.fn(async () => [{ id: 'project-ref', name: '原图.png', mimeType: 'image/png', bytes: 100, kind: 'image', projectId: 'created-project' }]), list: vi.fn(async () => []), ledger: vi.fn(async () => []), onChanged(listener: (event: ChatChangedEvent) => void) { listeners.add(listener); return () => listeners.delete(listener); } };
+  const queueEnqueue = vi.fn(async (request: ChatQueueRequest) => {
+    const queue = [...(record!.queue || []), { id: request.id, text: request.text, requestText: request.requestText, sceneName: request.sceneName, modelName: request.model.name, modelConfigId: request.model.id, credentialId: request.credentialId, reasoningEffort: request.reasoningEffort, mode: request.mode || 'chat' as const, attachments: [], status: 'queued' as const, createdAt: now(), updatedAt: now() }];
+    record = { ...record!, queue, queuedCount: queue.length }; return structuredClone(record);
+  });
+  const queueManage = vi.fn(async (request: ChatQueueManageRequest) => {
+    const queue = structuredClone(record!.queue || []), item = queue.find(item => item.id === request.id);
+    if (request.action === 'withdraw') record = { ...record!, queue: queue.filter(item => item.id !== request.id) };
+    else { if (item && request.action === 'pause') { item.status = 'paused'; item.editing = true; } if (item && request.action === 'edit') { item.text = request.text!; item.status = 'queued'; item.editing = false; } record = { ...record!, queue }; }
+    return structuredClone(record!);
+  });
+  if (queueEnabled) Object.assign(bridge, { enqueue: queueEnqueue, manageQueue: queueManage });
   vi.stubGlobal('desktop', { chat: bridge }); Object.defineProperty(window, 'desktop', { configurable: true, value: { chat: bridge } });
   const props = { workspaceId, workspace: { id: workspaceId, name: '无项目工作区' }, workspaces: [], projects: [], purgedProjects: [], activeProject: { id: '' }, configuration: { connections: [connection], models: [model], credentials: [{ id: 'key', connectionId: 'connection', name: '自己的账户', lastFour: '1234', enabled: true }], workflows: [], categories: [] }, workflowRunner: { runs: [] }, ledger: [], preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: createProject, onUpdateProject: vi.fn(), onUsePrompt: vi.fn() } as unknown as PageProps;
+  if (initial) { props.searchTarget = { token: 'search-initial', name: '长聊天验收', kind: 'chat', id: 'long-conversation', conversationId: 'long-conversation', turnId: initial.turns[initial.searchIndex]?.id, workspaceId }; props.onSearchTargetConsumed = vi.fn(); }
   const preflight = vi.fn(async () => ({ ok: true, errors: [] })), startLive = vi.fn(async () => ({ status: 'started', runId: 'refinement-run' }));
   if (editTarget) {
     props.chatIntent = { token: 'intent', workspaceId, conversationId: 'target-conversation', projectId: target.projectId, artifactId: target.artifactId, kind: 'image', name: sourceFile.name };
@@ -52,7 +64,7 @@ async function fixture(modelId = 'gpt-6.1-terra', vision = false, editTarget = f
     record = { ...record!, turns: [...record!.turns.slice(0, -1), turn] };
     await act(async () => { for (const listener of listeners) listener({ workspaceId, conversationId: record!.id, turn, updatedAt: turn.updatedAt, title: record!.title, ledgerChanged: status !== 'running' }); });
   }
-  return { start, read, cancel, createProject, update, props, bridge, preflight, startLive };
+  return { start, read, cancel, createProject, update, props, bridge, preflight, startLive, queueEnqueue, queueManage };
 }
 describe('普通聊天的真实组件交互', () => {
   it('copies readable reply content while preserving code and the original stored source', async () => {
@@ -138,13 +150,17 @@ describe('普通聊天的真实组件交互', () => {
     await addFiles(); await input('列出交付要求'); await click('发送聊天消息');
     expect(f.start.mock.calls[0][0].text).toBe('列出交付要求'); expect(f.start.mock.calls[0][0].requestText).toContain('不补造'); expect(f.start.mock.calls[0][0].attachmentIds).toEqual(['doc']);
   });
-  it('发送确认较慢时，不会清掉用户已输入的下一条草稿', async () => {
+  it('发送确认较慢时，保留下一条输入并移除已提交且未更改的附件', async () => {
     const f = await fixture(), original = f.start.getMockImplementation()!;
+    f.bridge.importAttachments.mockResolvedValue([{ id: 'reference-text', name: '本轮参考.txt', mimeType: 'text/plain', bytes: 20, kind: 'text', sha256: 'a'.repeat(64), createdAt: now() }]);
+    await addFiles();
     let release!: () => void;
     f.start.mockImplementation(async request => { const value = await original(request); await new Promise<void>(resolve => { release = resolve; }); return value; });
     await input('已经提交的问题'); await click('发送聊天消息'); await input('下一条正在打的内容');
     await act(async () => { release(); });
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe('下一条正在打的内容'); expect(f.start).toHaveBeenCalledOnce();
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe('下一条正在打的内容');
+    expect(host.querySelector('.workspace-chat-composer [aria-label="移除附件 本轮参考.txt"]')).toBeNull();
+    expect(f.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ attachmentIds: ['reference-text'] }));
   });
   it('无项目可连续聊天，流式增量不重复读取整段历史，也不创建目录', async () => {
     const f = await fixture(); await input('你好，帮我想一句产品介绍'); await click('发送聊天消息');
@@ -154,6 +170,22 @@ describe('普通聊天的真实组件交互', () => {
     await f.update('清新一天', 'complete'); await input('再简短一点'); await click('发送聊天消息');
     expect(f.start).toHaveBeenCalledTimes(2); expect(f.createProject).not.toHaveBeenCalled();
   });
+  it('已排队的尾部跟随在用户上滚阅读后不能把消息和结果再次拉到底部', async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let nextFrame = 0;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
+    const flushFrames = async () => { const pending = [...frames.values()]; frames.clear(); await act(async () => { for (const callback of pending) callback(1); }); };
+    const f = await fixture(); await input('保留当前阅读位置'); await click('发送聊天消息');
+    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!;
+    Object.defineProperties(thread, { scrollHeight: { configurable: true, value: 2400 }, clientHeight: { configurable: true, value: 400 } });
+    thread.scrollTop = 2000; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
+    await f.update('正在回答，尾部跟随已排进动画帧'); expect(frames.size).toBeGreaterThan(0);
+    thread.scrollTop = 800; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
+    await flushFrames(); expect(thread.scrollTop).toBe(800);
+    thread.scrollTop = 2000; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
+    await f.update('用户主动回到底部后，后续回复仍能正常跟随'); await flushFrames(); expect(thread.scrollTop).toBe(2400);
+    expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled(); expect(f.props.ledger).toEqual([]);
+  });
   it('停止保留部分回答；再次回答使用新请求编号且明确是重试', async () => {
     const f = await fixture(); await input('写一段介绍'); await click('发送聊天消息'); await f.update('已经写出的内容'); await click('停止回复');
     expect(f.cancel).toHaveBeenCalledOnce(); expect(host.textContent).toContain('已经写出的内容'); await click('重新回答');
@@ -161,9 +193,9 @@ describe('普通聊天的真实组件交互', () => {
   });
   it('聊天回复转制作先填入资料和制作模式，不因切换而创建项目或调用模型', async () => {
     const f = await fixture(); await input('先讨论产品海报'); await click('发送聊天消息'); await f.update('使用白底与蓝色标题', 'complete'); await click('转为制作方案');
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toContain('使用白底与蓝色标题'); expect(host.textContent).toContain('先出方案，确认后才制作');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe(''); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.textContent).toContain('先出方案，确认后才制作');
     expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled(); await click('发送聊天消息');
-    expect(f.start.mock.calls[1][0].mode).toBe('plan'); expect(f.start.mock.calls[1][0].text).toContain('先讨论产品海报'); expect(f.createProject).not.toHaveBeenCalled();
+    expect(f.start.mock.calls[1][0].mode).toBe('plan'); expect(f.start.mock.calls[1][0].requestText).toContain('先讨论产品海报'); expect(f.start.mock.calls[1][0].requestText).toContain('使用白底与蓝色标题'); expect(f.createProject).not.toHaveBeenCalled();
   });
   it('未知模型只提供自动，账户摘要代替单Key下拉', async () => {
     const f = await fixture('unknown-model'); const reasoning = host.querySelector<HTMLButtonElement>('[aria-label="推理强度"]')!;
@@ -175,4 +207,109 @@ describe('普通聊天的真实组件交互', () => {
     await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })); field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })); });
     expect(f.start).not.toHaveBeenCalled(); await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }); expect(f.start).toHaveBeenCalledOnce();
   });
+});
+
+
+describe('连续沟通的明确待发交互', () => {
+  it('回复中提交补充进入单独队列，快照当前场景/模型，不强制创建项目', async () => {
+    const visibleRect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 20, 300, 44));
+    try {
+      const f = await fixture('gpt-6.1-terra', false, false, 'image/png', true);
+      await input('先讨论第一份要求'); await click('发送聊天消息');
+      expect(host.querySelector<HTMLButtonElement>('button[aria-label="推理强度"]')!.disabled).toBe(false); await click('推理强度');
+      const high = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent?.includes('思考：深入'))!; await act(async () => high.click());
+      await input('回复完成后继续这条要求'); await click('排队发送消息');
+      expect(f.start).toHaveBeenCalledOnce(); expect(f.queueEnqueue).toHaveBeenCalledOnce(); expect(f.queueEnqueue.mock.calls[0][0]).toMatchObject({ text: '回复完成后继续这条要求', model: { id: 'model' }, credentialId: 'key', mode: 'chat', reasoningEffort: 'high', sceneName: expect.any(String) });
+      expect(f.start.mock.calls[0][0].reasoningEffort).toBe('auto');
+      await click('推理强度'); const low = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent?.includes('思考：轻度'))!; await act(async () => low.click());
+      expect(host.querySelector('.chat-queue-summary small')!.textContent).toContain('思考：深入');
+      expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', ''); expect(host.textContent).toContain('待发 1'); expect(host.textContent).toContain('回复完成后继续这条要求'); expect(f.createProject).not.toHaveBeenCalled();
+      const id = f.queueEnqueue.mock.calls[0][0].id; await click('撤回待发消息 ' + id); expect(f.queueManage).toHaveBeenLastCalledWith(expect.objectContaining({ id, action: 'withdraw' })); expect(f.start).toHaveBeenCalledOnce();
+    } finally { visibleRect.mockRestore(); }
+  });
+  it('排队确认延迟时继续输入的新草稿不会被旧回包清空', async () => {
+    const f = await fixture('gpt-6.1-terra', false, false, 'image/png', true), original = f.queueEnqueue.getMockImplementation()!;
+    let release!: () => void; f.queueEnqueue.mockImplementation(async request => { const value = await original(request); return new Promise<ChatConversation>(resolve => { release = () => resolve(value); }); });
+    await input('第一条'); await click('发送聊天消息'); await input('已提交的待发要求'); await click('排队发送消息');
+    await input('这段是用户正在写的新草稿'); await act(async () => release());
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '这段是用户正在写的新草稿'); expect(f.queueEnqueue).toHaveBeenCalledOnce(); expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('排队回包未知时只提供免费核对，不在点击读取后暗中发送', async () => {
+    const f = await fixture('gpt-6.1-terra', false, false, 'image/png', true);
+    await input('第一条'); await click('发送聊天消息'); f.queueEnqueue.mockRejectedValue(Error('lost acknowledgement')); f.read.mockRejectedValueOnce(Error('temporary read failure'));
+    await input('必须保留的待发草稿'); await click('排队发送消息'); expect(host.textContent).toContain('上次排队结果尚未确认'); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '必须保留的待发草稿');
+    await click('读取排队状态'); expect(f.queueEnqueue).toHaveBeenCalledOnce(); expect(f.start).toHaveBeenCalledOnce(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '必须保留的待发草稿'); expect(f.createProject).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('有界长聊天和保留草稿的制作引用', () => {
+  function holdFrames() {
+    const frames = new Map<number, FrameRequestCallback>(); let id = 0;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++id, callback); return id; });
+    vi.stubGlobal('cancelAnimationFrame', (key: number) => frames.delete(key));
+    return async () => { const current = [...frames.values()]; frames.clear(); await act(async () => { for (const callback of current) callback(1); }); };
+  }
+  it('300轮命中只挂载附近20轮，前后移动和回最新均不扩大DOM，旧稿与费用不变', async () => {
+    const turns: ChatTurn[] = Array.from({ length: 300 }, (_, index) => ({ id: 'turn-' + index, userText: '问题 ' + index, text: '回复正文 ' + index, status: 'complete', createdAt: new Date(1700000000000 + index * 1000).toISOString(), updatedAt: new Date(1700000000000 + index * 1000).toISOString(), modelName: '已有模型', modelId: 'gpt-6.1-terra', modelConfigId: 'model', credentialId: 'key', costCents: index + 1, costState: 'calculated' }));
+    const original = structuredClone(turns), noAction = () => undefined;
+    await act(async () => { root = createRoot(host); root.render(<div className="workspace-chat-thread">{turns.map(turn => <ChatMessagePair key={turn.id} turn={turn} workspaceId="baseline" conversationId="baseline" canRetry={false} onRetry={noAction} onMake={noAction} onCopy={noAction} onSaveFile={noAction} />)}</div>); });
+    const before = { turns: host.querySelectorAll('.workspace-chat-turn').length, nodes: host.querySelector('.workspace-chat-thread')!.querySelectorAll('*').length };
+    await act(async () => root!.unmount()); root = undefined;
+    const flush = holdFrames(), f = await fixture('gpt-6.1-terra', false, false, 'image/png', false, { turns, searchIndex: 0 }); await flush();
+    const ids = () => [...host.querySelectorAll<HTMLElement>('[data-chat-turn-id]')].map(node => node.dataset.chatTurnId);
+    expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-0'); expect(host.querySelector('[data-chat-turn-id="turn-0"]')?.className).toContain('is-search-match'); expect(f.props.onSearchTargetConsumed).toHaveBeenCalledWith('search-initial');
+    const after = { turns: ids().length, nodes: host.querySelector('.workspace-chat-thread')!.querySelectorAll('*').length };
+    expect(before.turns).toBe(300); expect(after.nodes).toBeLessThan(before.nodes / 8);
+    await input('跨页未发草稿'); await click('转为制作方案');
+    await click('查看后 20 条'); await flush(); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-20');
+    await click('查看前 20 条'); await flush(); expect(ids()[0]).toBe('turn-0');
+    for (const index of [150, 299]) { f.props.searchTarget = { ...f.props.searchTarget!, token: 'search-' + index, turnId: 'turn-' + index }; await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); await flush(); expect(ids()).toHaveLength(20); expect(ids()).toContain('turn-' + index); }
+    const readingThread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!; Object.defineProperty(readingThread, 'scrollHeight', { configurable: true, value: 5000 }); readingThread.scrollTop = 123;
+    await click('回到最新回复'); await flush(); expect(readingThread.scrollTop).toBe(5000); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-280'); expect(ids().at(-1)).toBe('turn-299');
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '跨页未发草稿'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy();
+    expect((await f.read({ conversationId: 'long-conversation' })).turns).toEqual(original); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled(); expect(f.props.ledger).toEqual([]);
+    console.log('CHAT_WINDOW_DOM_MEASUREMENT ' + JSON.stringify({ totalTurns: 300, before, after, scope: 'Actual ChatMessagePair DOM under the previous search-to-first 300-turn range versus the bounded WorkspaceChat; no provider calls, not native timing' }));
+  });
+  it('转制作不替换输入或附件，引用可取消并随草稿恢复，明确发送前不调用模型', async () => {
+    const f = await fixture(); await input('先讨论作品'); await click('发送聊天消息'); await f.update('回复中的完整创作方向', 'complete');
+    f.bridge.importAttachments.mockResolvedValue([{ id: 'quoted-material', name: '新需求.txt', mimeType: 'text/plain', bytes: 15, kind: 'text', sha256: 'a'.repeat(64), createdAt: now() }]); await addFiles(); await input('我正在写的新要求'); await click('转为制作方案');
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我正在写的新要求'); expect(host.textContent).toContain('新需求.txt'); expect(f.start).toHaveBeenCalledOnce();
+    await act(async () => root!.unmount()); root = undefined; await act(async () => { root = createRoot(host); root.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />); });
+    expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我正在写的新要求'); expect(host.textContent).toContain('新需求.txt');
+    await click('取消回复引用'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我正在写的新要求'); expect(host.textContent).toContain('新需求.txt'); expect(f.start).toHaveBeenCalledOnce();
+    await click('转为制作方案'); const original = f.start.getMockImplementation()!; let release!: () => void; f.start.mockImplementation(async request => { const value = await original(request); return new Promise<ChatConversation>(resolve => { release = () => resolve(value); }); });
+    await click('发送聊天消息'); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我正在写的新要求'); expect(host.textContent).toContain('新需求.txt'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy();
+    const request = f.start.mock.calls[1][0]; expect(request.text).toBe('我正在写的新要求'); expect(request.requestText).toContain('回复中的完整创作方向'); expect(request.requestText!.endsWith(request.text)).toBe(true); expect(request.attachmentIds).toEqual(['quoted-material']); expect(request.mode).toBe('plan');
+    await act(async () => release()); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', ''); expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('超长引用不静默截断或发送，用户明确改用片段后才提交，原文和草稿保持', async () => {
+    const f = await fixture(), full = '完整原文'.repeat(5100) + '最后的精确要求 TAIL'; await input('讨论完整内容'); await click('发送聊天消息'); await f.update(full, 'complete'); await input('我补充的需求'); await click('转为制作方案'); await click('发送聊天消息');
+    expect(f.start).toHaveBeenCalledOnce(); expect(host.querySelector('[role="alert"]')?.textContent).toContain('本轮内容过长'); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我补充的需求'); expect((await f.read({ conversationId: f.read.mock.calls[0][0].conversationId })).turns[0].text).toBe(full);
+    await click('调整引用'); const field = host.querySelector<HTMLTextAreaElement>('[aria-label="引用重点片段"]')!; await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, '最后的精确要求 TAIL'); field.dispatchEvent(new Event('input', { bubbles: true })); }); await click('使用此片段'); await click('发送聊天消息');
+    expect(f.start).toHaveBeenCalledTimes(2); expect(f.start.mock.calls[1][0].requestText).toContain('最后的精确要求 TAIL'); expect(f.start.mock.calls[1][0].requestText!.length).toBeLessThanOrEqual(20000); expect(f.start.mock.calls[1][0].text).toBe('我补充的需求'); expect((await f.read({ conversationId: f.read.mock.calls[0][0].conversationId })).turns[0].text).toBe(full); expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('空聊天的无轮次搜索也会消费intent，不反复准备窗口或发送', async () => {
+    const flush = holdFrames(), f = await fixture('gpt-6.1-terra', false, false, 'image/png', false, { turns: [], searchIndex: 0 }); await flush();
+    expect(f.props.onSearchTargetConsumed).toHaveBeenCalledWith('search-initial'); expect(host.querySelector('[aria-label="聊天内容"]')).toBeTruthy(); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('引用和输入草稿只属于原聊天与工作区，切换不会泄露，返回原聊天可继续', async () => {
+    const f = await fixture(); await input('这份资料属于原聊天'); await click('发送聊天消息'); await f.update('原聊天的独立回复', 'complete'); await input('原聊天未发草稿'); await click('转为制作方案');
+    const conversationId = f.read.mock.calls[0][0].conversationId, originalWorkspace = f.props.workspaceId;
+    await click('新对话'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '');
+    f.props.searchTarget = { token: 'return-original', kind: 'chat', id: conversationId, name: '原聊天', conversationId, workspaceId: originalWorkspace }; await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />));
+    expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '原聊天未发草稿');
+    const other = { ...f.props, workspaceId: 'other-workspace', workspace: { ...f.props.workspace, id: 'other-workspace' }, searchTarget: undefined }; await act(async () => root!.render(<WorkspaceChat props={other} onLegacy={vi.fn()} />));
+    expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '');
+    await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '原聊天未发草稿'); expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+  });
+
+  it('调整引用可直接使用原回复内鼠标选中的文字，不把其他区域或按钮文字带入', async () => {
+    const f = await fixture(); await input('保留重点'); await click('发送聊天消息'); await f.update('开头不选。需要引用的重点。结尾不选。', 'complete'); await click('转为制作方案'); await click('调整引用');
+    const node = host.querySelector('.chat-reply-text p')!.firstChild!;
+    const selection = window.getSelection()!, range = document.createRange(); range.setStart(node, 5); range.setEnd(node, 13); selection.removeAllRanges(); selection.addRange(range);
+    const exact = selection.toString(); await click('使用选中文字'); expect(host.querySelector('[aria-label="引用的沟通内容"]')?.textContent).toContain('重点片段'); await click('发送聊天消息');
+    expect(f.start).toHaveBeenCalledTimes(2); expect(f.start.mock.calls[1][0].requestText).toContain(exact); expect(f.start.mock.calls[1][0].requestText).not.toContain('结尾不选'); expect(f.start.mock.calls[1][0].requestText).not.toContain('保存为文件'); expect(f.createProject).not.toHaveBeenCalled(); selection.removeAllRanges();
+  });
+
 });

@@ -185,6 +185,21 @@ function createChatAttachments({ directory, fileSystem = fs, extractText } = {})
     }
     return result;
   }
-  return { list, read, importPaths, importBytes, restore: (scope, files) => serial(scope, () => restoreFiles(scope, files)), copyToProject: async (...args) => { await list(args[0]); return serial(args[0], () => copyToProject(...args)); } };
+  async function* sources(scope, ids, { signal } = {}) {
+    checkedScope(scope); if (!Array.isArray(ids) || ids.length > 2400 || ids.some(id => !validId(id)) || new Set(ids).size !== ids.length) throw Error('聊天备份附件列表无效。');
+    if (!ids.length) return;
+    if (signal?.aborted) throw Object.assign(Error('聊天备份捕获已取消。'), { name: 'AbortError' });
+    const available = new Map((await list(scope)).map(item => [item.id, item]));
+    for (const id of ids) {
+      if (signal?.aborted) throw Object.assign(Error('聊天备份捕获已取消。'), { name: 'AbortError' });
+      const item = available.get(id); if (!item) throw Error('聊天备份附件未登记。');
+      const filename = blob(scope, item), stat = await checkedFile(fileSystem, filename);
+      if (stat.size !== item.bytes) throw Error('聊天备份附件已变化，请保留原数据后重新备份。');
+      const attachment = Object.fromEntries(['id', 'name', 'mimeType', 'bytes', 'kind', 'sha256', 'createdAt', 'provenance'].filter(field => item[field] !== undefined).map(field => [field, item[field]]));
+      yield { attachment, source: { path: filename, bytes: item.bytes, sha256: item.sha256 } };
+    }
+  }
+  async function source(scope, id) { for await (const item of sources(scope, [id])) return item; }
+  return { list, read, source, sources, importPaths, importBytes, restore: (scope, files) => serial(scope, () => restoreFiles(scope, files)), copyToProject: async (...args) => { await list(args[0]); return serial(args[0], () => copyToProject(...args)); } };
 }
 module.exports = { createChatAttachments, legacyTurnValid, upgradeLegacyRecord, CHAT_ATTACHMENT_EXTENSIONS: Object.keys(TYPES).map(extension => extension.slice(1)), validMetadata, validPublicMetadata, inspectBytes, backupBytes, MAX_COUNT, MAX_FILE, MAX_TOTAL };

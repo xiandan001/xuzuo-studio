@@ -16,9 +16,9 @@ function fixture(id, changes = {}) {
 function cost(id, usage, changes) { const f = fixture(id, changes); return calculateCost(f.pricing, usage, f.context); }
 const basic = { inputTokens: 1000, outputTokens: 1000 };
 
-test('all 37 ready models have separately identified serializable official rules', () => {
-  assert.equal(rules.length, 37);
-  assert.equal(new Set(rules.map(r => r.id)).size, 37);
+test('all 39 ready models have separately identified serializable official rules', () => {
+  assert.equal(rules.length, 39);
+  assert.equal(new Set(rules.map(r => r.id)).size, 39);
   for (const r of rules) {
     const f = fixture(r.id);
     const snapshot = resolveOfficialBillingRule(f.context, f.pricing);

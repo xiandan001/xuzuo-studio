@@ -61,6 +61,28 @@ describe('Mac旧版独立聊天附件的无损升级', () => {
     await restored.service.restoreWorkspace({ version: 1, workspaceId: scope.workspaceId, conversations: [f.record] });
     expect((await restored.service.read(scope)).turns[0].attachments).toEqual(snapshot.conversations[0].turns[0].attachments);
   });
+  it('增量备份读取升级后的真实附件，恢复后保留图片和文字而不修改旧记录', async () => {
+    const f = await fixture(), current = serviceAt(f.directory);
+    const before = await fs.readFile(f.recordFile);
+    const snapshot = await current.service.exportWorkspaceSources(scope.workspaceId);
+    expect(snapshot.attachmentFiles).toHaveLength(2);
+    for (const item of snapshot.attachmentFiles) {
+      expect(item).not.toHaveProperty('buffer');
+      const legacy = f.files.find(file => file.id === item.attachment.id);
+      expect(await fs.readFile(item.source.path)).toEqual(Buffer.from(legacy.data, 'base64'));
+    }
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-chat-migrate-'));
+    owned.push(target);
+    const restored = serviceAt(target);
+    expect(await restored.service.restoreWorkspaceSources(snapshot)).toEqual({ restored: 1, skipped: 0 });
+    const copied = createChatAttachments({ directory: target });
+    for (const file of f.files) {
+      expect((await copied.read(scope, file.id)).buffer).toEqual(Buffer.from(file.data, 'base64'));
+    }
+    expect(await fs.readFile(f.recordFile)).toEqual(before);
+    expect(current.calls).toHaveLength(0);
+    expect(restored.calls).toHaveLength(0);
+  });
   it('并发草稿读取与新导入串行迁移，旧缓存只读取一次且不丢新文件', async () => {
     const f = await fixture(); let oldReads = 0;
     const fileSystem = new Proxy(fs, { get: (target, key) => key === 'readFile' ? async (...args) => { if (args[0] === f.cacheFile) oldReads++; return target.readFile(...args); } : target[key] });

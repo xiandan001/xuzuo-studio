@@ -6,8 +6,8 @@ exports.reasoningOptions = reasoningOptions;
 exports.isReasoningEffort = isReasoningEffort;
 exports.normalizeReasoningEffort = normalizeReasoningEffort;
 exports.reasoningRequestFields = reasoningRequestFields;
-// Official model-specific effort tables, checked 2026-11-09. Unknown models keep their provider default.
-exports.REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
+// Official model-specific effort tables, checked 2026-11-18. Unknown models keep their provider default.
+exports.REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://developers.openai.com/api/docs/guides/latest-model', 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
 const levels = {
     auto: { label: '自动', description: '使用模型默认设置' }, none: { label: '快速', description: '不启用额外推理，适合简单沟通' },
     minimal: { label: '极轻', description: '尽量减少思考时间' }, low: { label: '轻度', description: '适合日常问答、改写与提取' },
@@ -19,7 +19,7 @@ const extended = [...balanced, 'xhigh', 'max'];
 function supported(connection, model) {
     const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
     if (connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '')) {
-        if (/^gpt-(?:6-astra|6\.1-sol)$/.test(id))
+        if (/^gpt-(?:6-astra|6\.1-sol|6\.2-(?:astra|sol))$/.test(id))
             return extended;
         if (/^gpt-(?:6-sol|6-luna|6\.1-terra)$/.test(id))
             return ['none', ...extended];
@@ -55,6 +55,9 @@ function reasoningOptions(connection, model) {
 }
 function isReasoningEffort(value) { return typeof value === 'string' && Object.hasOwn(levels, value); }
 function normalizeReasoningEffort(connection, model, value) {
+    const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+    if ((value === 'none' || value === 'minimal') && connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '') && /^gpt-6\.2-(?:astra|sol)$/.test(id))
+        return 'low';
     return isReasoningEffort(value) && reasoningOptions(connection, model).some(option => option.value === value) ? value : 'auto';
 }
 function reasoningRequestFields(connection, model, effort = 'auto') {

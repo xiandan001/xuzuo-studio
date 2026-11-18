@@ -85,6 +85,7 @@ function ImageProjectRoutes({ props, project }: { props: PageProps; project: Pro
 
 function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; project: Project; onOpenAnimation: (mode: 'atlas' | 'gif', draft: ImageDraft) => void }) {
   const [commerceSource, setCommerceSource] = useState<string>();
+  const [commerceDocumentId, setCommerceDocumentId] = useState<string>(), templateIntent = useRef('');
   const [credentialIds, setCredentialIds] = useState(() => ({ 'image-generation': readStudioCredentialPreference(project.id, 'image-generation'), 'image-editing': readStudioCredentialPreference(project.id, 'image-editing') }));
   const workbench = useRef<HTMLDivElement>(null);
   const [actionError, setActionError] = useState('');
@@ -321,6 +322,26 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   // Each keyed project owns its own non-secret form state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, project.id]);
+
+  useEffect(() => {
+    const sourceId = draft.templateLayerSourceId, documentId = draft.templateLayerDocumentId;
+    if (!sourceId || project.workspaceId !== props.workspaceId || templateIntent.current === sourceId) return;
+    templateIntent.current = sourceId; let current = true, completed = false;
+    void (async () => {
+      try {
+        if (!window.desktop?.commerceImages || !runnerRef.current.listProjectArtifacts) throw Error('请在桌面应用中打开这份可编辑海报模板。');
+        const files = await runnerRef.current.listProjectArtifacts(project.id);
+        if (!current || editSnapshot.current.draft.templateLayerSourceId !== sourceId) return;
+        if (!files.some(file => file.id === sourceId && file.projectId === project.id && !file.trashedAt && !file.unavailable)) throw Error('模板原图暂不可用，请从项目文件恢复后继续排版。');
+        const next = { ...editSnapshot.current.draft, templateLayerSourceId: undefined, templateLayerDocumentId: undefined };
+        localStorage.setItem(imageDraftKey(project.id), JSON.stringify(next));
+        completed = true;
+        setDraft(value => value.templateLayerSourceId === sourceId ? { ...value, templateLayerSourceId: undefined, templateLayerDocumentId: undefined } : value);
+        setCommerceDocumentId(documentId); setCommerceSource(sourceId);
+      } catch (cause) { if (current) { completed = true; setActionError(workflowPublicError(cause, '模板已保留，可从项目图片继续排版。')); } }
+    })();
+    return () => { current = false; if (!completed && templateIntent.current === sourceId) templateIntent.current = ''; };
+  }, [draft.templateLayerSourceId, draft.templateLayerDocumentId, project.id, project.workspaceId, props.workspaceId]);
 
   useEffect(() => {
     let current = true;
@@ -685,6 +706,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     <StudioWorkbench projectName={project.name} kind="image" hasContent={!!selectedImage} titleActions={<button type="button" className="btn btn-ghost" disabled={engineeringEnabled} title={engineeringEnabled ? '工程P图需指定主原图，请在当前项目精修。' : undefined} onClick={() => { if (wallpaperEnabled && wallpaperTargetError) { fixGeneration('format'); return; } setGroupBatchOpen(true); }}><Layers3 size={16} />分组批量生成</button>} layout={layout} onTool={openTool} saveStatus={busy ? '正在制作，已发生费用保留' : selectedImage ? '真实图片已保存到当前项目' : '尚未生成图片 · 可以先添加参考'} selectionLabel={draft.mode === 'refine' && draft.references.length ? isGalleryImageBase(draft) ? '精修基底跟随当前结果' : draft.references.length + ' 份固定精修参考' : selectedImage ? '当前所选图片：' + selectedImage.name : '未选择图片'} navigation={<ImageHistoryNavigation images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} />} navigationLabel="图片结果" panel={panel} selectionTools={<>{(textSelection || selectedImage && (localUndo.available || localRedo.available)) && <SelectionHistoryToolbar label={textSelection ? '选中的图片描述文字' : '当前图片'} exactSelection={!!textSelection} selectedCount={textSelection ? Array.from(localValue.slice(localStart, localEnd)).length : 0} image={!textSelection} selectionPreview={textSelection ? localValue.slice(localStart, localEnd) : selectedImage?.name} canUndo={localUndo.available} canRedo={localRedo.available} reason={!localUndo.available && !localRedo.available ? localUndo.reason : undefined} disabled={busy || importing || saving} onUndo={() => { void moveSelection('undo'); }} onRedo={() => { void moveSelection('redo'); }} onClearSelection={textSelection ? () => setTextSelection(undefined) : undefined} />}</>} cost={<CostTotal summary={costSummary} />} busy={busy || importing || saving} exporting={saving} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!selectedImage} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onExport={() => { if (selectedImage) void saveImage(selectedImage); }} deliveryPanel={selectedImage && <DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="image" artifactIds={[selectedImage.id]} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} sourceRevision={JSON.stringify({ id: selectedImage.id, target: deliveryTarget })} checks={imageDeliveryChecks({ ...(imageMetadata.id === selectedImage.id ? imageMetadata : {}), expectedSize: deliveryTarget.size, requiresTransparency, mimeType: selectedImage.mimeType, artifactAvailable: true })} />} >
       {deliveryTarget.wallpaperTarget && <div className="sw-scope-label"><strong>所选壁纸目标：{deliveryTarget.wallpaperTarget.width} × {deliveryTarget.wallpaperTarget.height} px</strong><span>当前保存版本，调整下一次尺寸不会改动它。</span></div>}
       {deliveryTarget.engineeringReferenceId && <div className="sw-scope-label"><strong>工程成品 · 原图尺寸 {deliveryTarget.size?.replace('x', ' × ')} px</strong><span>原图与编辑版本独立保留。</span></div>}
+      {!selectedImage && project.localOutputArtifactIds?.[0] && <section className="image-local-tool-card"><span className="image-local-tool-icon" aria-hidden="true"><Layers3 size={19} /></span><div className="image-local-tool-copy"><h3>继续本地图片排版</h3><p>已保存的图层与原图仍在，编辑和导出不调用模型。</p></div><button type="button" className="btn btn-secondary" onClick={() => { setCommerceDocumentId(undefined); setCommerceSource(project.localOutputArtifactIds![0]); }}>打开排版</button></section>}
       {selectedImage?.mimeType === 'image/svg+xml' && <div className="sw-scope-label"><strong>静态矢量原文件，可在矢量工具中编辑</strong><p>平台内AI精修使用PNG参考，转换免费；原SVG保留。</p><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />转PNG作参考</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />另存原SVG</button></div>}
       <div className="image-local-tools" role="group" aria-label="本地图片工具">
         {selectedImage?.mimeType === 'image/png' && (wallpaperEnabled || deliveryTarget.wallpaperTarget) && <section className="image-local-tool-card">
@@ -700,7 +722,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
       </div>
       <ImageGallery hideActions showHistory={false} onCreate={() => layout.openPanel('ai')} reference={draft.mode === 'refine' && draft.references.length ? { name: draft.references[0].name, url: referencePreview, loading: checkingReferences, error: referenceError } : undefined} onImageReady={inspectImageMetadata} onMetadataReady={inspectNativePreviewMetadata} images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} onRefine={refineImage} onSave={artifact => { void saveImage(artifact); }} saving={saving} canRefine={!busy && !importing} />
     </StudioWorkbench>
-    {commerceSource && <CommerceEditorDialog props={props} projectId={project.id} artifactId={commerceSource} onClose={() => setCommerceSource(undefined)} onExport={() => props.notify('本地图层成品已保存到项目，可在项目文件中查看。')} />}
+    {commerceSource && <CommerceEditorDialog props={props} projectId={project.id} artifactId={commerceSource} documentId={commerceDocumentId} onClose={() => { setCommerceSource(undefined); setCommerceDocumentId(undefined); }} onExport={() => props.notify('本地图层成品已保存到项目，可在项目文件中查看。')} />}
     {groupBatchOpen && <Suspense fallback={<p role="status">正在打开分组生成…</p>}><ImageGroupBatchPanel key={props.workspaceId + '/' + project.id} props={props} project={project} settings={{ model: generationModel, credentialId: groupCredential, size: draft.size, background: task.parameters.imageBackground, imageOptions: effectiveImageOptions(draft.imageOptions, generationModel?.modelId, 'image-generation'), wallpaperEnabled: draft.wallpaperEnabled, wallpaperTarget: draft.wallpaperTarget }} busy={busy || importing || saving} onClose={() => setGroupBatchOpen(false)} /></Suspense>}
     {purposeManager && <PurposeTemplates templates={props.configuration.useTemplates || []} workspaceId={props.workspaceId} workspaceName={props.workspace.name} initialMode={purposeManager} onSave={props.configuration.saveUseTemplate} onDelete={props.configuration.deleteUseTemplate} onClose={() => setPurposeManager(undefined)} />}
     {promptPickerOpen && <PromptPicker useTemplates={props.configuration.useTemplates} prompts={props.prompts} category="image" onClose={() => setPromptPickerOpen(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPickerOpen(false); }} />}

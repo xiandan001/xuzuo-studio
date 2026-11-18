@@ -38,6 +38,23 @@ async function input(host: HTMLElement, name: string, value: string) {
   await act(async () => { Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(element, value); element.dispatchEvent(new Event('input', { bubbles: true })); });
 }
 describe('商品图层编辑与零额外API操作', () => {
+  it('用不同比例的商品图替换模板槽时预览和导出参数都等比，不只依赖object-fit', async () => {
+    let savedCurrent = doc();
+    const readReplacement = vi.fn(async (input: { sourceArtifactId: string }) => {
+      if (input.sourceArtifactId !== 'replacement') return read(savedCurrent);
+      const result = read(doc('replacement', 'replacement-doc')); return { ...result, source: { ...result.source, width: 400, height: 100 } };
+    });
+    const saveReplacement = vi.fn(async (input: { sourceArtifactId: string; expectedRevision: number; document: CommerceImageDocument }) => { savedCurrent = { ...input.document, revision: input.expectedRevision + 1 }; return savedCurrent; });
+    const ui = await mounted({ bridge: { read: readReplacement, save: saveReplacement } });
+    vi.mocked(ui.props.workflowRunner.importFiles).mockResolvedValueOnce([{ id: 'replacement', name: '新商品.png', mimeType: 'image/png', kind: 'image', projectId: 'project', bytes: 100, path: 'managed', createdAt: '' }]);
+    const product = [...ui.host.querySelectorAll<HTMLButtonElement>('.cle-layer-name')].find(node => node.textContent?.includes('商品主体'))!; await act(async () => product.click());
+    await act(async () => button(ui.host, '替换此图片，保留版式').click());
+    const preview = ui.host.querySelector<HTMLElement>('[aria-label="图层 商品主体"]')!; expect(preview.style.width).toBe('100%'); expect(preview.style.height).toBe('25%'); expect(preview.style.top).toBe('37.5%');
+    await act(async () => button(ui.host, '撤销图层修改').click()); expect(ui.host.querySelector<HTMLElement>('[aria-label="图层 商品主体"]')!.style.height).toBe('100%'); await act(async () => button(ui.host, '重做图层修改').click()); expect(ui.host.querySelector<HTMLElement>('[aria-label="图层 商品主体"]')!.style.height).toBe('25%');
+    await act(async () => button(ui.host, '导出成品').click()); expect(savedCurrent.layers.find(layer => layer.type === 'image' && layer.role === 'product')).toMatchObject({ width: 256, height: 64, x: 0, y: 96, artifactId: 'replacement', originalArtifactId: 'replacement' }); expect(ui.bridge.render).toHaveBeenCalledWith(expect.objectContaining({ sourceArtifactId: 'original', documentId: 'working', expectedRevision: 2 }));
+    await act(async () => button(ui.host, '手工涂选主体').click()); expect(readReplacement).toHaveBeenLastCalledWith({ projectId: 'project', sourceArtifactId: 'replacement' }); expect(ui.host.textContent).toContain('400 × 100'); expect(ui.onGenerate).not.toHaveBeenCalled(); expect(ui.ledger[0].costCents).toBe(128);
+  });
+
   it('没有图层选择时收窄属性区域，新增图层恢复原来的展开偏好', async () => {
     const ui = await mounted();
     await act(async () => button(ui.host, '删除图层').click());

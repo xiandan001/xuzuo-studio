@@ -1,5 +1,13 @@
 # macOS 开发与验收
 
+## 2.12.1 同步 develop-owner（2026-11-18）
+
+合入 `develop-owner` 的 `c3c985b`，包含上次同步后的 11 个提交。聊天支持排队、长记录分段阅读和内容搜索，方案、制作与导出归到相应轮次。新作品可在工作区建立独立目录，也可自选位置；作品面包屑可返回项目列表。
+
+新增可编辑海报、图集和 GIF 模板，素材去重，空闲增量备份，以及多比例重排和导出恢复。文档编辑器可定位插图，模型目录接入 GPT-6.2 Astra 和 Sol 配置。保留 Mac 原生窗口、Command 快捷键、系统路径兼容、钥匙串按需授权和旧版附件读取。
+
+Mac 回归通过 3709 项，4 项 Windows 专用用例跳过。隔离浏览器验收涵盖 128 组首页布局、聊天队列及长记录的 9 项交互、8 项新建及导航流程。Python 26 项通过，独立动画工具完成 16 个实际导出场景。Apple Silicon DMG 和 ZIP 已校验签名、包内资源和版本。界面与模型协议测试使用隔离浏览器、模拟桥接和本地数据。报告见 `outputs/develop-owner-sync-2.12.1-validation-report.json`。
+
 ## 2.9.0 同步 develop-owner（2026-11-16）
 
 完整合并 `develop-owner` 至 `4bc23f7bf7c5ea1e42f4ea8529892a0a343db302`，补齐上次完整合并 `4bd387f` 后的 15 个提交。与仅参考布局的 2.6.4 不同，本次同步上游的业务逻辑、接口与回归测试。
@@ -138,7 +146,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.9.0/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.1/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -159,7 +167,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.9.0/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.1/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

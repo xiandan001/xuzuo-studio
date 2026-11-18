@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatConversation, ChatConversationSummary, ChatStartRequest, ChatTurn } from '../chat-types';
 import { applyChatChange } from '../lib/chat-stream-state';
+import { useChatQueue } from './useChatQueue';
 
 export function stableChatTurns(previous: ChatTurn[], next: ChatTurn[]): ChatTurn[] {
   const known = new Map(previous.map(turn => [turn.id, turn]));
@@ -71,6 +72,7 @@ export function useWorkspaceChat(workspaceId: string, conversationId: string) {
     catch (cause) { if (current.current === requested) setError(cause instanceof Error ? cause.message : '仍未保存，请复制保留回答后检查磁盘。'); }
     finally { flight.current = false; if (mounted.current) setPending(false); }
   }
+  const queue = useChatQueue(workspaceId, conversationId, bridge, accept, setError);
   const visible = conversation?.workspaceId === workspaceId && conversation.id === conversationId ? conversation : undefined;
-  return { conversation: visible, history, error, setError, pending, send, stop, flush, reload: () => reload.current(), available: !!bridge, loading: !!bridge && !visible && !error, running: visible?.turns.some(turn => turn.status === 'running') || false };
+  return { conversation: visible, history, queue, error, setError, pending, send, stop, flush, reload: () => reload.current(), available: !!bridge, loading: !!bridge && !visible && !error, running: visible?.turns.some(turn => turn.status === 'running') || false };
 }

@@ -363,6 +363,17 @@ function createAutomationCenter({ directory, liveEngine, assertAdmission = async
         return changed;
       }); contextSynced = true; tick();
     },
+    async queuedBindings() {
+      await ready; await writes;
+      if (issue || !contextSynced) throw Error(issue || '模型与连接正在同步，请稍后继续队列。');
+      return structuredClone({ connections: state.context.connections, models: state.context.models });
+    },
+    async searchProjects(workspaceId) {
+      await ready; await writes;
+      if (issue || !contextSynced) throw Error(issue || '项目索引正在同步，请稍后搜索。');
+      if (!validId(workspaceId) || !state.context.workspaces.some(workspace => workspace.id === workspaceId && !workspace.removedAt)) throw Error('当前工作区不可用。');
+      return state.context.projects.filter(project => project.workspaceId === workspaceId && !project.trashedAt && !project.purgedAt && !archived(state, project.id)).map(project => ({ id: project.id, name: project.name, workspaceId }));
+    },
     async getPlanningContext({ workspaceId, projectId } = {}) {
       await ready; await writes;
       if (issue || !contextSynced) throw Error(issue || '请等待项目与模型配置同步后再规划。');

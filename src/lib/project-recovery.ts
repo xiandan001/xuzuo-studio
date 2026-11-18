@@ -1,8 +1,7 @@
 import type { NewProjectDraft } from '../components/NewProjectDialog';
-import type { ProjectFolderSelection } from '../workspace-types';
 
 export type RecoveryProjectFields = Omit<NewProjectDraft, 'selection'>;
-export function recoverProjectDraft(context: Pick<NewProjectDraft, 'kind' | 'promptIntent'> & { draft?: RecoveryProjectFields }, selection: ProjectFolderSelection): NewProjectDraft {
+export function recoverProjectDraft(context: Pick<NewProjectDraft, 'kind' | 'promptIntent'> & { draft?: RecoveryProjectFields }, selection: NewProjectDraft['selection']): NewProjectDraft {
   return {
     selection,
     kind: context.draft?.kind || context.kind,

@@ -4,6 +4,12 @@ export const commerceFonts = ['Microsoft YaHei', 'Arial', 'SimSun', 'sans-serif'
 export function commerceImageLayer(artifactId: string, name: string, width: number, height: number, role: CommerceRasterLayer['role'] = 'logo'): CommerceRasterLayer {
   return { id: id(), type: 'image', role, artifactId, name, x: 0, y: 0, width, height, opacity: 1, visible: true, locked: false };
 }
+export function fitCommerceLayerImage(layer: CommerceRasterLayer, artifactId: string, width: number, height: number): CommerceRasterLayer {
+  if (![width, height].every(value => Number.isFinite(value) && value > 0)) throw Error('新图片的真实尺寸尚未核实。');
+  const scale = layer.role === 'background' ? Math.max(layer.width / width, layer.height / height) : Math.min(layer.width / width, layer.height / height), fittedWidth = width * scale, fittedHeight = height * scale;
+  if (Math.min(fittedWidth, fittedHeight) < 1 || Math.max(fittedWidth, fittedHeight) > 16384) throw Error('新图与原版式比例差距过大，请先裁切图片或调整图层框。');
+  return { ...layer, artifactId, originalArtifactId: artifactId, templatePlaceholder: undefined, x: layer.x + (layer.width - fittedWidth) / 2, y: layer.y + (layer.height - fittedHeight) / 2, width: fittedWidth, height: fittedHeight };
+}
 export function commerceTextLayer(width: number, height: number, text = '输入准确的卖点或价格'): CommerceTextLayer {
   return { id: id(), name: '文字与价格', type: 'text', text, x: width * .05, y: height * .75, width: width * .9, height: height * .2, opacity: 1, visible: true, locked: false, fontSize: Math.min(512, Math.max(12, Math.round(width * .035))), color: '#17212B', fontFamily: 'Microsoft YaHei', fontWeight: 'bold', align: 'center' };
 }

@@ -3,8 +3,8 @@ export interface ReasoningConnection { providerId?: string; protocol?: string; }
 export interface ReasoningModel { modelId?: string; }
 export interface ReasoningOption { value: ReasoningEffort; label: string; description: string; }
 
-// Official model-specific effort tables, checked 2026-11-09. Unknown models keep their provider default.
-export const REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
+// Official model-specific effort tables, checked 2026-11-18. Unknown models keep their provider default.
+export const REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://developers.openai.com/api/docs/guides/latest-model', 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
 const levels: Record<ReasoningEffort, Omit<ReasoningOption, 'value'>> = {
   auto: { label: '自动', description: '使用模型默认设置' }, none: { label: '快速', description: '不启用额外推理，适合简单沟通' },
   minimal: { label: '极轻', description: '尽量减少思考时间' }, low: { label: '轻度', description: '适合日常问答、改写与提取' },
@@ -16,7 +16,7 @@ const extended: ReasoningEffort[] = [...balanced, 'xhigh', 'max'];
 function supported(connection?: ReasoningConnection, model?: ReasoningModel): ReasoningEffort[] {
   const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
   if (connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '')) {
-    if (/^gpt-(?:6-astra|6\.1-sol)$/.test(id)) return extended;
+    if (/^gpt-(?:6-astra|6\.1-sol|6\.2-(?:astra|sol))$/.test(id)) return extended;
     if (/^gpt-(?:6-sol|6-luna|6\.1-terra)$/.test(id)) return ['none', ...extended];
     if (/^gpt-(?:5\.[245]|5\.4-(?:mini|nano))$/.test(id)) return ['none', ...balanced, 'xhigh'];
     if (id === 'gpt-5.1') return ['none', ...balanced];
@@ -40,6 +40,8 @@ export function reasoningOptions(connection?: ReasoningConnection, model?: Reaso
 }
 export function isReasoningEffort(value: unknown): value is ReasoningEffort { return typeof value === 'string' && Object.hasOwn(levels, value); }
 export function normalizeReasoningEffort(connection: ReasoningConnection | undefined, model: ReasoningModel | undefined, value: unknown): ReasoningEffort {
+  const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  if ((value === 'none' || value === 'minimal') && connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '') && /^gpt-6\.2-(?:astra|sol)$/.test(id)) return 'low';
   return isReasoningEffort(value) && reasoningOptions(connection, model).some(option => option.value === value) ? value : 'auto';
 }
 export function reasoningRequestFields(connection: ReasoningConnection, model: ReasoningModel, effort: unknown = 'auto'): Record<string, unknown> {

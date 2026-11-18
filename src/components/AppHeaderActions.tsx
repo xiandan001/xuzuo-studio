@@ -33,6 +33,6 @@ export function AppHeaderActions({ summary, onNavigate, onSearch, onNotification
       { value: 'folder', label: '打开当前文件夹', disabled: !onOpenFolder },
       { value: 'notifications', label: '通知与最近动态' }, { value: 'help', label: '使用帮助' },
     ]} /></div>
-    {onCreateProject && <button type="button" className="btn btn-secondary header-new-project" onClick={onCreateProject}><Plus size={17} />新建项目</button>}
+    {onCreateProject && <button type="button" className="btn btn-secondary header-new-project" onClick={onCreateProject}><Plus size={17} />新建作品</button>}
   </div>;
 }

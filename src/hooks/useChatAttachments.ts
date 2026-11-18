@@ -42,5 +42,6 @@ export function useChatAttachments(workspaceId: string, conversationId: string) 
     });
   }
   function clearSubmitted(version: number) { if (version === revision.current) save([]); }
-  return { files, busy, error, revision, add, addAsset, addFiles, addProjectArtifact, remove: (id: string) => save(current.current.filter(file => file.id !== id)), clearSubmitted };
+  function restoreDraft(selected: ChatAttachment[]) { if (importing.current || selected.length > 8 || selected.reduce((sum, file) => sum + file.bytes, 0) > 80 * 1024 * 1024) return false; save([...selected]); return true; }
+  return { files, busy, error, revision, restoreDraft, add, addAsset, addFiles, addProjectArtifact, remove: (id: string) => save(current.current.filter(file => file.id !== id)), clearSubmitted };
 }

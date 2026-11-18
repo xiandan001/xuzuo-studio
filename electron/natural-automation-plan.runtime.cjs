@@ -1254,13 +1254,15 @@ exports.ANIMATION_MOTIONS = ['nod', 'jump', 'sway', 'startle', 'tremble', 'ponde
 function checkedFrame(input) {
     if (!object(input) || !(0, exports.animationId)(input.id) || !(0, exports.animationId)(input.atlasArtifactId) || !Array.isArray(input.cell) || input.cell.length !== 2 || !Array.isArray(input.grid) || input.grid.length !== 2 || input.grid.some(value => !integer(value, 1, 16)) || input.grid[0] * input.grid[1] > 120 || input.cell.some((value, index) => !integer(value, 0, Number(input.grid[index]) - 1)) || !integer(input.durationMs, 10, 6000) || input.durationMs % 10 !== 0)
         throw Error('动画关键帧的来源、格数或时长无效。');
+    if (input.templatePlaceholder !== undefined && typeof input.templatePlaceholder !== 'boolean')
+        throw Error('模板源帧的占位标识无效。');
     let crop;
     if (input.crop !== undefined) {
         if (!Array.isArray(input.crop) || input.crop.length !== 4 || input.crop.some(value => !integer(value, 0, 16384)) || input.crop[2] <= input.crop[0] || input.crop[3] <= input.crop[1] || (input.crop[2] - input.crop[0]) * (input.crop[3] - input.crop[1]) > 16777216)
             throw Error('关键帧裁切框无效。');
         crop = [...input.crop];
     }
-    return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell], grid: [...input.grid], ...(crop ? { crop } : {}), durationMs: input.durationMs };
+    return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell], grid: [...input.grid], ...(crop ? { crop } : {}), durationMs: input.durationMs, ...(input.templatePlaceholder ? { templatePlaceholder: true } : {}) };
 }
 function checkedEntry(input) {
     if (!object(input) || !(0, exports.animationId)(input.id) || !text(input.caption, 120) || !text(input.description, 4000) || !exports.ANIMATION_MOTIONS.includes(input.motion) || !Array.isArray(input.frames) || input.frames.length > exports.ANIMATION_MAX_FRAMES || !['draft', 'ready', 'stale', 'failed'].includes(String(input.status)))
@@ -1384,8 +1386,8 @@ exports.reasoningOptions = reasoningOptions;
 exports.isReasoningEffort = isReasoningEffort;
 exports.normalizeReasoningEffort = normalizeReasoningEffort;
 exports.reasoningRequestFields = reasoningRequestFields;
-// Official model-specific effort tables, checked 2026-11-09. Unknown models keep their provider default.
-exports.REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
+// Official model-specific effort tables, checked 2026-11-18. Unknown models keep their provider default.
+exports.REASONING_SOURCES = ['https://developers.openai.com/api/docs/guides/reasoning', 'https://developers.openai.com/api/docs/guides/latest-model', 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', 'https://platform.claude.com/docs/en/build-with-claude/effort', 'https://ai.google.dev/gemini-api/docs/thinking', 'https://platform.minimax.io/docs/api-reference/text-openai-api'];
 const levels = {
     auto: { label: '自动', description: '使用模型默认设置' }, none: { label: '快速', description: '不启用额外推理，适合简单沟通' },
     minimal: { label: '极轻', description: '尽量减少思考时间' }, low: { label: '轻度', description: '适合日常问答、改写与提取' },
@@ -1397,7 +1399,7 @@ const extended = [...balanced, 'xhigh', 'max'];
 function supported(connection, model) {
     const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
     if (connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '')) {
-        if (/^gpt-(?:6-astra|6\.1-sol)$/.test(id))
+        if (/^gpt-(?:6-astra|6\.1-sol|6\.2-(?:astra|sol))$/.test(id))
             return extended;
         if (/^gpt-(?:6-sol|6-luna|6\.1-terra)$/.test(id))
             return ['none', ...extended];
@@ -1433,6 +1435,9 @@ function reasoningOptions(connection, model) {
 }
 function isReasoningEffort(value) { return typeof value === 'string' && Object.hasOwn(levels, value); }
 function normalizeReasoningEffort(connection, model, value) {
+    const id = (model?.modelId || '').replace(/^models\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+    if ((value === 'none' || value === 'minimal') && connection?.providerId === 'openai' && ['openai-chat', 'openai-responses'].includes(connection.protocol || '') && /^gpt-6\.2-(?:astra|sol)$/.test(id))
+        return 'low';
     return isReasoningEffort(value) && reasoningOptions(connection, model).some(option => option.value === value) ? value : 'auto';
 }
 function reasoningRequestFields(connection, model, effort = 'auto') {

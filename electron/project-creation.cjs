@@ -51,5 +51,12 @@ function registerProjectCreation({ handle, dialog, getWindow, workspaceStorage, 
     }
     finally { creating = false; }
   });
+  handle('workspace-create-default-project', async input => {
+    if (creating || choosing || reconnecting) throw Error('项目目录正在处理中，请等待当前操作完成。');
+    if (!input || typeof input.projectId !== 'string' || typeof input.workspaceId !== 'string' || typeof input.name !== 'string') throw Error('请选择工作区并填写有效的作品名称。');
+    creating = true;
+    try { return await withProjectWrite(input.projectId, () => workspaceStorage.createDefaultProject({ projectId: input.projectId, workspaceId: input.workspaceId, name: input.name })); }
+    finally { creating = false; }
+  });
 }
 module.exports = { registerProjectCreation };

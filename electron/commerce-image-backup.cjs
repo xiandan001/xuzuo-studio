@@ -1,6 +1,6 @@
 const { createHash } = require('node:crypto');
 const { validId, checkedCommerceDocument } = require('./commerce-image-document.cjs');
-const idFields = new Set(['id', 'projectId', 'sourceArtifactId', 'documentId', 'artifactId', 'snapshotId', 'workingDocumentId', 'protectedMaskArtifactId', 'protectionSourceArtifactId']);
+const idFields = new Set(['id', 'projectId', 'sourceArtifactId', 'documentId', 'artifactId', 'originalArtifactId', 'snapshotId', 'workingDocumentId', 'protectedMaskArtifactId', 'protectionSourceArtifactId']);
 const snapshot = /^revision-(\d+)-([a-f0-9]{64})(?:-[a-f0-9-]+)?\.json$/;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const mapped = (value, ids) => { const next = ids instanceof Map ? ids.get(value) : Object.hasOwn(ids || {}, value) ? ids[value] : undefined; return typeof next === 'string' ? next : value; };

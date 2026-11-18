@@ -7,11 +7,18 @@ const { validateTemplate } = require('./project-templates.cjs');
 const root = workspaceId => `templates/${workspaceId}`;
 const materialPath = (workspaceId, templateId, id) => `${root(workspaceId)}/files/${templateId}-${id}.bin`;
 function validateTemplateSnapshot(snapshot) {
-  if (!snapshot || snapshot.version !== 1 || !validId(snapshot.workspaceId) || !Array.isArray(snapshot.items) || snapshot.items.length > 200 || new Set(snapshot.items.map(item => item.id)).size !== snapshot.items.length || !Array.isArray(snapshot.files) || snapshot.files.length > 4000) throw Error('项目模板备份格式无效。');
+  if (!snapshot || snapshot.version !== 1 || !validId(snapshot.workspaceId) || !Array.isArray(snapshot.items) || snapshot.items.length > 200 || new Set(snapshot.items.map(item => item.id)).size !== snapshot.items.length || !Array.isArray(snapshot.files) || snapshot.files.length > (snapshot.items.some(item => item.creative) ? 40000 : 4000)) throw Error('项目模板备份格式无效。');
   const expected = new Map();
   for (const item of snapshot.items) { validateTemplate(item, snapshot.workspaceId, item.id); for (const material of item.materials) expected.set(item.id + '/' + material.id, material); }
   if (snapshot.files.length !== expected.size || new Set(snapshot.files.map(file => `${file.templateId}/${file.id}`)).size !== snapshot.files.length) throw Error('项目模板素材清单不匹配。');
   for (const file of snapshot.files) { const material = expected.get(`${file.templateId}/${file.id}`); if (!material || !(file.buffer instanceof Uint8Array) || file.buffer.length !== material.bytes || hash(file.buffer) !== material.sha256) throw Error('项目模板素材文件缺失或已改变。'); }
+  return snapshot;
+}
+function validateTemplateSnapshotSources(snapshot) {
+  if (!snapshot || snapshot.version !== 1 || !validId(snapshot.workspaceId) || !Array.isArray(snapshot.items) || snapshot.items.length > 200 || new Set(snapshot.items.map(item => item.id)).size !== snapshot.items.length || !Array.isArray(snapshot.files) || snapshot.files.length > 40000) throw Error('项目模板流式备份格式无效。');
+  const expected = new Map(); let metadataBytes = 0; for (const item of snapshot.items) { validateTemplate(item, snapshot.workspaceId, item.id); if ((metadataBytes += Buffer.byteLength(JSON.stringify(item))) > 32 * 1024 * 1024) throw Error('项目模板流式元数据超过32MB。'); for (const material of item.materials) expected.set(item.id + '/' + material.id, material); }
+  if (expected.size !== snapshot.files.length || new Set(snapshot.files.map(file => `${file.templateId}/${file.id}`)).size !== snapshot.files.length) throw Error('项目模板流式素材清单不匹配。');
+  for (const file of snapshot.files) { const material = expected.get(`${file.templateId}/${file.id}`), source = file.source || file; if (!material || source.bytes !== material.bytes || source.sha256 !== material.sha256 || !(typeof source.path === 'string' && path.isAbsolute(source.path) || source.kind === 'xuzuo-stream-file' && typeof source.copyTo === 'function')) throw Error('项目模板流式素材描述与模板不一致。'); }
   return snapshot;
 }
 function templateBackupFiles(snapshot) {
@@ -38,8 +45,17 @@ function remapTemplateBackups(snapshots, idMap) {
     if (!validId(idMap[snapshot.workspaceId])) throw Error('模板恢复缺少工作区编号映射。');
     for (const item of snapshot.items) { idMap[item.id] ||= randomUUID(); for (const file of item.materials) idMap[file.id] ||= randomUUID(); }
     const value = remap({ version: 1, workspaceId: snapshot.workspaceId, items: snapshot.items }, idMap);
-    for (const item of value.items) for (const file of item.materials) file.fileName = `${item.id}-${file.id}.bin`;
+    for (const item of value.items) { if (item.creative) item.creative.document.projectId = 'template-project'; for (const file of item.materials) file.fileName = `${item.id}-${file.id}.bin`; }
     return validateTemplateSnapshot({ ...value, files: snapshot.files.map(file => ({ templateId: idMap[file.templateId], id: idMap[file.id], buffer: file.buffer })) });
+  });
+}
+function remapTemplateBackupsSources(snapshots, idMap) {
+  return snapshots.map(snapshot => {
+    validateTemplateSnapshotSources(snapshot); if (!validId(idMap[snapshot.workspaceId])) throw Error('模板恢复缺少工作区编号映射。');
+    for (const item of snapshot.items) { idMap[item.id] ||= randomUUID(); for (const file of item.materials) idMap[file.id] ||= randomUUID(); }
+    const value = remap({ version: 1, workspaceId: snapshot.workspaceId, items: snapshot.items }, idMap);
+    for (const item of value.items) { if (item.creative) item.creative.document.projectId = 'template-project'; for (const file of item.materials) file.fileName = `${item.id}-${file.id}.bin`; }
+    return validateTemplateSnapshotSources({ ...value, files: snapshot.files.map(file => ({ ...file, templateId: idMap[file.templateId], id: idMap[file.id] })) });
   });
 }
 async function cacheTemplateReceipt(fs, receipts, backupId, snapshots) {
@@ -58,4 +74,4 @@ async function loadTemplateReceipt(fs, receipts, backupId, ids) {
   for (const workspaceId of ids) { const target = path.join(folder, workspaceId + '.json'); await checkedFile(fs, target); const snapshot = JSON.parse(await fs.readFile(target, 'utf8')); if (snapshot.workspaceId !== workspaceId || !Array.isArray(snapshot.files)) throw Error('模板恢复凭据工作区不符。'); snapshot.files = await Promise.all(snapshot.files.map(async file => { if (!validId(file.templateId) || !validId(file.id) || file.filename !== `${workspaceId}-${file.templateId}-${file.id}.bin`) throw Error('模板恢复素材凭据路径无效。'); const filename = path.join(folder, file.filename); await checkedFile(fs, filename); const buffer = await fs.readFile(filename); if (hash(buffer) !== file.sha256) throw Error('模板恢复素材缓存已改变。'); return { templateId: file.templateId, id: file.id, buffer }; })); result.push(validateTemplateSnapshot(snapshot)); }
   return result;
 }
-module.exports = { validateTemplateSnapshot, templateBackupFiles, readTemplateBackups, remapTemplateBackups, cacheTemplateReceipt, loadTemplateReceipt };
+module.exports = { validateTemplateSnapshot, templateBackupFiles, readTemplateBackups, remapTemplateBackups, cacheTemplateReceipt, loadTemplateReceipt, validateTemplateSnapshotSources, remapTemplateBackupsSources };

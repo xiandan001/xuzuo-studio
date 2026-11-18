@@ -113,13 +113,15 @@ exports.ANIMATION_MOTIONS = ['nod', 'jump', 'sway', 'startle', 'tremble', 'ponde
 function checkedFrame(input) {
     if (!object(input) || !(0, exports.animationId)(input.id) || !(0, exports.animationId)(input.atlasArtifactId) || !Array.isArray(input.cell) || input.cell.length !== 2 || !Array.isArray(input.grid) || input.grid.length !== 2 || input.grid.some(value => !integer(value, 1, 16)) || input.grid[0] * input.grid[1] > 120 || input.cell.some((value, index) => !integer(value, 0, Number(input.grid[index]) - 1)) || !integer(input.durationMs, 10, 6000) || input.durationMs % 10 !== 0)
         throw Error('动画关键帧的来源、格数或时长无效。');
+    if (input.templatePlaceholder !== undefined && typeof input.templatePlaceholder !== 'boolean')
+        throw Error('模板源帧的占位标识无效。');
     let crop;
     if (input.crop !== undefined) {
         if (!Array.isArray(input.crop) || input.crop.length !== 4 || input.crop.some(value => !integer(value, 0, 16384)) || input.crop[2] <= input.crop[0] || input.crop[3] <= input.crop[1] || (input.crop[2] - input.crop[0]) * (input.crop[3] - input.crop[1]) > 16777216)
             throw Error('关键帧裁切框无效。');
         crop = [...input.crop];
     }
-    return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell], grid: [...input.grid], ...(crop ? { crop } : {}), durationMs: input.durationMs };
+    return { id: input.id, atlasArtifactId: input.atlasArtifactId, cell: [...input.cell], grid: [...input.grid], ...(crop ? { crop } : {}), durationMs: input.durationMs, ...(input.templatePlaceholder ? { templatePlaceholder: true } : {}) };
 }
 function checkedEntry(input) {
     if (!object(input) || !(0, exports.animationId)(input.id) || !text(input.caption, 120) || !text(input.description, 4000) || !exports.ANIMATION_MOTIONS.includes(input.motion) || !Array.isArray(input.frames) || input.frames.length > exports.ANIMATION_MAX_FRAMES || !['draft', 'ready', 'stale', 'failed'].includes(String(input.status)))

@@ -3,18 +3,20 @@ import { Archive, Download, FolderOpen, MoveRight, RotateCcw, ShieldCheck, Uploa
 import type { BackupImportResult, BackupInspection, BackupMeta, BackupSelection, DataManagementBridge, DirectoryLocations } from '../data-management-types';
 import type { Project } from '../types';
 import { RememberedDetails } from './RememberedDetails';
+import { AutomaticBackupPanel } from './AutomaticBackupPanel';
 import './data-management.css';
 
 interface Props {
   workspaceId: string;
   projects: Project[];
   getMeta: (selection?: BackupSelection) => BackupMeta;
+  getSavedMeta?: () => BackupMeta;
   onImported: (result: BackupImportResult) => Promise<void> | void;
   onRelocated: (locations: DirectoryLocations) => Promise<void> | void;
   notify: (message: string, type?: 'success' | 'info' | 'error') => void;
   exportError?: string;
 }
-export function DataManagement({ workspaceId, projects: allProjects, getMeta, onImported, onRelocated, notify, exportError }: Props) {
+export function DataManagement({ workspaceId, projects: allProjects, getMeta, getSavedMeta, onImported, onRelocated, notify, exportError }: Props) {
   const bridge = (window.desktop as (typeof window.desktop & { dataManagement?: DataManagementBridge }))?.dataManagement;
   const [scope, setScope] = useState<'workspace' | 'projects'>('workspace');
   const [selected, setSelected] = useState<string[]>([]);
@@ -40,7 +42,8 @@ export function DataManagement({ workspaceId, projects: allProjects, getMeta, on
   return <section className="panel op-settings-panel data-management">
     <header><h2><Archive size={18} /> 备份与恢复</h2><p>保存项目、素材、聊天、编辑记录和费用，换机或恢复时继续使用。API Key 单独加密保存。</p></header>
     {!bridge ? <p className="data-management-note">请在桌面版管理完整备份与本地目录。</p> : <>
-      <div className="data-management-block"><h3><Download size={16} /> 创建备份</h3><p>{scope === 'workspace' ? `当前工作区的 ${projects.length} 个项目、素材、聊天和历史费用。` : `已选择 ${selected.length} 个项目，包含本区素材库。`}备份文件不包含 API Key。</p>
+      <AutomaticBackupPanel workspaceId={workspaceId} bridge={bridge} getMeta={getSavedMeta || (() => getMeta({ workspaceIds: [workspaceId] }))} disabledReason={exportError} onImported={finish} onDeferred={result => { setPending(current => [...current.filter(item => item.backupId !== result.backupId), result]); notify('恢复文件已准备好，当前工作区保持不变；可在备份恢复中继续保存登记。', 'info'); }} />
+      <div className="data-management-block"><h3><Download size={16} /> 手动 ZIP 备份</h3><p>{scope === 'workspace' ? `当前工作区的 ${projects.length} 个项目、素材、聊天和历史费用。` : `已选择 ${selected.length} 个项目，包含本区素材库。`}备份文件不包含 API Key。</p>
         <RememberedDetails rememberKey={`workspace:${workspaceId}:backup-scope`}><summary>选择备份范围与查看容量说明</summary><p>默认备份整个工作区，包含聊天与聊天费用；仅选项目时不包含聊天。文件合计上限512MB、单文件100MB，运行历史和索引上限16MB。</p>
         <label className="data-management-choice"><input type="radio" name="backup-scope" checked={scope === 'workspace'} onChange={() => setScope('workspace')} />当前工作区全部项目、素材与聊天</label>
         <label className="data-management-choice"><input type="radio" name="backup-scope" checked={scope === 'projects'} onChange={() => setScope('projects')} />选择当前工作区的项目（含素材库）</label>

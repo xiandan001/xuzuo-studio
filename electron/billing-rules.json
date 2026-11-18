@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "verifiedAt": "2026-11-05",
+  "verifiedAt": "2026-11-18",
   "rules": [
     {
       "id": "openai-gpt-6-luna",
@@ -1777,6 +1777,106 @@
         "vision"
       ],
       "validFrom": "2026-10-30"
+    },
+    {
+      "id": "openai-gpt-6-2-astra",
+      "version": "2026-11-18.1",
+      "modelId": "gpt-6.2-astra",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-11-18",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "8",
+        "output": "40"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "8",
+        "output": "40",
+        "cachedInput": "0.40",
+        "cacheWrite30m": "10",
+        "cacheWrite12h": "20"
+      },
+      "basis": "官方全球Standard普通实时按量价；按供应商实际输入、缓存读写及输出用量核算，输出包含思考Token；不含账户优惠、工具、地区端点或其他处理档位及后台completion窗口折扣。",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/guides/prompt-caching"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-11-17"
+    },
+    {
+      "id": "openai-gpt-6-2-sol",
+      "version": "2026-11-18.1",
+      "modelId": "gpt-6.2-sol",
+      "providerId": "openai",
+      "protocols": [
+        "openai-responses",
+        "openai-chat"
+      ],
+      "allowedHosts": [
+        "api.openai.com"
+      ],
+      "allowedPaths": [
+        "/v1"
+      ],
+      "port": "",
+      "verifiedAt": "2026-11-18",
+      "officialUrl": "https://developers.openai.com/api/docs/pricing",
+      "expectedPricing": {
+        "currency": "USD",
+        "unit": "million-tokens",
+        "input": "2",
+        "output": "10"
+      },
+      "currency": "USD",
+      "scheme": "tokens",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.10",
+        "cacheWrite30m": "2.50",
+        "cacheWrite12h": "5"
+      },
+      "basis": "官方全球Standard普通实时按量价；按供应商实际输入、缓存读写及输出用量核算，输出包含思考Token；不含账户优惠、工具、地区端点或其他处理档位及后台completion窗口折扣。",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        "https://developers.openai.com/api/docs/pricing",
+        "https://developers.openai.com/api/docs/guides/prompt-caching"
+      ],
+      "longContext": {
+        "threshold": 272000,
+        "inputMultiplier": "2",
+        "outputMultiplier": "1.5"
+      },
+      "operations": [
+        "text",
+        "vision"
+      ],
+      "validFrom": "2026-11-17"
     }
   ]
 }

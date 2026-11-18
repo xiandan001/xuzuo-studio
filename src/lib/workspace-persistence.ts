@@ -2,11 +2,13 @@ import type { StorageIssue } from '../configuration-types';
 import { INITIAL_PREFERENCES } from '../data';
 import { migrateLegacyWorkspace, recoverInterruptedTasks, visibleWorkspaces } from './workspace-state';
 import type { LegacyState, WorkspaceState } from './workspace-state';
+import { notifyBackupSourceSaved } from './backup-change-events';
 
 export const WORKSPACE_STORAGE_KEY = 'xuzuo-ui-prototype-v2';
 const LEGACY_KEY = 'xuzuo-ui-prototype-v1';
 type Store = Pick<Storage, 'getItem' | 'setItem'>;
 type StoreSource = Store | (() => Store);
+type StoreReadSource = Pick<Storage, 'getItem'> | (() => Pick<Storage, 'getItem'>);
 export interface WorkspaceRead { state: WorkspaceState; issue?: StorageIssue; originalKey: string; raw: string | null; }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const strings = (value: Record<string, unknown>, fields: string[]) => fields.every(field => typeof value[field] === 'string');
@@ -23,7 +25,7 @@ export function emptyWorkspaceState(): WorkspaceState {
   const id = `workspace-${crypto.randomUUID()}`;
   return { workspaces: [{ id, name: '我的个人工作室', description: '', createdAt: new Date().toISOString() }], activeWorkspaceId: id, projects: [], ledger: [], preferencesByWorkspace: { [id]: { ...INITIAL_PREFERENCES } }, customPrompts: [] };
 }
-export function readWorkspaceState(source: StoreSource): WorkspaceRead {
+export function readWorkspaceState(source: StoreReadSource): WorkspaceRead {
   let raw: string | null = null, originalKey = WORKSPACE_STORAGE_KEY;
   try {
     const storage = typeof source === 'function' ? source() : source;
@@ -51,7 +53,7 @@ export function readWorkspaceState(source: StoreSource): WorkspaceRead {
 }
 export function writeWorkspaceState(source: StoreSource, state: WorkspaceState, issue?: StorageIssue): StorageIssue | undefined {
   if (issue?.kind === 'read') return issue;
-  try { (typeof source === 'function' ? source() : source).setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(state)); return undefined; }
+  try { (typeof source === 'function' ? source() : source).setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(state)); notifyBackupSourceSaved(); return undefined; }
   catch { return { kind: 'write', message: '工作室数据未能保存。当前内存中的内容仍保留，请先导出，再检查本机存储空间或权限。', canExportOriginal: true }; }
 }
 export function resetWorkspaceState(source: StoreSource, loaded: WorkspaceRead, currentDraft?: WorkspaceState): { ok: boolean; issue?: StorageIssue } {
@@ -65,6 +67,7 @@ export function resetWorkspaceState(source: StoreSource, loaded: WorkspaceRead, 
     storage.setItem(`${WORKSPACE_STORAGE_KEY}.recovery.${Date.now()}-${crypto.randomUUID()}`, JSON.stringify(backup));
     if (storage.getItem(originalKey) !== original) throw new Error('数据已在其他窗口更新。');
     storage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(emptyWorkspaceState()));
+    notifyBackupSourceSaved();
     return { ok: true };
   } catch { return { ok: false, issue: { kind: loaded.issue?.kind || 'write', message: '备份或重置未完成，原始内容仍保留，尚未建立新的工作室。请先导出数据并检查存储空间。', canExportOriginal: loaded.raw !== null || !!currentDraft } }; }
 }

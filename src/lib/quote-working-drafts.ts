@@ -2,6 +2,7 @@ import type { QuoteFields, QuoteMode, QuoteStoreSource } from './project-quotes'
 import { validQuoteFields } from './project-quotes';
 import { validCustomerQuoteInfo } from './customer-quote';
 import type { CustomerQuoteInfo } from './customer-quote';
+import { notifyBackupSourceSaved } from './backup-change-events';
 export interface QuoteWorkingDraft { type: 'xuzuo-quote-working'; version: 1; workspaceId: string; projectId: string; inputs: QuoteFields; mode: QuoteMode; scope: 'live' | 'simulation'; customer: CustomerQuoteInfo; baseSavedRaw: string | null; updatedAt: string; }
 export const quoteWorkingKey = (workspaceId: string, projectId: string) => `xuzuo-project-quote-working-v1:${encodeURIComponent(workspaceId)}:${encodeURIComponent(projectId)}`;
 export function readQuoteWorkingDraft(source: QuoteStoreSource, workspaceId: string, projectId: string): { raw: string | null; draft?: QuoteWorkingDraft; error?: string } {
@@ -19,5 +20,5 @@ export function saveQuoteWorkingDraft(source: QuoteStoreSource, value: QuoteWork
   const storage = typeof source === 'function' ? source() : source, previous = readQuoteWorkingDraft(storage, value.workspaceId, value.projectId);
   if (previous.error) throw Error(previous.error);
   if (previous.raw !== expectedRaw) throw Error('临时报价草稿已在另一窗口改变，当前输入仍保留。请先导出恢复稿，再读取最新草稿。');
-  const raw = JSON.stringify(value); storage.setItem(quoteWorkingKey(value.workspaceId, value.projectId), raw); return raw;
+  const raw = JSON.stringify(value); storage.setItem(quoteWorkingKey(value.workspaceId, value.projectId), raw); notifyBackupSourceSaved(value.workspaceId); return raw;
 }

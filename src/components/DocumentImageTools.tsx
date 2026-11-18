@@ -1,5 +1,5 @@
 import { RememberedDetails } from './RememberedDetails';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, ImagePlus, RefreshCw, Sparkles } from 'lucide-react';
 import type { PageProps } from '../types';
 import type { ArtifactMetadata } from '../live-types';
@@ -9,7 +9,9 @@ import { documentImageModels } from '../lib/document-illustrations';
 import { DOCUMENT_IMAGE_SIZES, documentImageSizePrompt } from '../lib/document-image-size';
 import type { ImageDimensions } from '../lib/document-image-size';
 import { creationPrompt } from '../lib/creation-quality';
-import { studioCredential, studioModel, workflowPublicError } from '../lib/studio-run';
+import { workflowPublicError } from '../lib/studio-run';
+import { studioProjectCredential, studioProjectModel } from '../lib/studio-project-bindings';
+import { readDocumentImageBinding, saveDocumentImageBinding, type DocumentImageBinding } from '../lib/document-image-binding';
 import { Select } from './Select';
 import './document-illustrations.css';
 
@@ -18,7 +20,7 @@ interface ImageEditContext { version: 1; targetId: string; sourceImageId: string
 interface Result { file: ArtifactMetadata; preview: string; target: DocumentImageTarget; }
 export function DocumentImageTools({ props, target, images, preview, disabled, beforeRun, onReplace, onImport, onPickAsset }: Props) {
   const [instruction, setInstruction] = useState('保留主体和画面风格，按我的修改要求优化细节。');
-  const [modelId, setModelId] = useState(''), [keyId, setKeyId] = useState(''), [workflowId, setWorkflowId] = useState('');
+  const [workflowId, setWorkflowId] = useState('');
   const [pending, setPending] = useState(false), [error, setError] = useState(''), [result, setResult] = useState<Result>(), [confirmed, setConfirmed] = useState(false);
   const [size, setSize] = useState('auto'), [dimensions, setDimensions] = useState<ImageDimensions>();
   const [readFailed, setReadFailed] = useState(false), [readVersion, setReadVersion] = useState(0), [reading, setReading] = useState(false);
@@ -26,14 +28,26 @@ export function DocumentImageTools({ props, target, images, preview, disabled, b
   const thumbnailReader = useRef(props.workflowRunner.thumbnailArtifact); thumbnailReader.current = props.workflowRunner.thumbnailArtifact;
   const projectId = props.activeProject.id, prefix = `document-image-edit-${projectId}-`, scope = `${props.workspaceId}/${projectId}/${target.id}/${target.imageId}`;
   const currentScope = useRef(scope); currentScope.current = scope;
-  const models = documentImageModels(props.configuration, 'image-editing'), model = studioModel(models, modelId);
+  const bindingScope = `${props.workspaceId}/${projectId}`, initialBinding = useMemo(() => readDocumentImageBinding(props.workspaceId, projectId), [props.workspaceId, projectId]);
+  const [binding, setBinding] = useState<{ scope: string; value: DocumentImageBinding }>(() => ({ scope: bindingScope, value: initialBinding }));
+  const choice = binding.scope === bindingScope ? binding.value : initialBinding;
+  const models = documentImageModels(props.configuration, 'image-editing'), model = studioProjectModel(models, choice.modelConfigId);
   const credentials = props.configuration.credentials.filter(item => item.enabled && item.connectionId === model?.connectionId);
-  const credentialId = studioCredential(credentials, model?.connectionId, keyId);
+  const credentialId = !choice.connectionId || choice.connectionId === model?.connectionId ? studioProjectCredential(credentials, model, choice.credentialId) : undefined;
+  const account = credentials.find(item => item.id === credentialId);
+  const settingsDefault = useRef({ scope: bindingScope, open: !model || !credentialId });
+  if (settingsDefault.current.scope !== bindingScope) settingsDefault.current = { scope: bindingScope, open: !model || !credentialId };
+  useEffect(() => { if (model && credentialId) saveDocumentImageBinding(props.workspaceId, projectId, { modelConfigId: model.id, connectionId: model.connectionId, credentialId }); }, [props.workspaceId, projectId, model?.id, model?.connectionId, credentialId]);
+  function chooseModel(modelConfigId: string) {
+    const selected = models.find(item => item.id === modelConfigId); if (!selected) return;
+    const value = { modelConfigId, connectionId: selected.connectionId, ...(modelConfigId === choice.modelConfigId && choice.credentialId && !credentialId ? { credentialId: choice.credentialId } : {}) };
+    setBinding({ scope: bindingScope, value }); saveDocumentImageBinding(props.workspaceId, projectId, value);
+  }
+  function chooseAccount(credentialId: string) { if (model && credentials.some(item => item.id === credentialId)) { const value = { modelConfigId: model.id, connectionId: model.connectionId, credentialId }; setBinding({ scope: bindingScope, value }); saveDocumentImageBinding(props.workspaceId, projectId, value); } }
   const latest = props.workflowRunner.runs.find(run => run.mode === 'live' && run.workspaceId === props.workspaceId && run.projectId === projectId && (workflowId ? run.workflowId === workflowId : run.workflowId.startsWith(prefix)));
   const active = props.workflowRunner.runs.some(run => run.workspaceId === props.workspaceId && run.projectId === projectId && ['running', 'paused'].includes(run.status));
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; }; }, []);
   useEffect(() => { operation.current++; startRequest.current = operation.current; starting.current = false; setPending(false); setError(''); setResult(undefined); setWorkflowId(''); setReadFailed(false); setReading(false); setSize('auto'); seen.current = ''; }, [scope]);
-  useEffect(() => { setKeyId(''); }, [scope, model?.id]);
   useEffect(() => { setConfirmed(false); setError(''); }, [scope, model?.id, credentialId, instruction, size]);
   useEffect(() => {
     setDimensions(undefined);
@@ -93,10 +107,15 @@ export function DocumentImageTools({ props, target, images, preview, disabled, b
   return <section className="document-image-tools" aria-label="独立编辑文档图片"><header><Image size={18} /><strong>编辑所选插图</strong><span>只替换当前位置，正文与其他图片保留</span></header>
     <label>替换为项目图片<Select disabled={disabled || running} aria-label="替换文档所选图片" value={target.imageId} onValueChange={id => { const file = images.find(item => item.id === id); if (file) { try { onReplace(target, file); setResult(undefined); setError(''); } catch (cause) { setError(workflowPublicError(cause, '图片未替换，原图保留。')); } } }} options={images.map((image, index) => ({ value: image.id, label: `${index + 1} · ${image.name}` }))} /></label>
     <div className="document-image-tools-actions">{onPickAsset && <button className="btn btn-secondary" disabled={disabled || running} onClick={onPickAsset}><Image size={15} />从素材库替换</button>}<button className="btn btn-secondary" disabled={disabled || running} onClick={onImport}><ImagePlus size={15} />从本地替换</button></div>
-    <RememberedDetails rememberKey={`project:${projectId}:document-image-refinement`}><summary>用 AI 精修这张图片</summary><p>生成会调用模型并累计费用；重新读取已有结果不调用模型。预览后再决定是否替换，原图与历史版本保留。</p>
-      <label>输出比例与尺寸<Select disabled={running || reading} aria-label="文档插图输出尺寸" value={size} onValueChange={setSize} options={DOCUMENT_IMAGE_SIZES} /></label><small>{dimensions ? `原图 ${dimensions.width} × ${dimensions.height}。` : ''}自动尺寸由模型决定，预览时请核对比例；具体支持的尺寸会在执行前检查。</small>
-      <label>修改要求<textarea disabled={running} aria-label="文档插图修改要求" value={instruction} maxLength={6000} onChange={event => setInstruction(event.target.value)} /></label><label>图片编辑模型<Select disabled={running} aria-label="文档插图精修模型" value={model?.id || ''} onValueChange={setModelId} options={[{ value: '', label: '请选择图片编辑模型' }, ...models.map(item => ({ value: item.id, label: item.name }))]} /></label>{credentials.length > 1 && <label>调用凭证<Select disabled={running} aria-label="文档插图精修凭证" value={credentialId || ''} onValueChange={setKeyId} options={[{ value: '', label: '请选择该连接的 Key' }, ...credentials.map(item => ({ value: item.id, label: item.name }))]} /></label>}{!model || !credentialId ? <p>请在模型中心配置图片编辑模型与启用的 Key。</p> : null}
+    <RememberedDetails rememberKey={`project:${projectId}:document-image-refinement`}><summary>用 AI 精修这张图片</summary><p>写下要改的地方，生成后先预览，再决定是否替换。</p>
+      <label>修改要求<textarea disabled={running} aria-label="文档插图修改要求" value={instruction} maxLength={6000} onChange={event => setInstruction(event.target.value)} /></label>
+      <RememberedDetails className="document-image-model-settings" rememberKey={`project:${props.workspaceId}:${projectId}:document-image-settings`} defaultOpen={settingsDefault.current.open}><summary>制作设置<small>{model?.name || '请选择图片编辑模型'}{account ? ` · ${account.name}` : model ? ' · 请选择调用账户' : ''}</small></summary>
+        <label>图片编辑模型<Select disabled={running} aria-label="文档插图精修模型" value={model?.id || ''} onValueChange={chooseModel} options={[{ value: '', label: '请选择图片编辑模型' }, ...models.map(item => ({ value: item.id, label: item.name }))]} /></label>
+        {(credentials.length > 1 || !credentialId) && <label>调用账户<Select disabled={running || !model} aria-label="文档插图精修凭证" value={credentialId || ''} onValueChange={chooseAccount} options={[{ value: '', label: '请选择调用账户' }, ...credentials.map(item => ({ value: item.id, label: item.name }))]} /></label>}
+        <label>输出比例与尺寸<Select disabled={running || reading} aria-label="文档插图输出尺寸" value={size} onValueChange={setSize} options={DOCUMENT_IMAGE_SIZES} /></label><small>{dimensions ? `原图 ${dimensions.width} × ${dimensions.height}。` : ''}自动尺寸由模型决定，预览时请核对比例。</small>
+      </RememberedDetails>{!model || !credentialId ? <p className="document-image-binding-note">在制作设置中选择可用的图片编辑模型和调用账户。</p> : null}
       <div className="document-image-tools-actions"><button className="btn btn-primary" disabled={disabled || running || active || reading || !model || !credentialId || !instruction.trim()} onClick={() => { void start(); }}><Sparkles size={15} />{running ? '正在精修…' : confirmed ? '确认开始精修' : '精修当前图片'}</button>{latest && ['failed', 'interrupted', 'cancelled', 'paused'].includes(latest.status) && <button className="btn btn-secondary" onClick={() => props.navigate('activity', projectId)}>查看未完成任务</button>}</div>
+      <small className="document-image-cost-note">AI 精修会新增调用费用；原图、其他内容与历史费用保留。</small>
     </RememberedDetails>
     {error && <p className="document-image-error" role="alert">{error}</p>}{readFailed && latest?.status === 'complete' && <div className="document-image-tools-actions"><button className="btn btn-secondary" disabled={reading || running} onClick={() => { seen.current = ''; setReadFailed(false); setError(''); setReadVersion(value => value + 1); }}><RefreshCw size={15} />重新读取精修结果</button><small>只读取已保存文件，0 新增模型调用费。</small></div>}{reading && <p role="status">正在读取已保存的精修结果…</p>}
     {result && <><div className="document-image-tools-preview"><div><strong>原图</strong>{preview && result.target.imageId === target.imageId ? <img src={preview} alt="文档插图原图" /> : <span>原图仍保留在项目文件中</span>}</div><div><strong>精修结果 · 尚未替换</strong><img src={result.preview} alt="文档插图精修结果" /></div></div><div className="document-image-tools-actions"><button className="btn btn-primary" disabled={disabled || running || reading} onClick={() => { try { onReplace(result.target, result.file); setResult(undefined); setError(''); } catch (cause) { setError(workflowPublicError(cause, '图片位置已改变，原图未替换。')); } }}>用精修图替换原位置</button><button className="btn btn-secondary" onClick={() => setResult(undefined)}>保留原图</button></div></>}
