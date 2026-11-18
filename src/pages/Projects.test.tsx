@@ -11,7 +11,7 @@ describe('项目页先呈现可操作范围', () => {
   });
   it('真正空项目有新建入口，不只显示无效的清筛选', () => {
     const html = renderToStaticMarkup(<Projects {...fixture([])} />);
-    expect(html).toContain('这里还没有项目'); expect(html).toContain('开始第一份作品');
+    expect(html).toContain('这里还没有项目'); expect(html.slice(html.indexOf('这里还没有项目'))).toMatch(/<button[^>]*>新建作品<\/button>/);
   });
   it('默认收起状态和业务分类筛选，保留类型、搜索、视图与明确筛选入口', () => {
     const html = renderToStaticMarkup(<Projects {...fixture([make('one')])} />);
