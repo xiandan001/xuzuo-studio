@@ -1,7 +1,7 @@
 import { createLivePolling } from '../lib/live-polling';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkflowDefinition, WorkflowRun, WorkflowRunner } from '../configuration-types';
-import type { ArtifactMetadata, LiveRuntimeStatus, LiveSnapshot, LiveStartRequest } from '../live-types';
+import type { ArtifactMetadata, LiveRuntimeBridge, LiveRuntimeStatus, LiveSnapshot, LiveStartRequest } from '../live-types';
 import type { LedgerEntry, Project } from '../types';
 import type { WorkflowRunnerOptions } from './useWorkflowRunner';
 import { activeRun } from '../lib/workflows';
@@ -17,6 +17,7 @@ import { createLiveStartCoordinator } from '../lib/live-start';
 import { prepareLiveStartSource } from '../lib/live-start-source';
 
 type SimulationRunner = Pick<WorkflowRunner, 'runs' | 'start' | 'pause' | 'resume' | 'cancel' | 'retry' | 'manageRun' | 'simulationStorage'>;
+type RunControl = Pick<Parameters<LiveRuntimeBridge['control']>[0], 'action' | 'stepId' | 'stepBudgetCents' | 'stepMaxOutputTokens' | 'imageExportSize'>;
 const unavailable = { available: false, reason: '真实执行仅在新版桌面应用中可用；浏览器可编辑配置或主动选择模拟。' };
 export function overlayArtifactMetadata(runs: WorkflowRun[], trash: ArtifactMetadata[] | undefined, updated: Record<string, ArtifactMetadata>): WorkflowRun[] {
   const recycled = new Map(trash?.map(artifact => [artifact.id, artifact]));
@@ -174,7 +175,8 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     const bridge = window.desktop?.runtime;
     return prepareLiveStartSource(input, async id => { const old = bridge?.runDetail ? await bridge.runDetail(id) : liveRunsRef.current.find(run => run.id === id); if (!old) throw new Error('上一轮任务暂不能可靠读取，原记录与费用保留。'); return old; }, listProjectArtifacts);
   }
-  const liveControl = async (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue', stepId?: string, stepBudgetCents?: number | null, imageExportSize?: { width: number; height: number }) => {
+  const liveControl = async (id: string, control: RunControl) => {
+    const { action, imageExportSize } = control;
     const bridge = window.desktop?.runtime;
     const current = optionsRef.current;
     const run = liveRunsRef.current.find(item => item.id === id && current.projects.some(project => project.id === item.projectId && project.workspaceId === current.workspaceId && !project.trashedAt && !project.purgedAt));
@@ -190,7 +192,7 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
     }
     const project = current.projects.find(item => item.id === run.projectId);
     try {
-      await bridge.control({ id, action, stepId, stepBudgetCents, ...(imageExportSize ? { imageExportSize } : {}), project, connections: current.configuration.connections, models: current.configuration.models });
+      await bridge.control({ id, ...control, project, connections: current.configuration.connections, models: current.configuration.models });
     }
     catch (error) {
       if (imageExportSize) throw error;
@@ -235,11 +237,15 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
       } catch (error) { return { status: 'rejected', code: 'START_INPUT', error: error instanceof Error ? error.message : '真实流程未能开始。' }; }
     },
     readStartResult: projectId => starts.read(projectId),
-    pause(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'pause'); else simulation.pause(id); },
-    resume(id, stepBudgetCents) { const run = liveRunsRef.current.find(item => item.id === id); if (run) void liveControl(id, ['failed', 'interrupted'].includes(run.status) ? 'continue' : 'resume', undefined, stepBudgetCents); else simulation.resume(id, stepBudgetCents); },
-    resumeResizedImage: window.desktop?.runtime ? (id, size) => liveControl(id, 'resume', undefined, undefined, size) : undefined,
-    cancel(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'cancel'); else simulation.cancel(id); },
-    retry(id, stepId) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, 'retry', stepId); else simulation.retry(id, stepId); },
+    pause(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, { action: 'pause' }); else simulation.pause(id); },
+    resume(id, stepBudgetCents, stepMaxOutputTokens) {
+      const run = liveRunsRef.current.find(item => item.id === id);
+      if (run) void liveControl(id, { action: ['failed', 'interrupted'].includes(run.status) ? 'continue' : 'resume', stepBudgetCents, stepMaxOutputTokens });
+      else simulation.resume(id, stepBudgetCents);
+    },
+    resumeResizedImage: window.desktop?.runtime ? (id, size) => liveControl(id, { action: 'resume', imageExportSize: size }) : undefined,
+    cancel(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, { action: 'cancel' }); else simulation.cancel(id); },
+    retry(id, stepId) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, { action: 'retry', stepId }); else simulation.retry(id, stepId); },
     async importFiles(projectId) { return window.desktop?.runtime ? window.desktop.runtime.importFiles(projectId) : []; },
     listProjectArtifacts: window.desktop?.runtime?.listProjectArtifacts ? listProjectArtifacts : undefined,
     async manageRun(id, action) {

@@ -7,7 +7,10 @@ export function useAutomationCenter(workspaceId: string) {
   const bridge = typeof window === 'undefined' ? undefined : window.desktop?.automation;
   const store = useMemo(() => bridge ? automationSnapshotStore(bridge, workspaceId) : undefined, [bridge, workspaceId]);
   const state = useSyncExternalStore(store?.subscribe || noSubscription, store?.getSnapshot || unavailable, unavailable);
-  const refresh = useCallback(async () => { await store?.refresh(); }, [store]);
+  const refresh = useCallback(async (afterCurrent = false) => {
+    if (afterCurrent) await store?.refreshAfterCurrent();
+    else await store?.refresh();
+  }, [store]);
   useEffect(() => { void refresh(); }, [refresh]);
   return { bridge, loading: state.loading, snapshot: state.snapshot, refresh };
 }

@@ -6,7 +6,7 @@ import type { WorkflowRun } from '../configuration-types';
 
 function fixture(withProject: boolean): PageProps {
   const project = { id: 'empty-task-project', name: '客户文档', kind: 'word', workspaceId: 'audit', status: 'draft' };
-  return { projects: withProject ? [project] : [], activeProject: withProject ? project : { id: '' }, workflowRunner: { runs: [] }, navigate: () => undefined, onCreateProject: () => undefined, onGenerate: () => { throw new Error('An empty task page must not generate anything.'); } } as unknown as PageProps;
+  return { workspaceId: 'audit', projects: withProject ? [project] : [], activeProject: withProject ? project : { id: '' }, workflowRunner: { runs: [] }, navigate: () => undefined, onCreateProject: () => undefined, onGenerate: () => { throw new Error('An empty task page must not generate anything.'); } } as unknown as PageProps;
 }
 describe('任务中心无执行记录', () => {
   it('有项目也只显示真实空态和导航，不提供假演示或生成操作', () => {
@@ -21,9 +21,9 @@ describe('任务中心无执行记录', () => {
   it('默认展示紧凑任务及明确下一步，完整详情按需展开，不自动加载历史日志', () => {
     const props = fixture(true);
     props.ledger = [];
-    props.workflowRunner.runs = [{ id: 'finished', projectId: 'empty-task-project', workflowName: '客户手册', status: 'complete', mode: 'live', snapshot: { steps: [{ id: 'text', enabled: true }] }, attempts: [{ stepId: 'text', status: 'complete' }, { stepId: 'text', status: 'failed' }], updatedAt: '2026-11-02T09:00:00Z' }] as WorkflowRun[];
+    props.workflowRunner.runs = [{ id: 'finished', workspaceId: 'audit', projectId: 'empty-task-project', workflowName: '客户手册', status: 'complete', mode: 'live', snapshot: { steps: [{ id: 'text', enabled: true }] }, attempts: [{ stepId: 'text', status: 'complete' }, { stepId: 'text', status: 'failed' }], updatedAt: '2026-11-02T09:00:00Z' }] as WorkflowRun[];
     const html = renderToStaticMarkup(<Activity {...props} />);
-    expect(html).toContain('按任务状态筛选'); expect(html).toContain('筛选任务项目'); expect(html).toContain('搜索任务');
+    expect(html).toContain('按任务状态筛选'); expect(html).toContain('筛选与管理'); expect(html).not.toContain('筛选任务项目'); expect(html).toContain('搜索任务');
     expect(html).toContain('查看结果与步骤'); expect(html).not.toContain('查看成品'); expect(html).toContain('执行完成'); expect(html).toContain('0 / 1 步已完成');
     expect(html).not.toContain('wf-run-card'); expect(html).not.toContain('重试此步'); expect(html).not.toContain('已确认交付');
   });

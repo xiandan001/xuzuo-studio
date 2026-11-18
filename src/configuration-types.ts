@@ -91,7 +91,7 @@ export interface WorkflowRunner {
   runs: WorkflowRun[];
   start: (workflow: WorkflowDefinition, projectId: string, input: string, variables: Record<string, string>) => boolean;
   pause: (id: string) => void;
-  resume: (id: string, stepBudgetCents?: number | null) => void;
+  resume: (id: string, stepBudgetCents?: number | null, stepMaxOutputTokens?: number) => void;
   resumeResizedImage?: (id: string, size: { width: number; height: number }) => Promise<void>;
   cancel: (id: string) => void;
   retry: (id: string, stepId: string) => void;

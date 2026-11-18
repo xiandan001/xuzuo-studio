@@ -75,6 +75,40 @@ async function acknowledge() {
 }
 
 describe('工作流质量检查与人工验收', () => {
+  it('抽屉首屏不读取完整日志，打开对应步骤后才显示尝试结果', async () => {
+    const f = fixture();
+    const detail = { ...f.run, attempts: f.run.attempts.map(item => item.stepId === 'review' ? { ...item, summary: '独立检查的原始结果' } : item) };
+    const load = vi.fn(async () => detail);
+    f.props.workflowRunner.loadRunDetail = load;
+    await render({ ...f.run, contentTruncated: true }, f.props);
+    expect(load).not.toHaveBeenCalled();
+    expect(host.querySelector('.wf-run-steps')).toBeNull();
+    await click('查看步骤与结果');
+    expect(load).toHaveBeenCalledExactlyOnceWith('run');
+    expect(host.textContent).toContain('独立质检');
+    expect(host.textContent).not.toContain('独立检查的原始结果');
+    await act(async () => host.querySelector<HTMLButtonElement>('#workflow-source-run-review .wf-drawer-attempt-toggle')?.click());
+    expect(host.textContent).toContain('独立检查的原始结果');
+    expect(host.querySelector('#workflow-source-run-generate .wf-attempt-details')).toBeNull();
+  });
+
+  it('截断步骤在确认继续时建议提高上限，并传给同一任务', async () => {
+    const f = fixture();
+    f.props.preferences.confirmGeneration = true;
+    const run: WorkflowRun = {
+      ...f.run,
+      status: 'failed',
+      attempts: [f.run.attempts[0], attempt('truncated', 'review', { status: 'failed', errorCode: 'INCOMPLETE_OUTPUT', incompleteReason: 'output-limit' })],
+    };
+    await render(run, f.props);
+    await click('从当前位置继续');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('提高到 4096 Token');
+    expect(f.resume).not.toHaveBeenCalled();
+    await acknowledge();
+    await click('确认，接受可能再次收费');
+    expect(f.resume).toHaveBeenCalledExactlyOnceWith('run', null, 4096);
+  });
+
   it('先核对失败原因，确认后才提交两项有效 PNG 交付尺寸', async () => {
     const f = fixture();
     await render(f.run, f.props);

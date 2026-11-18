@@ -14,8 +14,8 @@ vi.mock('./hooks/useWorkflowRunner', async original => {
   const actual = await original<typeof import('./hooks/useWorkflowRunner')>();
   return { ...actual, useWorkflowRunner: (...args: Parameters<typeof actual.useWorkflowRunner>) => ({ ...actual.useWorkflowRunner(...args), runs: state.runs, start: state.start }) };
 });
-vi.mock('./pages/Overview', () => ({ Overview: (props: PageProps) => <><button onClick={() => props.onOpenTask?.('run-a', 'project-a')}>定位失败任务</button><button onClick={() => props.onOpenTask?.('run-foreign', 'project-foreign')}>定位其他工作区</button></> }));
-vi.mock('./pages/Activity', () => ({ Activity: (props: PageProps) => <section aria-label="任务定位验收"><output>{JSON.stringify(props.taskIntent)}</output><button onClick={() => props.onTaskIntentConsumed?.(props.taskIntent!.token)}>消费定位</button></section> }));
+vi.mock('./pages/Overview', () => ({ Overview: (props: PageProps) => <><button onClick={() => props.onOpenTask?.('run-a', 'project-a')}>定位失败任务</button><button onClick={() => props.onOpenDispatchTask?.('queued-job', 'project-a')}>定位调度任务</button><button onClick={() => props.onOpenTask?.('run-foreign', 'project-foreign')}>定位其他工作区</button></> }));
+vi.mock('./pages/Activity', () => ({ Activity: (props: PageProps) => <section aria-label="任务定位验收"><output>{JSON.stringify(props.taskIntent)}</output><output aria-label="调度定位">{JSON.stringify(props.dispatchTaskIntent)}</output><button onClick={() => props.onTaskIntentConsumed?.(props.taskIntent!.token)}>消费定位</button><button onClick={() => props.onDispatchTaskIntentConsumed?.(props.dispatchTaskIntent!.token)}>消费调度定位</button></section> }));
 
 let root: Root, host: HTMLDivElement;
 beforeEach(() => {
@@ -50,4 +50,14 @@ it('等待保存期间任务被移走时，不用旧目标进入或重试任务'
   await open(); let allow!: (value: boolean) => void; state.confirm.mockImplementation(() => new Promise(resolve => { allow = resolve; }));
   await click('定位失败任务'); state.runs.splice(0);
   await act(async () => allow(true)); await paint(); expect(host.querySelector('[aria-label="任务定位验收"]')).toBeNull(); expect(state.start).not.toHaveBeenCalled();
+});
+it('从自动化提交只定位原调度项，不二次提交', async () => {
+  await open(); await click('定位调度任务');
+  for (let i = 0; i < 30 && !host.querySelector('[aria-label="调度定位"]'); i++) await paint();
+  const target = host.querySelector('[aria-label="调度定位"]')!;
+  expect(JSON.parse(target.textContent!)).toMatchObject({ workspaceId: 'workspace-a', projectId: 'project-a', jobId: 'queued-job', token: expect.any(String) });
+  expect(host.querySelector('output')!.textContent).toBe('');
+  expect(state.start).not.toHaveBeenCalled();
+  await click('消费调度定位');
+  expect(target.textContent).toBe('');
 });

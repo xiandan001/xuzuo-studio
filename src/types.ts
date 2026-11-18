@@ -123,6 +123,9 @@ export interface PageProps {
   activeView?: ViewId;
   onOpenTask?: (runId: string, projectId: string) => void;
   taskIntent?: { token: string; workspaceId: string; projectId: string; runId: string };
+  dispatchTaskIntent?: import('./automation-types').DispatchTaskIntent;
+  onDispatchTaskIntentConsumed?: (token: string) => void;
+  onOpenDispatchTask?: (jobId: string, projectId: string) => void;
   onTaskIntentConsumed?: (token: string) => void;
   automationIntent?: import('./automation-types').AutomationIntent;
   onAutomationIntentConsumed?: (token: string) => void;

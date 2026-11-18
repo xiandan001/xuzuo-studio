@@ -4,7 +4,7 @@ import type { WorkflowRun } from '../configuration-types';
 import type { Project, ViewId } from '../types';
 
 export interface AppNavigationItem { id: ViewId; label: string; icon: LucideIcon; }
-export interface NavigationTaskSummary { running: number; paused: number; review: number; failed?: number; interrupted?: number; }
+export interface NavigationTaskSummary { running: number; paused: number; review: number; failed?: number; interrupted?: number; queued?: number; dispatchAttention?: number; dispatchIssue?: boolean; }
 export type PrimaryNavigationView = 'overview' | 'projects' | 'assets' | 'automation' | null;
 
 // The full catalog remains available to search and existing deep links.
@@ -34,7 +34,7 @@ export interface ToolNavigationItem extends AppNavigationItem { description: str
 export interface ToolNavigationGroup { id: string; label: string; items: ToolNavigationItem[]; }
 const tool = (id: ViewId, description: string): ToolNavigationItem => ({ ...APP_NAVIGATION.find(item => item.id === id)!, description });
 export const TOOL_GROUPS: ToolNavigationGroup[] = [
-  { id: 'flows', label: '流程与任务', items: [tool('automation', '管理自动运行规则和待处理事项'), tool('workflows', '编辑制作步骤，复用常用流程'), tool('activity', '查看进度，处理暂停、失败与检查')] },
+  { id: 'flows', label: '流程与任务', items: [tool('activity', '查看进度，处理暂停、失败与检查'), tool('automation', '管理自动运行规则'), tool('workflows', '编辑制作步骤，复用常用流程')] },
   { id: 'resources', label: '内容与整理', items: [tool('prompts', '保存创作要求，少打重复的文字'), tool('categories', '整理作品、提示词和工作流')] },
   { id: 'management', label: '设置与经营', items: [tool('business', '商品套餐、数字上架、客户资料与实际收益'), tool('models', '管理模型、API Key 和连接'), tool('finance', '查看真实花费，计算客户报价'), tool('settings', '调整外观、偏好，备份与恢复数据')] },
 ];
@@ -49,7 +49,7 @@ export function primaryNavigationView(view: ViewId): PrimaryNavigationView {
 
 export const MANAGEMENT_SECTIONS: { id: string; label: string; views: ViewId[]; items: { id: ViewId; label: string }[] }[] = [
   { id: 'resources', label: '资源库', views: ['assets', 'prompts', 'categories'], items: [{ id: 'assets', label: '素材' }, { id: 'prompts', label: '提示词模板' }, { id: 'categories', label: '业务分类' }] },
-  { id: 'automation', label: '自动化', views: ['workflows', 'automation', 'activity'], items: [{ id: 'workflows', label: '流程模板' }, { id: 'automation', label: '自动运行' }, { id: 'activity', label: '运行记录' }] },
+  { id: 'automation', label: '自动化', views: ['activity', 'automation', 'workflows'], items: [{ id: 'activity', label: '运行台' }, { id: 'automation', label: '自动化规则' }, { id: 'workflows', label: '流程模板' }] },
   { id: 'settings', label: '模型与设置', views: ['models', 'settings'], items: [{ id: 'models', label: '模型与账户' }, { id: 'settings', label: '外观与数据' }] },
 ];
 export function managementSection(view: ViewId) { return MANAGEMENT_SECTIONS.find(section => section.views.includes(view)); }

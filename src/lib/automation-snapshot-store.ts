@@ -34,6 +34,10 @@ class SnapshotStore {
     if (this.pending) { this.changedDuringRead = true; return; }
     void this.refresh(true);
   }
+  refreshAfterCurrent = async (): Promise<void> => {
+    await this.pending;
+    await this.refresh();
+  };
   refresh = (background = false): Promise<void> => {
     if (this.pending) return this.pending;
     if (!background) this.publish({ ...this.state, loading: true });

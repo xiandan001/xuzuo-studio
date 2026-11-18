@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { WorkflowRun } from '../configuration-types';
 
-export function TaskRunList({ runs, renderRun, initialRunId, followRunId, onPageChange }: { runs: WorkflowRun[]; renderRun: (run: WorkflowRun) => ReactNode; initialRunId?: string; followRunId?: string; onPageChange?: () => void }) {
+export function TaskRunList<T extends { id: string }>({ runs, renderRun, initialRunId, followRunId, onPageChange }: { runs: T[]; renderRun: (run: T) => ReactNode; initialRunId?: string; followRunId?: string; onPageChange?: () => void }) {
   const [page, setPage] = useState(() => Math.floor(Math.max(0, runs.findIndex(run => run.id === initialRunId)) / 25));
   const pages = Math.max(1, Math.ceil(runs.length / 25)), followedIndex = followRunId ? runs.findIndex(run => run.id === followRunId) : -1;
   const current = followedIndex >= 0 ? Math.floor(followedIndex / 25) : Math.min(page, pages - 1);

@@ -36,11 +36,10 @@ const hooks = vi.hoisted(() => {
     unmount,
   };
 });
-const automation = vi.hoisted(() => ({ tab: 'history', snapshot: {} as unknown }));
+const automation = vi.hoisted(() => ({ snapshot: {} as unknown, bridge: undefined as unknown }));
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: hooks.useState, useRef: hooks.useRef, useEffect: hooks.useEffect, useId: hooks.useId }));
 vi.mock('../hooks/useRememberedBoolean', () => ({ useRememberedBoolean: (_key: string, fallback: boolean) => hooks.useState(fallback) }));
-vi.mock('../hooks/useRememberedString', () => ({ useRememberedString: () => hooks.useState(automation.tab) }));
-vi.mock('../hooks/useAutomationCenter', () => ({ useAutomationCenter: () => ({ snapshot: automation.snapshot, bridge: undefined, refresh: async () => undefined, loading: false }) }));
+vi.mock('../hooks/useAutomationCenter', () => ({ useAutomationCenter: () => ({ snapshot: automation.snapshot, bridge: automation.bridge, refresh: async () => undefined, loading: false }) }));
 vi.mock('../lib/editor-session-guard', () => ({ registerEditorSession: () => () => undefined }));
 vi.mock('./RememberedDetails', () => ({ RememberedDetails: ({ children, className }: { children: ReactNode; className?: string }) => <details open className={className}>{children}</details> }));
 vi.mock('./ModalPortal', () => ({ ModalPortal: ({ children }: { children: ReactNode }) => <>{children}</> }));
@@ -88,12 +87,18 @@ function quoteFixture(changes: Partial<CustomerQuoteInfo> = {}) {
   attachForm();
   return { ...f, field, exportFile, notify, focus, querySelector, onChange, info: () => info, change: (label: string, value: string) => { (field(label).props.onChange as (event: { target: { value: string } }) => void)({ target: { value } }); f.render(); attachForm(); } };
 }
-function automationFixture(tab: string, counts: { rules?: number; history?: number; memory?: number }) {
-  automation.tab = tab;
-  automation.snapshot = { available: true, rules: Array.from({ length: counts.rules || 0 }, (_, index) => ({ id: `rule-${index}`, name: `规则${index}`, projectId: 'project', workflowId: 'workflow', trigger: 'manual', input: '', enabled: false })), decisions: [], jobs: Array.from({ length: counts.history || 0 }, (_, index) => ({ id: `job-${index}`, projectId: 'project', ruleId: 'rule', status: 'complete', createdAt: '2026-11-06T00:00:00Z' })), memories: Array.from({ length: counts.memory || 0 }, (_, index) => ({ id: `memory-${index}`, projectId: 'project', note: `偏好${index}`, action: 'approve', createdAt: '2026-11-06T00:00:00Z' })) };
-  const props = pageProps(); return view(() => AutomationCenter(props));
+function automationFixture(counts: { rules?: number; history?: number; memory?: number }, props = pageProps()) {
+  automation.snapshot = {
+    available: true,
+    rules: Array.from({ length: counts.rules || 0 }, (_, index) => ({ id: `rule-${index}`, workspaceId: 'workspace', name: `规则${index}`, projectId: 'project', workflowId: 'workflow', trigger: 'manual', input: '', enabled: false })),
+    decisions: [],
+    jobs: Array.from({ length: counts.history || 0 }, (_, index) => ({ id: `job-${index}`, projectId: 'project', ruleId: 'rule', status: 'complete', createdAt: '2026-11-06T00:00:00Z' })),
+    memories: Array.from({ length: counts.memory || 0 }, (_, index) => ({ id: `memory-${index}`, projectId: 'project', note: `偏好${index}`, action: 'approve', createdAt: '2026-11-06T00:00:00Z' })),
+  };
+  return view(() => AutomationCenter(props));
 }
-afterEach(() => { hooks.unmount(); vi.unstubAllGlobals(); });
+
+afterEach(() => { hooks.unmount(); vi.unstubAllGlobals(); automation.bridge = undefined; });
 
 describe('task detail, customer quote and automation feedback', () => {
   it('failed detail reads stop loading and retry in place without model controls', async () => {
@@ -145,14 +150,58 @@ describe('task detail, customer quote and automation feedback', () => {
     expect(f.info().quantity).toBe('1');
   });
 
-  it('an empty active automation tab has no more button despite other long lists', () => {
-    const f = automationFixture('history', { rules: 40, history: 0, memory: 100 });
-    expect(f.render()).toContain('规则第一次触发后'); expect(f.render()).not.toContain('再显示20项');
+  it('keeps rule and memory pagination independent and directs history to the task center', () => {
+    const props = pageProps(), f = automationFixture({ rules: 0, history: 100, memory: 21 }, props);
+    expect(f.render()).toContain('还没有自动化规则');
+    expect(f.render()).not.toContain('再显示20项');
+    expect(f.render()).not.toContain('偏好20');
+    f.click('已确认记忆');
+    expect(f.render()).toContain('再显示20条记忆');
+    f.click('再显示20条记忆');
+    expect(f.render()).toContain('偏好20');
+    f.click('任务中心');
+    expect(props.navigate).toHaveBeenCalledWith('activity');
   });
 
-  it('automation more stops at its own tab count and retains the 20-item increment', () => {
-    const f = automationFixture('rules', { rules: 21, memory: 100 });
-    expect((f.render().match(/auto-rule-card/g) || []).length).toBe(20); f.click('再显示20项');
-    expect((f.render().match(/auto-rule-card/g) || []).length).toBe(21); expect(f.render()).not.toContain('再显示20项');
+  it('paginates rules in 20-item increments and searches the full rule list', () => {
+    const f = automationFixture({ rules: 21 });
+    expect((f.render().match(/auto-rule-card/g) || []).length).toBe(20);
+    const search = find(f.tree(), element => element.props['aria-label'] === '搜索自动化规则')!;
+    const change = (value: string) => (search.props.onChange as (event: { target: { value: string } }) => void)({ target: { value } });
+    change('规则20');
+    expect((f.render().match(/auto-rule-card/g) || []).length).toBe(1);
+    expect(f.render()).toContain('规则20');
+    change('');
+    f.render();
+    f.click('再显示20项');
+    expect((f.render().match(/auto-rule-card/g) || []).length).toBe(21);
+    expect(f.render()).not.toContain('再显示20项');
+  });
+
+  it('opens the submitted dispatch task and follows an active job without triggering it again', async () => {
+    const job = { id: 'accepted-job', ruleId: 'rule-0', workspaceId: 'workspace', projectId: 'project', status: 'queued' };
+    const trigger = vi.fn(async () => job), onOpenDispatchTask = vi.fn(), onOpenTask = vi.fn();
+    automation.bridge = { trigger };
+    const props = pageProps(), run = summary();
+    props.configuration.workflows = [run.snapshot];
+    props.workflowRunner = { runs: [run] } as PageProps['workflowRunner'];
+    props.onOpenTask = onOpenTask; props.onOpenDispatchTask = onOpenDispatchTask;
+    const f = automationFixture({ rules: 1 }, props);
+    f.click('运行一次'); f.click('运行一次');
+    await flush();
+    expect(trigger).toHaveBeenCalledExactlyOnceWith({ ruleId: 'rule-0' });
+    expect(onOpenDispatchTask).toHaveBeenCalledExactlyOnceWith(job.id, job.projectId);
+    const data = automation.snapshot as { jobs: unknown[] };
+    data.jobs = [job];
+    f.render();
+    f.click('查看运行');
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(onOpenDispatchTask).toHaveBeenCalledTimes(2);
+    data.jobs = [{ ...job, runId: run.id, status: 'running' }];
+    f.render();
+    f.click('查看运行');
+    expect(onOpenTask).toHaveBeenCalledExactlyOnceWith(run.id, run.projectId);
+    expect(onOpenDispatchTask).toHaveBeenCalledTimes(2);
+    expect(trigger).toHaveBeenCalledTimes(1);
   });
 });

@@ -34,6 +34,18 @@ describe('共享自动化快照订阅', () => {
     const pending = store.refresh(); await Promise.resolve(); f.changed(); f.changed(); f.changed(); held.resolve(snapshot(1)); await pending; await store.refresh();
     expect(f.bridge.snapshot).toHaveBeenCalledTimes(2); expect(store.getSnapshot().snapshot.revision).toBe(2); release();
   });
+  it('派工完成后定位任务，等到旧读取之后的新快照', async () => {
+    const f = fixture(), beforeDispatch = deferred<AutomationSnapshot>();
+    f.bridge.snapshot.mockImplementationOnce(() => beforeDispatch.promise).mockResolvedValue(snapshot(2, '新派工'));
+    const store = automationSnapshotStore(f.bridge, 'one');
+    const initial = store.refresh();
+    const afterDispatch = store.refreshAfterCurrent();
+    beforeDispatch.resolve(snapshot(1));
+    await initial;
+    await afterDispatch;
+    expect(f.bridge.snapshot).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().snapshot).toMatchObject({ revision: 2, rules: [{ id: '新派工' }] });
+  });
   it('相同revision不替换数据对象，异常显示问题并保留已有规则', async () => {
     const f = fixture(), store = automationSnapshotStore(f.bridge, 'one'), release = store.subscribe(vi.fn()); await store.refresh(); const original = store.getSnapshot().snapshot;
     await store.refresh(); expect(store.getSnapshot().snapshot).toBe(original);

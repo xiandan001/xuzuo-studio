@@ -3,6 +3,7 @@ import { ArrowRight, LoaderCircle, Play, RefreshCw, Square } from 'lucide-react'
 import type { WorkflowRun } from '../configuration-types';
 import type { PageProps, Project } from '../types';
 import { workflowPublicError } from '../lib/studio-run';
+import { workflowOutputRetryLimit } from '../lib/workflow-output-retry';
 
 export function HomeProductionRecovery({ run, project, props, onRead }: { run: WorkflowRun; project: Project; props: PageProps; onRead: (run: WorkflowRun) => void }) {
   const [busy, setBusy] = useState(''), [error, setError] = useState('');
@@ -20,15 +21,7 @@ export function HomeProductionRecovery({ run, project, props, onRead }: { run: W
     : ['INVALID_CREDENTIAL', 'INVALID_MODEL'].includes(failed?.errorCode || '')
       || /凭证(?:无效|不可用|不存在)|请重新录入自己的 API Key|HTTP (?:401|402|403|404|429)\b|账户额度不足|请选择启用的真实模型和连接/i.test(message);
   const originalLimit = step?.maxOutputTokens || 2048;
-  const outputTokens = failed?.usage?.outputTokens;
-  const failureMessage = failed?.error || '';
-  const incomplete = failed?.errorCode === 'INCOMPLETE_OUTPUT'
-    || (!failed?.errorCode && (failureMessage === 'INCOMPLETE_OUTPUT' || failureMessage.startsWith('模型未完整生成结果，')));
-  const hitOutputLimit = incomplete && (failed?.incompleteReason === 'output-limit'
-    || (typeof outputTokens === 'number' && Number.isSafeInteger(outputTokens) && outputTokens >= originalLimit));
-  const stepMaxOutputTokens = canContinue && step?.enabled && ['text', 'vision', 'video-understanding'].includes(step.kind)
-    && hitOutputLimit && Number.isSafeInteger(originalLimit) && originalLimit >= 16 && originalLimit < 16384
-    ? Math.min(originalLimit * 2, 16384) : undefined;
+  const stepMaxOutputTokens = workflowOutputRetryLimit(run);
   async function act(action: 'read' | 'continue' | 'cancel') {
     if (pending.current) return;
     const requested = current.current; pending.current = true; setBusy(action); setError('');

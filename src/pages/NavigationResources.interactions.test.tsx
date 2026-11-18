@@ -45,12 +45,12 @@ describe('项目入口、任务定位和素材筛选恢复', () => {
     const runs = Array.from({ length: 28 }, (_, index) => ({ id: `run-${index}`, workspaceId: project.workspaceId, projectId: project.id, workflowId: `workflow-${index}`, workflowName: `流程-${index}`, status: 'failed', stepIndex: 0, variables: {}, input: '', snapshot: { id: `workflow-${index}`, workspaceId: project.workspaceId, name: `流程-${index}`, description: '', outputKind: project.kind, steps: [], updatedAt: '' }, attempts: [], updatedAt: new Date(2026, 10, 16, 0, index).toISOString(), createdAt: '' } as WorkflowRun));
     const f = props(), onTaskIntentConsumed = vi.fn(), before = JSON.stringify(runs);
     f.workflowRunner.runs = runs; f.taskIntent = { token: 'intent', workspaceId: project.workspaceId, projectId: project.id, runId: 'run-0' }; f.onTaskIntentConsumed = onTaskIntentConsumed;
-    await mount(<Activity {...f} />); expect(host.querySelector('[data-opened-run="run-0"]')).toBeTruthy(); expect(host.textContent).toContain('2 / 2'); expect(host.querySelector('.activity-status-grid .active')?.textContent).toContain('需要处理'); expect(onTaskIntentConsumed).toHaveBeenCalledWith('intent');
+    await mount(<Activity {...f} />); expect(document.querySelector('[data-opened-run="run-0"]')).toBeTruthy(); expect(host.textContent).toContain('2 / 2'); expect(host.querySelector('.activity-status-grid .active')?.textContent).toContain('需要处理'); expect(onTaskIntentConsumed).toHaveBeenCalledWith('intent');
     expect(f.workflowRunner.resume).not.toHaveBeenCalled(); expect(f.workflowRunner.retry).not.toHaveBeenCalled(); expect(JSON.stringify(runs)).toBe(before);
   });
   it('跨工作区任务意图不会展开或执行当前任务', async () => {
     const f = props(), onTaskIntentConsumed = vi.fn(); f.workflowRunner.runs = [{ id: 'run', workspaceId: project.workspaceId, projectId: project.id, workflowName: '当前流程', status: 'paused', snapshot: { steps: [] }, attempts: [], updatedAt: '' } as unknown as WorkflowRun];
     f.taskIntent = { token: 'foreign', workspaceId: 'other', projectId: project.id, runId: 'run' }; f.onTaskIntentConsumed = onTaskIntentConsumed;
-    await mount(<Activity {...f} />); expect(host.querySelector('[data-opened-run]')).toBeNull(); expect(onTaskIntentConsumed).toHaveBeenCalledWith('foreign'); expect(f.workflowRunner.resume).not.toHaveBeenCalled();
+    await mount(<Activity {...f} />); expect(document.querySelector('[data-opened-run]')).toBeNull(); expect(onTaskIntentConsumed).toHaveBeenCalledWith('foreign'); expect(f.workflowRunner.resume).not.toHaveBeenCalled();
   });
 });

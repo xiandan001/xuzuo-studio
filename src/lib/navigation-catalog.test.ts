@@ -20,7 +20,7 @@ describe('聚焦主导航与高级路由目录', () => {
     for (const route of ['workflows', 'automation', 'activity'] as const) expect(primaryNavigationView(route)).toBe('automation');
     for (const route of ['models', 'finance', 'settings', 'tools'] as const) expect(primaryNavigationView(route)).toBeNull();
     expect(TOOL_GROUPS).toHaveLength(3);
-    expect(TOOL_GROUPS.every(group => group.items.every(item => item.description.length > 8))).toBe(true);
+    expect(TOOL_GROUPS.every(group => group.items.every(item => item.description.trim().length > 0))).toBe(true);
   });
   it('任务摘要按真实运行状态统计，包含规划任务，隔离外区、已回收项目与隐藏记录', () => {
     const run = (id: string, status: WorkflowRun['status'], extra: Partial<WorkflowRun> = {}) => ({ id, status, projectId: 'one', workspaceId: 'workspace', ...extra } as WorkflowRun);

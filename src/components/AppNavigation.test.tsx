@@ -40,4 +40,12 @@ describe('四入口导航和按需工具页', () => {
     const tools = renderToStaticMarkup(<ToolsHub navigate={() => {}} taskSummary={summary} />);
     expect(tools).toContain('aria-label="3 项当前任务"'); expect(tools).toContain('2 项失败待处理 · 1 项已中断');
   });
+  it('全局状态将派工和原生任务放在同一个入口', () => {
+    const summary = { running: 1, paused: 0, review: 0, queued: 2, dispatchAttention: 3 };
+    const html = renderToStaticMarkup(<NavigationTaskStatus summary={summary} onOpen={() => {}} />);
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).toContain('进行中 1，调度中 2，调度待处理 3');
+    expect(html).toContain('执行中 1 · 调度 2 · 待处理 3');
+    expect(html).toContain('>6</b>');
+  });
 });
