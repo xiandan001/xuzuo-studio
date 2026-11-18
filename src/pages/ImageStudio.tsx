@@ -8,7 +8,7 @@ import { studioActionIssue } from '../lib/studio-action-status';
 import type { StudioActionIssue, StudioActionTarget } from '../lib/studio-action-status';
 import { StudioActionStatus } from '../components/StudioActionStatus';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Download, BookOpen, Check, FileText, ImagePlus, Layers3, LoaderCircle, Plus, Save, Settings2, ShieldCheck, Sparkles, Upload, WandSparkles, X } from 'lucide-react';
+import { Download, BookOpen, Check, FileText, Gift, ImagePlus, Layers3, LoaderCircle, Plus, Save, Settings2, ShieldCheck, Sparkles, Upload, WandSparkles, X } from 'lucide-react';
 import type { PageProps, Project, PromptDraft } from '../types';
 import { isProductionRun } from '../lib/workflow-purpose';
 import type { SyntheticEvent } from 'react';
@@ -35,6 +35,8 @@ import { assertAssetImage, imageDraftWithAsset } from '../lib/asset-application'
 import { Select } from '../components/Select';
 import { ImageQuantityField } from '../components/ImageQuantityField';
 import { ImageAssistAction } from '../components/ImageAssistAction';
+import { RedPacketCoverPreview } from '../components/RedPacketCoverPreview';
+import { useRememberedString } from '../hooks/useRememberedString';
 import { CompactAiPanel, AiSettingsSection } from '../components/CompactAiPanel';
 import { focusStudioField } from '../lib/studio-ai-focus';
 import { ImageOutputControls } from '../components/ImageOutputControls';
@@ -52,6 +54,7 @@ import { IMAGE_SIZES, MAX_IMAGE_REFERENCES, followGalleryImage, imageArtifactTar
 import { prepareAnimationReference } from '../lib/generated-animation-reference';
 import { prepareSvgReference } from '../lib/svg-reference';
 import { availableImageUseTemplates, imageUseTemplateSnapshot } from '../lib/image-use-templates';
+import { WECHAT_RED_PACKET_COVER as RED_PACKET_COVER } from '../lib/wechat-red-packet-cover';
 import type { ImageDraft } from '../lib/image-studio';
 import './studios.css';
 import './image-studio.css';
@@ -64,6 +67,14 @@ const AnimationStudio = lazy(() => import('./AnimationStudio').then(module => ({
 
 interface ImageEditSnapshot { draft: ImageDraft; selectedImageId: string; }
 
+const redPacketStyles = [
+  { value: 'auto', label: '自动搭配' },
+  { value: 'paper-cut', label: '传统剪纸' },
+  { value: 'ink', label: '国风插画' },
+  { value: 'character', label: '趣味角色' },
+  { value: 'minimal', label: '现代简约' },
+];
+
 const isImageUrl = (value?: string) => Boolean(value && /^data:image\/(?:png|jpeg|webp|gif|svg\+xml);base64,/.test(value));
 
 export function ImageStudio(props: PageProps) {
@@ -75,11 +86,17 @@ function ImageProjectRoutes({ props, project }: { props: PageProps; project: Pro
   const key = `image-animation-route-v1:${project.id}`;
   const [initialDraft] = useState(() => { try { return readImageDraft(localStorage.getItem(imageDraftKey(project.id)), project.description); } catch { return readImageDraft(null, project.description); } });
   const [source, setSource] = useState(initialDraft);
-  const [route, setRoute] = useState<'atlas' | 'gif' | undefined>(() => { try { const mode = localStorage.getItem(key); if (mode === 'atlas' || mode === 'gif') return mode; if (mode === 'images') return undefined; } catch { /* The workbench is still usable. */ } const native = props.workflowRunner.runs.find(run => run.projectId === project.id && run.mode === 'live' && !run.trashedAt && run.snapshot.steps.some(step => step.kind === 'animation-compose'))?.snapshot.steps.find(step => step.kind === 'animation-compose'); return initialDraft.preset === '角色图集' ? 'atlas' : initialDraft.preset === 'GIF动画工坊' ? 'gif' : native?.animation?.mode; });
+  const coverIntent = props.promptToApply?.projectId === project.id && props.promptToApply.imagePreset === RED_PACKET_COVER;
+  const [route, setRoute] = useState<'atlas' | 'gif' | undefined>(() => { if (initialDraft.preset === RED_PACKET_COVER || coverIntent) return undefined; try { const mode = localStorage.getItem(key); if (mode === 'atlas' || mode === 'gif') return mode; if (mode === 'images') return undefined; } catch { /* The workbench is still usable. */ } const native = props.workflowRunner.runs.find(run => run.projectId === project.id && run.mode === 'live' && !run.trashedAt && run.snapshot.steps.some(step => step.kind === 'animation-compose'))?.snapshot.steps.find(step => step.kind === 'animation-compose'); return initialDraft.preset === '角色图集' ? 'atlas' : initialDraft.preset === 'GIF动画工坊' ? 'gif' : native?.animation?.mode; });
+  useEffect(() => {
+    if (!coverIntent) return;
+    setRoute(undefined);
+    try { localStorage.setItem(key, 'images'); } catch { /* The prompt still opens in the current session. */ }
+  }, [coverIntent, key]);
   function open(mode: 'atlas' | 'gif', draft: ImageDraft) { setSource(draft); try { localStorage.setItem(imageDraftKey(project.id), JSON.stringify(draft)); localStorage.setItem(key, mode); } catch { /* Native animation saving remains available. */ } setRoute(mode); }
   function close() { try { localStorage.setItem(key, 'images'); const draft = readImageDraft(localStorage.getItem(imageDraftKey(project.id)), project.description); if (['角色图集', 'GIF动画工坊'].includes(draft.preset)) localStorage.setItem(imageDraftKey(project.id), JSON.stringify({ ...draft, preset: '宣传图', presetSnapshot: undefined })); } catch { /* Returning does not discard the native animation project. */ } setRoute(undefined); }
   const previousPurpose = availableImageUseTemplates(props.configuration.useTemplates, project.workspaceId).find(item => item.id === source.preset), description = imageCreationDescription(source.prompt);
-  if (route) return <Suspense fallback={<p className="bead-route-loading" role="status">正在打开角色动画工作台…</p>}><AnimationStudio props={props} project={project} initialMode={route} initialReferenceIds={source.references.map(file => file.id)} initialPrompt={description === previousPurpose?.prompt.trim() ? '' : description} onClose={close} /></Suspense>;
+  if (route && !coverIntent) return <Suspense fallback={<p className="bead-route-loading" role="status">正在打开角色动画工作台…</p>}><AnimationStudio props={props} project={project} initialMode={route} initialReferenceIds={source.references.map(file => file.id)} initialPrompt={description === previousPurpose?.prompt.trim() ? '' : description} onClose={close} /></Suspense>;
   return <ImageProject props={props} project={project} onOpenAnimation={open} />;
 }
 
@@ -89,6 +106,8 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   const [credentialIds, setCredentialIds] = useState(() => ({ 'image-generation': readStudioCredentialPreference(project.id, 'image-generation'), 'image-editing': readStudioCredentialPreference(project.id, 'image-editing') }));
   const workbench = useRef<HTMLDivElement>(null);
   const [actionError, setActionError] = useState('');
+  const [coverExportError, setCoverExportError] = useState('');
+  const [coverStyle, setCoverStyle] = useRememberedString(`project:${project.id}:red-packet-style`, 'auto');
   const [wallpaperInputIssue, setWallpaperInputIssue] = useState('');
   const layout = useStudioLayout('images', { workspaceId: project.workspaceId, projectId: project.id });
   const realModels = props.configuration.models.filter(model => model.enabled && !model.demo && props.configuration.connections.some(connection => connection.id === model.connectionId && connection.enabled && !connection.demo));
@@ -109,7 +128,8 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     return { ...saved, ...(saved.presetSnapshot || !purpose ? {} : { presetSnapshot: imageUseTemplateSnapshot(purpose) }) };
   });
   const imageElement = useRef<{ id: string; image: HTMLImageElement } | undefined>(undefined);
-  const wallpaperEnabled = Boolean(draft.wallpaperEnabled);
+  const redPacketEnabled = draft.preset === RED_PACKET_COVER;
+  const wallpaperEnabled = !redPacketEnabled && Boolean(draft.wallpaperEnabled);
   const engineeringEnabled = !wallpaperEnabled && draft.preset === '工程P图';
   useEffect(() => { setWallpaperInputIssue(''); }, [draft.wallpaperEnabled, draft.wallpaperTarget]);
   const describedWallpaper = useMemo(() => parseWallpaperTarget(draft.mode === 'refine' ? draft.refinePrompt : draft.prompt), [draft.prompt, draft.refinePrompt, draft.mode]);
@@ -158,6 +178,8 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   const knownImageIds = useRef(new Set(images.map(image => image.id)));
   const imageIds = images.map(image => image.id).join('|');
   const selectedImage = images.find(image => image.id === selectedImageId) || images[0];
+  const coverSource = selectedImage && !selectedImage.unavailable && ['image/png', 'image/jpeg'].includes(selectedImage.mimeType) ? selectedImage : undefined;
+  useEffect(() => { setCoverExportError(''); }, [coverSource?.id, redPacketEnabled]);
   const selectedResultId = useRef(selectedImage?.id); selectedResultId.current = selectedImage?.id;
   const selectionEpoch = useRef(0);
   const creationPrompt = useMemo(() => {
@@ -171,8 +193,13 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   const editingBinding = latestStudioBinding(props.workflowRunner.runs, props.workspaceId, project.id, 'image-editing');
   const generationModel = studioProjectModel(realModels.filter(model => model.capabilities.includes('image-generation')), draft.generationModelId, generationBinding);
   const editingModel = studioProjectModel(realModels.filter(model => model.capabilities.includes('image-editing')), draft.editingModelId, editingBinding);
-  const requestedModel = engineeringEnabled || draft.mode === 'refine' || draft.references.length ? editingModel : generationModel;
-  const task = imageTaskRequest({ ...draft, generationModelId: generationModel?.id || '', editingModelId: editingModel?.id || '' }, selectedImage?.id, requestedModel?.modelId);
+  const coverStyleChoice = redPacketStyles.find(item => item.value === coverStyle) || redPacketStyles[0];
+  const coverPrompt = coverStyleChoice.value === 'auto' || !draft.prompt.trim() ? draft.prompt : `${draft.prompt.trim()}
+
+风格偏好：${coverStyleChoice.label}。`;
+  const requestDraft: ImageDraft = redPacketEnabled ? { ...draft, mode: 'create', wallpaperEnabled: false, prompt: coverPrompt } : draft;
+  const requestedModel = engineeringEnabled || requestDraft.mode === 'refine' || draft.references.length ? editingModel : generationModel;
+  const task = imageTaskRequest({ ...requestDraft, generationModelId: generationModel?.id || '', editingModelId: editingModel?.id || '' }, selectedImage?.id, requestedModel?.modelId);
   const currentModels = realModels.filter(model => model.capabilities.includes(task.parameters.capability));
   const currentModel = currentModels.find(model => model.id === task.parameters.modelConfigId);
   const imageCapability = task.parameters.capability === 'image-editing' ? 'image-editing' : 'image-generation';
@@ -188,33 +215,33 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   const costSummary = summarizeCosts(realEntries);
   const purpose = imageDraftPurpose(draft);
   const missingReferences = imageMissingReferences(draft, selectedImage?.id);
-  const purposeNeedsReferences = draft.mode === 'create' && missingReferences > 0;
+  const purposeNeedsReferences = !redPacketEnabled && draft.mode === 'create' && missingReferences > 0;
   const currentPurposeAvailable = useTemplates.some(item => item.id === draft.preset);
-  const animationSource = !wallpaperEnabled && !engineeringEnabled && draft.mode === 'refine' && selectedImage?.mimeType === 'image/gif' && (!draft.references.length || draft.animationReference) ? selectedImage : undefined;
-  const staleAnimationReference = !!draft.animationReference && draft.animationReference.sourceArtifactId !== selectedImage?.id;
-  const refinementNeedsImage = (draft.mode === 'refine' || engineeringEnabled) && !task.parameters.attachmentIds.length && !animationSource;
-  const quantityValid = validImageQuantity(draft.quantity);
-  const outputIssue = wallpaperEnabled || engineeringEnabled ? undefined : imageOutputIssue(draft.imageOptions, currentModel?.modelId, task.parameters.capability, task.parameters.imageBackground);
+  const animationSource = !redPacketEnabled && !wallpaperEnabled && !engineeringEnabled && draft.mode === 'refine' && selectedImage?.mimeType === 'image/gif' && (!draft.references.length || draft.animationReference) ? selectedImage : undefined;
+  const staleAnimationReference = !redPacketEnabled && !!draft.animationReference && draft.animationReference.sourceArtifactId !== selectedImage?.id;
+  const refinementNeedsImage = !redPacketEnabled && (draft.mode === 'refine' || engineeringEnabled) && !task.parameters.attachmentIds.length && !animationSource;
+  const quantityValid = redPacketEnabled || validImageQuantity(draft.quantity);
+  const outputIssue = redPacketEnabled || wallpaperEnabled || engineeringEnabled ? undefined : imageOutputIssue(draft.imageOptions, currentModel?.modelId, task.parameters.capability, task.parameters.imageBackground);
   const wallpaperTargetError = wallpaperEnabled ? wallpaperInputIssue || wallpaperTargetIssue(draft.wallpaperTarget) : '';
   const wallpaperSourceIssue = wallpaperEnabled && draft.mode === 'refine' && selectedImage?.mimeType === 'image/gif' && !draft.references.length ? '静态壁纸需要 PNG、JPEG 或 WebP 原图。请切换“生成图片”，或导入静态参考图。' : '';
   const wallpaperIssue = wallpaperTargetError || wallpaperSourceIssue;
-  const userDescription = draft.mode === 'refine' ? draft.refinePrompt : draft.prompt;
+  const userDescription = redPacketEnabled ? draft.prompt : draft.mode === 'refine' ? draft.refinePrompt : draft.prompt;
   const engineeringOriginalId = engineeringEnabled ? task.parameters.attachmentIds[0] : undefined;
   const engineeringOriginal = engineeringOriginalId ? draft.references.find(file => file.id === engineeringOriginalId) || images.find(file => file.id === engineeringOriginalId) || project.referenceFiles?.find(file => file.id === engineeringOriginalId) : undefined;
   const engineeringOriginalMetadata = engineeringOriginalId ? images.find(file => file.id === engineeringOriginalId) || project.referenceFiles?.find(file => file.id === engineeringOriginalId) : undefined;
   const engineeringSourceIssue = engineeringEnabled && (!engineeringOriginalId || engineeringOriginalMetadata && !RASTER_IMAGE_TYPES.has(engineeringOriginalMetadata.mimeType)) ? '请导入 PNG、JPEG 或 WebP 工程原图，或使用当前静态图片。' : '';
   const engineeringInstructionIssue = engineeringEnabled && (!userDescription.trim() || userDescription.trim() === '保留主体与整体构图，按我的要求调整细节。' || userDescription.trim() === ENGINEERING_IMAGE_PROMPT.trim()) ? '请写明修改位置和内容，例如：仅移除左下角杂物，保留其他区域。' : '';
-  const vectorSourceIssue = animationSource && !props.workflowRunner.prepareGeneratedAnimationReference ? '请使用支持继续修改动画的新版桌面应用。' : draft.mode === 'refine' && !draft.references.length && selectedImage?.mimeType === 'image/svg+xml' ? '静态矢量原文件可外部编辑；点击画面上方“转PNG作参考”再继续精修。' : '';
+  const vectorSourceIssue = redPacketEnabled ? '' : animationSource && !props.workflowRunner.prepareGeneratedAnimationReference ? '请使用支持继续修改动画的新版桌面应用。' : draft.mode === 'refine' && !draft.references.length && selectedImage?.mimeType === 'image/svg+xml' ? '静态矢量原文件可外部编辑；点击画面上方“转PNG作参考”再继续精修。' : '';
   const quantityUnit = !wallpaperEnabled && !engineeringEnabled && (animationSource || draft.imageOptions?.imageOutputFormat === 'gif') ? '份' : '张';
-  const quantityLabel = quantityValid ? `${draft.quantity} ${quantityUnit}` : '数量待填写';
-  const generationLabel = `${engineeringEnabled ? '精修工程图' : wallpaperEnabled ? draft.mode === 'refine' ? '精修壁纸' : '生成壁纸' : draft.mode === 'refine' ? animationSource ? '继续修改动画' : '开始精修' : draft.references.length ? '按参考图生成' : '生成图片'}${quantityValid ? ` · ${quantityLabel}` : ''}`;
+  const quantityLabel = quantityValid ? `${redPacketEnabled ? 1 : draft.quantity} ${quantityUnit}` : '数量待填写';
+  const generationLabel = redPacketEnabled ? '生成微信红包封面' : `${engineeringEnabled ? '精修工程图' : wallpaperEnabled ? draft.mode === 'refine' ? '精修壁纸' : '生成壁纸' : draft.mode === 'refine' ? animationSource ? '继续修改动画' : '开始精修' : draft.references.length ? '按参考图生成' : '生成图片'}${quantityValid ? ` · ${quantityLabel}` : ''}`;
   const ready = Boolean(!engineeringSourceIssue && !engineeringInstructionIssue && !wallpaperIssue && !outputIssue && !vectorSourceIssue && quantityValid && currentModel && selectedCredential && userDescription.trim() && !busy && !saving && (animationSource || !checkingReferences && !referenceError) && !importing && !purposeNeedsReferences && !refinementNeedsImage);
   const referenceKey = draft.references.map(reference => reference.id).join('|');
   const trashedReferenceKey = draft.references.filter(reference => props.workflowRunner.trashedArtifacts?.some(artifact => artifact.id === reference.id)).map(reference => reference.id).join('|');
   const runtimeAvailable = props.workflowRunner.runtimeStatus.available;
   const deliveryTarget = imageArtifactTarget(props.workflowRunner.runs, project.id, selectedImage);
   const requiresTransparency = deliveryTarget.background === 'transparent';
-  const generationIssue: StudioActionIssue | undefined = studioActionIssue({ ready: true, busy: importing ? 'importing' : checkingReferences && !animationSource ? 'references' : '', taskStatus: active?.status || (busy ? 'running' : undefined), input: userDescription, inputLabel: engineeringEnabled || draft.mode === 'refine' ? '修改要求' : '画面描述', modelId: currentModel?.id, modelCount: currentModels.length }) || (engineeringSourceIssue ? { message: engineeringSourceIssue, action: '导入工程原图', target: 'references' } : engineeringInstructionIssue ? { message: engineeringInstructionIssue, action: '填写修改要求', target: 'request' } : wallpaperTargetError ? { message: wallpaperTargetError, action: '选择壁纸尺寸', target: 'format' } : wallpaperSourceIssue ? { message: wallpaperSourceIssue, action: '导入静态参考图', target: 'references' } : outputIssue ? { message: outputIssue, action: '选择输出格式', target: 'format' } : vectorSourceIssue ? { message: vectorSourceIssue, action: '选择栅格原图', target: 'references' } : !quantityValid ? { message: `请输入 1–${MAX_IMAGE_QUANTITY} 的整数作为图片数量。`, action: '填写图片数量', target: 'quantity' } : referenceError && !animationSource ? { message: referenceError, action: '重新导入参考图', target: 'references' } : purposeNeedsReferences ? { message: `此用途还需要 ${missingReferences} 张参考图。`, action: '导入参考图片', target: 'references' } : refinementNeedsImage ? { message: '请先选择或导入要精修的图片。', action: '导入原图', target: 'references' } : undefined);
+  const generationIssue: StudioActionIssue | undefined = studioActionIssue({ ready: true, busy: importing ? 'importing' : checkingReferences && !animationSource ? 'references' : '', taskStatus: active?.status || (busy ? 'running' : undefined), input: userDescription, inputLabel: redPacketEnabled ? '封面主题' : engineeringEnabled || draft.mode === 'refine' ? '修改要求' : '画面描述', modelId: currentModel?.id, modelCount: currentModels.length }) || (engineeringSourceIssue ? { message: engineeringSourceIssue, action: '导入工程原图', target: 'references' } : engineeringInstructionIssue ? { message: engineeringInstructionIssue, action: '填写修改要求', target: 'request' } : wallpaperTargetError ? { message: wallpaperTargetError, action: '选择壁纸尺寸', target: 'format' } : wallpaperSourceIssue ? { message: wallpaperSourceIssue, action: '导入静态参考图', target: 'references' } : outputIssue ? { message: outputIssue, action: '选择输出格式', target: 'format' } : vectorSourceIssue ? { message: vectorSourceIssue, action: '选择栅格原图', target: 'references' } : !quantityValid ? { message: `请输入 1–${MAX_IMAGE_QUANTITY} 的整数作为图片数量。`, action: '填写图片数量', target: 'quantity' } : referenceError && !animationSource ? { message: referenceError, action: '重新导入参考图', target: 'references' } : purposeNeedsReferences ? { message: `此用途还需要 ${missingReferences} 张参考图。`, action: '导入参考图片', target: 'references' } : refinementNeedsImage ? { message: '请先选择或导入要精修的图片。', action: '导入原图', target: 'references' } : undefined);
   const actionStatusId = `image-action-status-${project.id}`;
   const inspectImageMetadata = (id: string, image: HTMLImageElement) => { imageElement.current = { id, image }; setImageMetadata({ id, ...(requiresTransparency ? inspectDeliveryImage(image) : { width: image.naturalWidth, height: image.naturalHeight, transparency: 'unknown' as const }) }); };
   const inspectNativePreviewMetadata = useCallback((id: string, metadata: NativeImagePreviewMetadata) => {
@@ -270,7 +297,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     const element = event.currentTarget;
     const start = element.selectionStart, end = element.selectionEnd;
     selectionElement.current = element;
-    const field = draft.mode === 'refine' ? 'refinePrompt' : 'prompt';
+    const field = !redPacketEnabled && draft.mode === 'refine' ? 'refinePrompt' : 'prompt';
     setTextSelection(previous => end > start ? { field, start, end, text: element.value.slice(start, end) } : previous?.field === field && previous.start === start && previous.end === end ? previous : undefined);
   }
   const localField = textSelection ? `image:${textSelection.field}` : 'image:result';
@@ -367,11 +394,13 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     appliedPromptToken.current = application.token;
     const template = useTemplates.find(item => item.id === application.imagePreset);
     const current = editSnapshot.current.draft;
-    let next = application.mode === 'refine' ? updateImageDraft(current, { refinePrompt: application.content, mode: 'refine' }) : updateImageDraft(template ? selectImageUseTemplate(current, template) : current, { prompt: application.content, mode: 'create' });
-    if (current.mode === 'create' && next.mode === 'create' && !current.references.length && application.referenceFiles?.length) {
+    const cover = application.imagePreset === RED_PACKET_COVER;
+    let next = !cover && application.mode === 'refine' ? updateImageDraft(current, { refinePrompt: application.content, mode: 'refine' }) : updateImageDraft(template ? selectImageUseTemplate(current, template) : current, { prompt: application.content, mode: 'create' });
+    if ((cover || current.mode === 'create' && next.mode === 'create' && !current.references.length) && application.referenceFiles?.length) {
       const references = application.referenceFiles.filter(file => file.kind === 'image' && RASTER_IMAGE_TYPES.has(file.mimeType)).slice(0, MAX_IMAGE_REFERENCES).map(({ id, name }) => ({ id, name }));
       if (references.length) next = updateImageDraft(next, { references });
     }
+    if (cover) next = updateImageDraft(next, { mode: 'create', wallpaperEnabled: false, animationReference: undefined });
     setTemplateOffer(undefined); setPromptPickerOpen(false); props.onPromptApplied(application.token);
     if (application.imagePreset === '角色图集' || application.imagePreset === 'GIF动画工坊') {
       const source = !next.references.length && selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? updateImageDraft(next, { references: [{ id: selectedImage.id, name: selectedImage.name }] }) : next;
@@ -393,10 +422,12 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
         await inspectImageReference(application.file.id, runnerRef.current);
         const context = assetContext.current;
         if (disposed || !alive.current || context.workspaceId !== application.workspaceId || context.application?.token !== application.token) return;
-        changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, application.file));
+        const cover = editSnapshot.current.draft.preset === RED_PACKET_COVER;
+        if (cover) addCoverReference(application.file);
+        else changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, application.file));
         setTextSelection(undefined); setTemplateOffer(undefined); setActionError(''); appliedAssetToken.current = application.token;
         revealEditingInput();
-        context.acknowledge?.(application.token); props.notify('素材已带入精修参考，修改要求和模型可继续调整；点击开始精修前不会收费。');
+        context.acknowledge?.(application.token); props.notify(cover ? '素材已添加为红包封面参考图。' : '素材已带入精修参考，修改要求和模型可继续调整；点击开始精修前不会收费。');
       } catch (cause) {
         if (!disposed && alive.current && assetContext.current.application?.token === application.token) { appliedAssetToken.current = application.token; setActionError(workflowPublicError(cause, '素材未能带入精修，原参考内容与项目副本保留。')); assetContext.current.acknowledge?.(application.token); }
       } finally { if (pendingAssetToken.current === application.token) pendingAssetToken.current = undefined; }
@@ -410,28 +441,46 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     const originalProject = project.id, originalWorkspace = props.workspaceId;
     await inspectImageReference(file.id, runnerRef.current);
     if (!alive.current || assetContext.current.workspaceId !== originalWorkspace || assetContext.current.projectId !== originalProject) throw new Error('当前项目已变化，未修改旧工作台。');
-    changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, file));
+    const cover = editSnapshot.current.draft.preset === RED_PACKET_COVER;
+    if (cover) addCoverReference(file);
+    else changeImage(imageDraftWithAsset(editSnapshot.current.draft, project.id, file));
     setTextSelection(undefined); setTemplateOffer(undefined); setActionError('');
     revealEditingInput();
-    props.notify('素材已带入精修参考，可撤销；点击开始精修才会调用模型。');
+    props.notify(cover ? '素材已添加为红包封面参考图。' : '素材已带入精修参考，可撤销；点击开始精修才会调用模型。');
   }
   function choosePreset(id: string) {
     if (id === '角色图集' || id === 'GIF动画工坊') { if (!busy && !importing) { const current = editSnapshot.current.draft; const source = !current.references.length && selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? updateImageDraft(current, { references: [{ id: selectedImage.id, name: selectedImage.name }] }) : current; onOpenAnimation(id === '角色图集' ? 'atlas' : 'gif', source); } return; }
     if (id === '工程P图') { chooseEngineering(); return; }
+    if (id === RED_PACKET_COVER) { chooseRedPacketCover(); return; }
     const template = useTemplates.find(item => item.id === id);
     if (!template) return;
     changeImage(selectImageUseTemplate(editSnapshot.current.draft, template));
     setTemplateOffer(template.prompt);
   }
+  function chooseRedPacketCover() {
+    const current = editSnapshot.current.draft;
+    if (current.preset === RED_PACKET_COVER || busy || importing || saving) return;
+    const template = useTemplates.find(item => item.id === RED_PACKET_COVER);
+    if (!template) return;
+    changeImage(updateImageDraft(selectImageUseTemplate(current, template), {
+      mode: 'create', wallpaperEnabled: false, references: current.references, animationReference: undefined,
+    }));
+    setTemplateOffer(undefined); setActionError('');
+  }
+  function addCoverReference(file: ArtifactMetadata) {
+    const current = editSnapshot.current.draft;
+    const cover = updateImageDraft(current, { mode: 'create', references: current.references });
+    changeImage(importImageReferences(cover, [{ id: file.id, name: file.name }]));
+  }
   function chooseWallpaper(enabled: boolean) {
     const current = editSnapshot.current.draft;
-    if (Boolean(current.wallpaperEnabled) === enabled && !['工程P图', '拼豆'].includes(current.preset)) return;
+    if (Boolean(current.wallpaperEnabled) === enabled && ![RED_PACKET_COVER, '工程P图', '拼豆'].includes(current.preset)) return;
     if (enabled) {
       const template = useTemplates.find(item => item.id === '壁纸');
       changeImage(updateImageDraft(template ? selectImageUseTemplate(current, template) : current, { wallpaperEnabled: true, background: 'opaque', imageOptions: { ...current.imageOptions, imageOutputFormat: 'png', imageQuality: current.imageOptions?.imageQuality || 'high', imageFrameCount: undefined, imageFrameDurationMs: undefined, imageSvgModel: undefined, imageSvgReasoningEffort: undefined } }));
     } else {
       const ordinary = useTemplates.find(item => item.id === '宣传图');
-      changeImage(updateImageDraft(['壁纸', '工程P图', '拼豆'].includes(current.preset) && ordinary ? selectImageUseTemplate(current, ordinary) : current, { wallpaperEnabled: false }));
+      changeImage(updateImageDraft([RED_PACKET_COVER, '壁纸', '工程P图', '拼豆'].includes(current.preset) && ordinary ? selectImageUseTemplate(current, ordinary) : current, { wallpaperEnabled: false }));
     }
     setWallpaperInputIssue(''); setTemplateOffer(undefined); setActionError('');
   }
@@ -472,7 +521,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
       if (animationSource) { await prepareAnimation(animationSource, false, files); return; }
       const base = selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) ? { id: selectedImage.id, name: selectedImage.name } : undefined;
       const current = editSnapshot.current.draft;
-      const original = engineeringEnabled && current.mode === 'create' ? updateImageDraft(current, { mode: 'refine', references: current.references, galleryBaseId: undefined }) : current;
+      const original = redPacketEnabled ? updateImageDraft(current, { mode: 'create', references: current.references }) : engineeringEnabled && current.mode === 'create' ? updateImageDraft(current, { mode: 'refine', references: current.references, galleryBaseId: undefined }) : current;
       changeImage(importImageReferences(original, files.map(({ id, name }) => ({ id, name })), engineeringEnabled ? undefined : base));
     } catch (cause) { if (alive.current) setActionError(workflowPublicError(cause, '参考图导入未完成，请重新选择。')); }
     finally { if (alive.current) setImporting(false); }
@@ -480,7 +529,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
 
   function revealEditingInput() {
     layout.openPanel('ai');
-    requestAnimationFrame(() => { if (!alive.current) return; const field = workbench.current?.querySelector<HTMLTextAreaElement>('.ig-prompt'); field?.focus(); field?.scrollIntoView({ block: 'nearest', behavior: 'auto' }); });
+    requestAnimationFrame(() => { if (!alive.current) return; const field = workbench.current?.querySelector<HTMLTextAreaElement>('.ig-prompt'); field?.focus(); field?.scrollIntoView?.({ block: 'nearest', behavior: 'auto' }); });
   }
   function cancelAnimationPreparation() {
     animationPreparation.current?.abort(); animationPreparation.current = undefined; setPreparingAnimation(false);
@@ -509,6 +558,13 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     finally { if (animationPreparation.current === controller) { animationPreparation.current = undefined; if (alive.current) setPreparingAnimation(false); } }
   }
   function refineImage(artifact: ArtifactMetadata) {
+    if (redPacketEnabled) {
+      if (busy || importing || saving) return;
+      if (!RASTER_IMAGE_TYPES.has(artifact.mimeType)) { setActionError('红包封面参考图需使用 PNG、JPEG 或 WebP。'); layout.openPanel('ai'); return; }
+      try { addCoverReference(artifact); setActionError(''); revealEditingInput(); }
+      catch (cause) { setActionError(workflowPublicError(cause, '暂时无法添加此参考图。')); }
+      return;
+    }
     if (artifact.mimeType === 'image/gif') { void prepareAnimation(artifact); layout.openPanel('ai'); return; }
     if (artifact.mimeType === 'image/svg+xml') { void convertSvgReference(artifact); layout.openPanel('ai'); return; }
     if (!RASTER_IMAGE_TYPES.has(artifact.mimeType)) { setActionError('请选择 PNG、JPEG 或 WebP 作为精修原图。'); layout.openPanel('ai'); return; }
@@ -577,12 +633,31 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     finally { savingImage.current = false; if (alive.current) setSaving(false); }
   }
 
+  async function exportRedPacketCover() {
+    const exportCover = runnerRef.current.exportRedPacketCover;
+    const source = coverSource;
+    if (!redPacketEnabled || !source || !exportCover || savingImage.current || busy || importing) return;
+    savingImage.current = true; setSaving(true); setCoverExportError('');
+    try {
+      const result = await exportCover({ projectId: project.id, sourceArtifactId: source.id });
+      if (alive.current && result.saved) props.notify('微信红包封面已另存为 957 × 1278 JPEG。');
+    } catch (cause) {
+      if (alive.current && selectedResultId.current === source.id && editSnapshot.current.draft.preset === RED_PACKET_COVER) {
+        setCoverExportError(workflowPublicError(cause, '红包封面导出未完成，原图仍保留。'));
+      }
+    } finally {
+      savingImage.current = false; if (alive.current) setSaving(false);
+    }
+  }
+
   async function generate() {
     if (!ready) return;
     setActionError('');
     if (animationSource) { await prepareAnimation(animationSource, true); return; }
 
-    props.onGenerate(project.id, draft.mode === 'refine' ? 'AI 精修' : images.length ? '重新生成' : '初次生成', task.count, undefined, { ...task.parameters, credentialId: selectedCredential });
+    props.onGenerate(project.id, !redPacketEnabled && draft.mode === 'refine' ? 'AI 精修' : images.length ? '重新生成' : '初次生成', task.count, undefined, {
+      ...task.parameters, credentialId: selectedCredential, ...(redPacketEnabled ? { redPacketCover: true } : {}),
+    });
   }
   function chooseImageCredential(value: string) { const choice = studioCredentialChoice(value, currentModel); setCredentialIds(ids => ({ ...ids, [imageCapability]: choice })); if (!saveStudioCredentialPreference(project.id, imageCapability, choice)) props.notify('本次 Key 选择已带入，但偏好暂未保存。', 'info'); }
   function chooseImageModel(value: string) { updateDraft(imageCapability === 'image-editing' ? { editingModelId: value } : { generationModelId: value }); chooseImageCredential(''); }
@@ -633,32 +708,15 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
   const actionStatus = <StudioActionStatus id={actionStatusId} issue={generationIssue || (imageKeyIssue ? { message: imageKeyIssue, action: '选择调用账户', target: 'credential' } : undefined)} error={actionError} note={reviewing ? '继续制作会保留已有结果与费用。' : undefined} onFix={fixGeneration} />;
 
   const imageCredentialControl = <label className="studio-inline-key">调用 Key<Select className="simple-inline-field" aria-label="图片调用Key" value={selectedCredential || ''} onValueChange={chooseImageCredential} options={imageCredentials.map(key => ({ value: key.id, label: key.name }))} placeholder="选择 Key" />{imageKeyIssue && <small role="status">{imageKeyIssue}</small>}</label>;
-  const generationSummary = `${(wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat || 'png').toUpperCase()} · ${quantityLabel}`;
-  const nextImageSize = engineeringEnabled ? '沿用主原图尺寸' : wallpaperEnabled ? draft.wallpaperTarget ? `${draft.wallpaperTarget.width} × ${draft.wallpaperTarget.height} px` : '壁纸尺寸待选择' : task.parameters.imageSize?.replace('x', ' × ') + ' px';
+  const generationSummary = redPacketEnabled ? '957 × 1278 JPEG' : `${(wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat || 'png').toUpperCase()} · ${quantityLabel}`;
+  const nextImageSize = redPacketEnabled ? '957 × 1278 px' : engineeringEnabled ? '沿用主原图尺寸' : wallpaperEnabled ? draft.wallpaperTarget ? `${draft.wallpaperTarget.width} × ${draft.wallpaperTarget.height} px` : '壁纸尺寸待选择' : task.parameters.imageSize?.replace('x', ' × ') + ' px';
   const outputControls = <ImageOutputControls modelId={currentModel?.modelId || ''} capability={task.parameters.capability} value={draft.imageOptions || {}} onChange={updateOutput} onModels={() => props.navigate('models')} disabled={busy || importing} onMarkup={task.parameters.attachmentIds.length ? () => { void openMarkup(); } : undefined} authorModels={[...new Map(realModels.filter(model => model.capabilities.includes('text') && props.configuration.connections.some(connection => connection.id === model.connectionId && connection.providerId === 'openai')).map(model => [model.modelId, { modelId: model.modelId, name: model.name }])).values()]} />;
-  const settingsPanel = <CompactAiPanel mode={engineeringEnabled ? <div className="engineering-mode-heading"><WandSparkles size={17} />工程图像精修</div> : <div className="ig-mode-tabs" aria-label="图片操作模式"><button className={draft.mode === 'create' ? 'active' : ''} aria-pressed={draft.mode === 'create'} onClick={() => updateDraft({ mode: 'create' })}><ImagePlus size={16} />生成图片</button><button className={draft.mode === 'refine' ? 'active' : ''} aria-pressed={draft.mode === 'refine'} onClick={() => updateDraft({ mode: 'refine' })}><WandSparkles size={16} />精修图片</button></div>} footer={
-    <div className="ig-primary-action">
-      {project.budgetCents != null && <p className="ig-budget">项目金额上限：{budgetLabel(project.budgetCents)}</p>}
-      <button className="btn btn-primary" disabled={needsModelSetup ? busy || importing || checkingReferences : !ready} aria-label={needsModelSetup ? '配置图片模型' : generationLabel} aria-describedby={generationIssue || imageKeyIssue || actionError || reviewing ? actionStatusId : undefined} onClick={() => needsModelSetup ? props.navigate('models') : generate()}>{busy && active?.status !== 'paused' ? <LoaderCircle size={17} className="spin" /> : draft.mode === 'refine' ? <WandSparkles size={17} /> : <Sparkles size={17} />}{needsModelSetup ? '配置图片模型' : generationLabel}</button>
-      {actionStatus}
-      {preparingAnimation && <p role="status">正在准备修改…<button type="button" className="ig-link" aria-label="取消动画准备" onClick={cancelAnimationPreparation}>取消</button></p>}
-      {preparingSvg && <p role="status">正在本地转换PNG参考，不调用模型…<button type="button" className="ig-link" aria-label="取消SVG转换" onClick={cancelSvgPreparation}>取消</button></p>}
-      <p className="studio-ai-fee-note">{quantityValid && draft.quantity > 1 ? `${quantityUnit === '份' ? '逐份制作' : '逐张生成'} ${draft.quantity} ${quantityUnit} · ` : ''}调用费用自动记录</p>
-    </div>
-  }>
-    <div className="wallpaper-mode-switch" role="group" aria-label="图片制作用途"><button type="button" disabled={busy || importing} aria-pressed={!wallpaperEnabled && !engineeringEnabled} onClick={() => chooseWallpaper(false)}>图片</button><button type="button" disabled={busy || importing} aria-pressed={wallpaperEnabled} onClick={() => chooseWallpaper(true)}>壁纸</button><button type="button" disabled={busy || importing} aria-pressed={engineeringEnabled} onClick={chooseEngineering}>工程P图</button><button type="button" disabled={busy || importing} aria-pressed={draft.preset === '拼豆'} onClick={chooseBeads}>拼豆</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('角色图集')}>角色图集</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('GIF动画工坊')}>GIF动画</button></div>
-    {engineeringEnabled && <div className="engineering-image-summary" aria-label="工程P图主原图"><strong>主原图：{engineeringOriginal?.name || '尚未选择'}</strong><p>工程照片、图纸、效果图 · 原图保留，按原尺寸保存。</p>{selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) && selectedImage.id !== engineeringOriginalId && <button type="button" className="ig-link" disabled={busy || importing} onClick={useCurrentEngineeringOriginal}>用当前图片作主原图</button>}<small>按主原图精修，不使用无原图分组生成。</small></div>}
-    {wallpaperEnabled && <><WallpaperTargetPicker value={draft.wallpaperTarget} onChange={chooseWallpaperTarget} onIssueChange={setWallpaperInputIssue} invalid={wallpaperInputIssue} disabled={busy || importing} /><div className="wallpaper-4k-quick" aria-label="4K壁纸快捷尺寸"><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 2160, height: 3840, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 竖屏' })}><strong>4K 竖屏</strong><small>2160 × 3840</small></button><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 3840, height: 2160, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 横屏' })}><strong>4K 横屏</strong><small>3840 × 2160</small></button></div><p className="wallpaper-generation-note">4K 为本地尺寸适配，不提升模型原生细节 · 0 API</p></>}
-    <div className="ig-label-row"><label htmlFor={`image-prompt-${project.id}`}>{engineeringEnabled || draft.mode === 'refine' ? '修改要求' : '画面描述'}</label><button className="ig-link" aria-label="提示词模板" onClick={() => setPromptPickerOpen(true)}><BookOpen size={14} />模板</button></div>
-    <textarea id={`image-prompt-${project.id}`} className="field ig-prompt" rows={4} onSelect={selectPromptText} value={draft.mode === 'refine' ? draft.refinePrompt : draft.prompt} onChange={event => updateDraft(draft.mode === 'refine' ? { refinePrompt: event.target.value } : { prompt: event.target.value })} placeholder={engineeringEnabled ? '例如：仅移除左下角杂物；或把标注 A12 改为 A13，其余保留。' : draft.mode === 'refine' ? '例如：保留人物和构图，把背景换成蓝色。' : wallpaperEnabled ? '描述壁纸主题，例如：iPhone 17 Pro，安静的月夜与山峰，顶部留白。' : '描述想要的画面，也可以添加参考图片。'} />
-    {wallpaperEnabled && suggestedWallpaper && <div className="wallpaper-description-match"><span>描述中识别到 {suggestedWallpaper.label || `${suggestedWallpaper.width} × ${suggestedWallpaper.height} px`}</span><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ ...suggestedWallpaper, fit: draft.wallpaperTarget?.fit || 'cover' })}>应用尺寸</button></div>}
-    {animationSource && <p className="ig-inline-note">保留原动画与费用，按本次修改要求生成新版本。</p>}
-    {templateOffer && draft.mode === 'create' && <div className="ig-template-offer"><p>要用模板内容替换当前描述吗？</p><div><button onClick={() => { updateDraft({ prompt: templateOffer }); setTemplateOffer(undefined); }}>应用模板</button><button onClick={() => setTemplateOffer(undefined)}>保留原文</button></div></div>}
-    {optimizedPrompt && appliedOptimizationId !== optimizedPrompt.id && <section className="ig-optimization"><strong>优化后的描述</strong>{optimization?.id === optimizedPrompt.id ? <><pre>{optimization.text}</pre><button className="btn btn-secondary" onClick={() => { updateDraft({ prompt: optimization.text, mode: 'create' }); setAppliedOptimizationId(optimization.id); setOptimization(undefined); props.notify('已将优化结果应用到画面描述，未调用新模型。'); }}><Check size={15} />应用描述</button></> : <button className="ig-link" disabled={readingOptimization} onClick={() => { void readOptimization(); }}>{readingOptimization ? <LoaderCircle size={14} className="spin" /> : <FileText size={14} />}查看并应用</button>}</section>}
+  const referenceControls = <>
     <div className="studio-ai-attachments">
-      <button type="button" aria-label={engineeringEnabled ? '导入工程原图' : '导入图片'} disabled={busy || importing || !runtimeAvailable} onClick={() => { void importReferences(); }}>{importing ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}{engineeringEnabled ? '导入工程原图' : '导入图片'}</button>
+      <button type="button" aria-label={engineeringEnabled ? '导入工程原图' : redPacketEnabled ? '添加参考图' : '导入图片'} disabled={busy || importing || !runtimeAvailable} onClick={() => { void importReferences(); }}>{importing ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}{engineeringEnabled ? '导入工程原图' : redPacketEnabled ? '添加参考图' : '导入图片'}</button>
       <button type="button" aria-label="从素材库选择" disabled={busy || importing || saving} onClick={() => layout.openPanel('assets')}><ImagePlus size={14} />素材库</button>
-      {draft.mode === 'refine' && !draft.references.length && selectedImage && <small>原图：当前图片</small>}
+      {redPacketEnabled && coverSource && !draft.references.some(file => file.id === coverSource.id) && <button type="button" disabled={busy || importing || saving} onClick={() => refineImage(coverSource)}>当前图作参考</button>}
+      {!redPacketEnabled && draft.mode === 'refine' && !draft.references.length && selectedImage && <small>原图：当前图片</small>}
     </div>
     {!!draft.references.length && <AiSettingsSection rememberKey={layout.rememberKey('images:references')} title="参考图片" summary={`${draft.references.length} 张`}>
       <div className="ig-reference-list">{draft.references.map((reference, index) => <div key={reference.id}><span title={reference.name}>{index + 1}. {reference.name}</span><button aria-label={`移除参考图 ${reference.name}`} disabled={busy || importing} onClick={() => updateDraft({ references: draft.references.filter(item => item.id !== reference.id) })}><X size={15} /></button></div>)}</div>
@@ -667,9 +725,38 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     {checkingReferences && <p className="ig-inline-note" role="status"><LoaderCircle size={14} className="spin" />正在读取参考图…</p>}
     {referenceError && !animationSource && <div className="ig-inline-error" role="alert"><p>{referenceError}</p>{runtimeAvailable && <button className="ig-link" onClick={() => setReferenceRevision(value => value + 1)}>重新核对</button>}</div>}
     {!runtimeAvailable && <p className="ig-inline-note">请在桌面应用中导入参考图。</p>}
-    <div className="studio-ai-model-row"><span>模型</span><Select aria-label="图片实际使用模型" value={currentModel?.id || ''} onValueChange={chooseImageModel} options={currentModels.map(model => ({ value: model.id, label: model.name, description: imageFormatModelDisabled(wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat, model.modelId) ? `${model.modelId} · 当前格式仅 GPT Image 2.6 可用` : model.modelId, disabled: imageFormatModelDisabled(wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat, model.modelId), group: props.configuration.connections.find(connection => connection.id === model.connectionId)?.name }))} placeholder="选择图片模型" /></div>
+  </>;
+  const settingsPanel = <CompactAiPanel mode={redPacketEnabled ? <div className="engineering-mode-heading"><Gift size={17} />微信红包封面</div> : engineeringEnabled ? <div className="engineering-mode-heading"><WandSparkles size={17} />工程图像精修</div> : <div className="ig-mode-tabs" aria-label="图片操作模式"><button className={draft.mode === 'create' ? 'active' : ''} aria-pressed={draft.mode === 'create'} onClick={() => updateDraft({ mode: 'create' })}><ImagePlus size={16} />生成图片</button><button className={draft.mode === 'refine' ? 'active' : ''} aria-pressed={draft.mode === 'refine'} onClick={() => updateDraft({ mode: 'refine' })}><WandSparkles size={16} />精修图片</button></div>} footer={
+    <div className="ig-primary-action">
+      {project.budgetCents != null && <p className="ig-budget">项目金额上限：{budgetLabel(project.budgetCents)}</p>}
+      <button className="btn btn-primary" disabled={needsModelSetup ? busy || importing || checkingReferences : !ready} aria-label={needsModelSetup ? '配置图片模型' : generationLabel} aria-describedby={generationIssue || imageKeyIssue || actionError || reviewing ? actionStatusId : undefined} onClick={() => needsModelSetup ? props.navigate('models') : generate()}>{busy && active?.status !== 'paused' ? <LoaderCircle size={17} className="spin" /> : draft.mode === 'refine' ? <WandSparkles size={17} /> : <Sparkles size={17} />}{needsModelSetup ? '配置图片模型' : generationLabel}</button>
+      {actionStatus}
+      {preparingAnimation && <p role="status">正在准备修改…<button type="button" className="ig-link" aria-label="取消动画准备" onClick={cancelAnimationPreparation}>取消</button></p>}
+      {preparingSvg && <p role="status">正在本地转换PNG参考，不调用模型…<button type="button" className="ig-link" aria-label="取消SVG转换" onClick={cancelSvgPreparation}>取消</button></p>}
+      <p className="studio-ai-fee-note">{!redPacketEnabled && quantityValid && draft.quantity > 1 ? `${quantityUnit === '份' ? '逐份制作' : '逐张生成'} ${draft.quantity} ${quantityUnit} · ` : ''}调用费用自动记录</p>
+    </div>
+  }>
+    <div className="wallpaper-mode-switch" role="group" aria-label="图片制作用途"><button type="button" disabled={busy || importing} aria-pressed={!redPacketEnabled && !wallpaperEnabled && !engineeringEnabled} onClick={() => chooseWallpaper(false)}>图片</button><button type="button" disabled={busy || importing} aria-pressed={wallpaperEnabled} onClick={() => chooseWallpaper(true)}>壁纸</button><button type="button" disabled={busy || importing} aria-pressed={engineeringEnabled} onClick={chooseEngineering}>工程P图</button><button type="button" disabled={busy || importing} aria-pressed={draft.preset === '拼豆'} onClick={chooseBeads}>拼豆</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('角色图集')}>角色图集</button><button type="button" disabled={busy || importing} onClick={() => choosePreset('GIF动画工坊')}>GIF动画</button><button type="button" className="red-packet-mode-button" aria-pressed={redPacketEnabled} disabled={busy || importing || saving} onClick={chooseRedPacketCover}>微信红包封面</button></div>
+    {redPacketEnabled ? <div className="red-packet-form">
+      <label className="ig-field"><span>封面主题</span><textarea className="field ig-prompt" rows={4} onSelect={selectPromptText} value={draft.prompt}
+        onChange={event => updateDraft({ prompt: event.target.value, mode: 'create', references: draft.references })}
+        placeholder="例如：橘猫与梅花灯笼，温暖的新年氛围" /></label>
+      <label className="ig-field"><span>风格（可选）</span><Select aria-label="红包封面风格" value={coverStyleChoice.value} disabled={busy || importing} onValueChange={setCoverStyle} options={redPacketStyles} /></label>
+      <p className="red-packet-form-size">固定导出规格 957 × 1278 JPEG</p>
+    </div> : <>
+    {engineeringEnabled && <div className="engineering-image-summary" aria-label="工程P图主原图"><strong>主原图：{engineeringOriginal?.name || '尚未选择'}</strong><p>工程照片、图纸、效果图 · 原图保留，按原尺寸保存。</p>{selectedImage && RASTER_IMAGE_TYPES.has(selectedImage.mimeType) && selectedImage.id !== engineeringOriginalId && <button type="button" className="ig-link" disabled={busy || importing} onClick={useCurrentEngineeringOriginal}>用当前图片作主原图</button>}<small>按主原图精修，不使用无原图分组生成。</small></div>}
+    {wallpaperEnabled && <><WallpaperTargetPicker value={draft.wallpaperTarget} onChange={chooseWallpaperTarget} onIssueChange={setWallpaperInputIssue} invalid={wallpaperInputIssue} disabled={busy || importing} /><div className="wallpaper-4k-quick" aria-label="4K壁纸快捷尺寸"><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 2160, height: 3840, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 竖屏' })}><strong>4K 竖屏</strong><small>2160 × 3840</small></button><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ width: 3840, height: 2160, fit: draft.wallpaperTarget?.fit || 'cover', label: '自定义 4K 横屏' })}><strong>4K 横屏</strong><small>3840 × 2160</small></button></div><p className="wallpaper-generation-note">4K 为本地尺寸适配，不提升模型原生细节 · 0 API</p></>}
+    <div className="ig-label-row"><label htmlFor={`image-prompt-${project.id}`}>{engineeringEnabled || draft.mode === 'refine' ? '修改要求' : '画面描述'}</label><button className="ig-link" aria-label="提示词模板" onClick={() => setPromptPickerOpen(true)}><BookOpen size={14} />模板</button></div>
+    <textarea id={`image-prompt-${project.id}`} className="field ig-prompt" rows={4} onSelect={selectPromptText} value={draft.mode === 'refine' ? draft.refinePrompt : draft.prompt} onChange={event => updateDraft(draft.mode === 'refine' ? { refinePrompt: event.target.value } : { prompt: event.target.value })} placeholder={engineeringEnabled ? '例如：仅移除左下角杂物；或把标注 A12 改为 A13，其余保留。' : draft.mode === 'refine' ? '例如：保留人物和构图，把背景换成蓝色。' : wallpaperEnabled ? '描述壁纸主题，例如：iPhone 17 Pro，安静的月夜与山峰，顶部留白。' : '描述想要的画面，也可以添加参考图片。'} />
+    {wallpaperEnabled && suggestedWallpaper && <div className="wallpaper-description-match"><span>描述中识别到 {suggestedWallpaper.label || `${suggestedWallpaper.width} × ${suggestedWallpaper.height} px`}</span><button type="button" disabled={busy || importing} onClick={() => chooseWallpaperTarget({ ...suggestedWallpaper, fit: draft.wallpaperTarget?.fit || 'cover' })}>应用尺寸</button></div>}
+    {animationSource && <p className="ig-inline-note">保留原动画与费用，按本次修改要求生成新版本。</p>}
+    {templateOffer && draft.mode === 'create' && <div className="ig-template-offer"><p>要用模板内容替换当前描述吗？</p><div><button onClick={() => { updateDraft({ prompt: templateOffer }); setTemplateOffer(undefined); }}>应用模板</button><button onClick={() => setTemplateOffer(undefined)}>保留原文</button></div></div>}
+    {optimizedPrompt && appliedOptimizationId !== optimizedPrompt.id && <section className="ig-optimization"><strong>优化后的描述</strong>{optimization?.id === optimizedPrompt.id ? <><pre>{optimization.text}</pre><button className="btn btn-secondary" onClick={() => { updateDraft({ prompt: optimization.text, mode: 'create' }); setAppliedOptimizationId(optimization.id); setOptimization(undefined); props.notify('已将优化结果应用到画面描述，未调用新模型。'); }}><Check size={15} />应用描述</button></> : <button className="ig-link" disabled={readingOptimization} onClick={() => { void readOptimization(); }}>{readingOptimization ? <LoaderCircle size={14} className="spin" /> : <FileText size={14} />}查看并应用</button>}</section>}
+    </>}
+    {referenceControls}
+    <div className="studio-ai-model-row"><span>模型</span><Select aria-label="图片实际使用模型" value={currentModel?.id || ''} onValueChange={chooseImageModel} options={currentModels.map(model => ({ value: model.id, label: model.name, description: imageFormatModelDisabled(redPacketEnabled || wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat, model.modelId) ? `${model.modelId} · 当前格式仅 GPT Image 2.6 可用` : model.modelId, disabled: imageFormatModelDisabled(redPacketEnabled || wallpaperEnabled || engineeringEnabled ? 'png' : draft.imageOptions?.imageOutputFormat, model.modelId), group: props.configuration.connections.find(connection => connection.id === model.connectionId)?.name }))} placeholder="选择图片模型" /></div>
     <AiSettingsSection rememberKey={layout.rememberKey('images:account')} title="调用账户" summary={imageCredentials.find(key => key.id === selectedCredential)?.name || '请选择账户'} defaultOpen={!!imageKeyIssue}>{imageCredentialControl}<button className="ig-link" onClick={() => props.navigate('models')}><Settings2 size={14} />管理模型与账户</button></AiSettingsSection>
-    <div className="ig-generation-settings"><AiSettingsSection rememberKey={layout.rememberKey('images:creation-settings')} title="生成设置" summary={generationSummary}>
+    {!redPacketEnabled && <><div className="ig-generation-settings"><AiSettingsSection rememberKey={layout.rememberKey('images:creation-settings')} title="生成设置" summary={generationSummary}>
       <p>用于下一次生成或精修，当前图片保持原样。</p>
       {engineeringEnabled ? <p className="wallpaper-generation-note">原图保留，按原尺寸保存 PNG；本地尺寸适配不额外调用模型。</p> : wallpaperEnabled ? <p className="wallpaper-generation-note">按所选尺寸保存 PNG 壁纸，生成原图同时保留。</p> : <>{outputControls}<label className="ig-field"><span>比例与尺寸</span><Select aria-label="图像输出尺寸" disabled={draft.imageOptions?.imageOutputFormat === 'gif'} value={task.parameters.imageSize} onValueChange={value => updateDraft({ size: value })} options={IMAGE_SIZES} /></label></>}
       <ImageQuantityField value={draft.quantity} onChange={quantity => updateDraft({ quantity })} disabled={busy || importing} />
@@ -682,28 +769,30 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
       <ProjectReferences props={{ ...props, activeProject: project }} onUseImages={files => { if (files.length > MAX_IMAGE_REFERENCES) { setActionError(`一次最多使用 ${MAX_IMAGE_REFERENCES} 张参考图，请先移除不需要的引用。`); return; } updateDraft({ mode: 'refine', references: files.map(file => ({ id: file.id, name: file.name })), galleryBaseId: undefined }); }} />
       <ImageAssistAction id={`image-inspect-${project.id}`} model={inspectionModel?.name} account={props.configuration.credentials.find(key => key.id === inspectionCredential)?.name} disabled={busy || checkingReferences || Boolean(referenceError) || !selectedImage && !task.parameters.attachmentIds.length} onClick={inspectImage}><ShieldCheck size={15} />AI 检查图片</ImageAssistAction>
       <StudioActions props={props} studio="images" projectId={project.id} outputKind="image" input={draft.mode === 'refine' ? draft.refinePrompt : draft.prompt} attachmentIds={task.parameters.attachmentIds} />
-    </AiSettingsSection>
+    </AiSettingsSection></>}
   </CompactAiPanel>;
 
-  useEditorShortcuts(workbench, !busy && !importing && !saving, { save: async () => { if (!selectedImage) return false; await saveImage(selectedImage); return true; }, undo: () => moveHistory('undo'), redo: () => moveHistory('redo') }, target => target instanceof HTMLTextAreaElement && target.classList.contains('ig-prompt'));
+  useEditorShortcuts(workbench, !busy && !importing && !saving, { save: async () => { if (redPacketEnabled) { if (!coverSource || !runnerRef.current.exportRedPacketCover) return false; await exportRedPacketCover(); return true; } if (!selectedImage) return false; await saveImage(selectedImage); return true; }, undo: () => moveHistory('undo'), redo: () => moveHistory('redo') }, target => target instanceof HTMLTextAreaElement && target.classList.contains('ig-prompt'));
 
   function openTool(tool: StudioTool) {
-    if (tool === 'ai' && !engineeringEnabled && selectedImage && (RASTER_IMAGE_TYPES.has(selectedImage.mimeType) || selectedImage.mimeType === 'image/gif') && draft.mode === 'create') { refineImage(selectedImage); return; }
+    if (tool === 'ai' && !redPacketEnabled && !engineeringEnabled && selectedImage && (RASTER_IMAGE_TYPES.has(selectedImage.mimeType) || selectedImage.mimeType === 'image/gif') && draft.mode === 'create') { refineImage(selectedImage); return; }
     layout.togglePanel(tool);
   }
   useStudioToolRequests(props.workspaceId, project.id, tool => { layout.openPanel(tool); });
-  const formatTools = <><section className="sw-image-properties" aria-label="当前图片属性"><h3>当前图片</h3><strong>{selectedImage ? selectedImage.name : '尚无生成结果'}</strong><p>{selectedImage ? selectedImage.mimeType + ' · ' + (selectedImage.bytes / 1024).toFixed(0) + ' KB' : '首张图片完成后可在这里查看实际规格。'}</p>{imageMetadata.id === selectedImage?.id && imageMetadata.width && imageMetadata.height && <p>实际尺寸：{imageMetadata.width} × {imageMetadata.height} px</p>}{deliveryTarget.wallpaperTarget && <p>此版本壁纸目标：{deliveryTarget.wallpaperTarget.width} × {deliveryTarget.wallpaperTarget.height} px</p>}</section>
+  const formatTools = redPacketEnabled ? <section className="sw-image-properties" aria-label="红包封面导出规格"><h3>微信红包封面</h3><p>957 × 1278 JPEG</p>{selectedImage && <p>原图：{selectedImage.name}</p>}</section> : <><section className="sw-image-properties" aria-label="当前图片属性"><h3>当前图片</h3><strong>{selectedImage ? selectedImage.name : '尚无生成结果'}</strong><p>{selectedImage ? selectedImage.mimeType + ' · ' + (selectedImage.bytes / 1024).toFixed(0) + ' KB' : '首张图片完成后可在这里查看实际规格。'}</p>{imageMetadata.id === selectedImage?.id && imageMetadata.width && imageMetadata.height && <p>实际尺寸：{imageMetadata.width} × {imageMetadata.height} px</p>}{deliveryTarget.wallpaperTarget && <p>此版本壁纸目标：{deliveryTarget.wallpaperTarget.width} × {deliveryTarget.wallpaperTarget.height} px</p>}</section>
     <section className="ig-next-generation" aria-label="下一次生成设置"><h3>下一次生成</h3><p>{generationSummary}<br />{nextImageSize}</p><p>仅在明确生成或精修时使用；修改设置不会改变当前成品。</p><button type="button" className="btn btn-secondary" onClick={() => openGenerationSettings()}><Settings2 size={15} />调整生成设置</button></section>
     <ImageAssistAction id={`image-inspect-properties-${project.id}`} model={inspectionModel?.name} account={props.configuration.credentials.find(key => key.id === inspectionCredential)?.name} disabled={busy || !selectedImage} onClick={inspectImage}><ShieldCheck size={15} />AI 检查当前图片</ImageAssistAction></>;
-  const versions = <><ImageVersionCompare images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} disabled={busy || importing || saving} /><div className="sw-scope-label">左侧保留本项目全部实际图片结果，切换或撤销不重新调用模型。</div>{selectedImage && <><strong>{selectedImage.name}</strong><p>{selectedImage.mimeType} · {(selectedImage.bytes / 1024).toFixed(0)} KB</p><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />{selectedImage.mimeType === 'image/svg+xml' ? '转PNG作参考' : '作为精修基底'}</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />{selectedImage.mimeType === 'image/svg+xml' ? '另存原SVG' : '另存原图'}</button></div></>}{creationPrompt && <RememberedDetails rememberKey={layout.rememberKey('images:source-description')}><summary>查看当时的画面描述</summary><p>{creationPrompt}</p></RememberedDetails>}<p>结果与原图始终保留。当前表单、参考来源和图片选择支持撤销与重做；历史费用不会减少。</p></>;
-  const assets = <Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker embedded props={{ ...props, activeProject: project }} title="选择图片参考素材" description="作为固定精修参考，保留当前结果；不会自动生成或收费。" confirmLabel="作为精修参考" onClose={revealEditingInput} onChoose={useMaterial} /></Suspense>;
+  const versions = <><ImageVersionCompare images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} disabled={busy || importing || saving} /><div className="sw-scope-label">左侧保留本项目全部实际图片结果，切换或撤销不重新调用模型。</div>{selectedImage && <><strong>{selectedImage.name}</strong><p>{selectedImage.mimeType} · {(selectedImage.bytes / 1024).toFixed(0)} KB</p><div className="sw-panel-actions"><button type="button" className="btn btn-secondary" disabled={busy || importing || saving} onClick={() => refineImage(selectedImage)}><WandSparkles size={15} />{redPacketEnabled ? '用于红包封面参考' : selectedImage.mimeType === 'image/svg+xml' ? '转PNG作参考' : '作为精修基底'}</button><button type="button" className="btn btn-secondary" disabled={saving} onClick={() => { void saveImage(selectedImage); }}><Download size={15} />{selectedImage.mimeType === 'image/svg+xml' ? '另存原SVG' : '另存原图'}</button></div></>}{creationPrompt && <RememberedDetails rememberKey={layout.rememberKey('images:source-description')}><summary>查看当时的画面描述</summary><p>{creationPrompt}</p></RememberedDetails>}<p>结果与原图始终保留。当前表单、参考来源和图片选择支持撤销与重做；历史费用不会减少。</p></>;
+  const assets = <Suspense fallback={<p role="status">正在打开素材…</p>}><StudioAssetPicker embedded props={{ ...props, activeProject: project }} title="选择图片参考素材" description={redPacketEnabled ? '使用已有素材作为红包封面参考图。' : '作为固定精修参考，保留当前结果；不会自动生成或收费。'} confirmLabel={redPacketEnabled ? '添加参考图' : '作为精修参考'} onClose={revealEditingInput} onChoose={useMaterial} /></Suspense>;
   const files = <><ArtifactResults artifacts={artifacts} runner={props.workflowRunner} projectId={project.id} onUseReference={refineImage} referenceActionLabel={artifact => artifact.mimeType === 'image/svg+xml' ? '转PNG作参考' : '用作参考'} /><p>项目调用费用</p><CostTotal summary={costSummary} /><p>生成、精修和检查按每次真实调用累计；手工修改、导出和撤销不减少费用。</p></>;
-  const deliveryTools = <><p>导出当前所选真实图片，再按需完成当前版本的人工验收。</p><button type="button" className="btn btn-secondary" disabled={!selectedImage || saving} onClick={() => { if (selectedImage) void saveImage(selectedImage); }}><Download size={15} />另存当前图片</button></>;
+  const deliveryTools = redPacketEnabled ? <><p>固定尺寸 957 × 1278 JPEG</p><button type="button" className="btn btn-secondary" disabled={!coverSource || !props.workflowRunner.exportRedPacketCover || saving || busy || importing} onClick={() => { void exportRedPacketCover(); }}><Download size={15} />另存红包封面</button></> : <><p>导出当前所选真实图片，再按需完成当前版本的人工验收。</p><button type="button" className="btn btn-secondary" disabled={!selectedImage || saving} onClick={() => { if (selectedImage) void saveImage(selectedImage); }}><Download size={15} />另存当前图片</button></>;
   const panel = layout.tool === 'ai' ? settingsPanel : layout.tool === 'format' ? formatTools : layout.tool === 'assets' ? assets : layout.tool === 'versions' ? versions : layout.tool === 'files' ? files : deliveryTools;
+  const gallery = <ImageGallery hideActions showHistory={false} onCreate={() => layout.openPanel('ai')} reference={draft.mode === 'refine' && draft.references.length ? { name: draft.references[0].name, url: referencePreview, loading: checkingReferences, error: referenceError } : undefined} onImageReady={inspectImageMetadata} onMetadataReady={inspectNativePreviewMetadata} images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} onRefine={refineImage} onSave={artifact => { void saveImage(artifact); }} saving={saving} canRefine={!busy && !importing} />;
   if (draft.preset === '拼豆') return <Suspense fallback={<p className="bead-route-loading" role="status">正在打开拼豆工作台…</p>}><BeadStudio props={props} project={project} initialReferenceId={draft.references[0]?.id} onBack={() => chooseWallpaper(false)} /></Suspense>;
   return <div ref={workbench} className="sw-editor-root image-studio-page">
     {markupSource && <Suspense fallback={null}><ImageMarkupEditor source={markupSource.url} onSave={saveMarkup} onClose={() => setMarkupSource(undefined)} /></Suspense>}
-    <StudioWorkbench projectName={project.name} kind="image" hasContent={!!selectedImage} titleActions={<button type="button" className="btn btn-ghost" disabled={engineeringEnabled} title={engineeringEnabled ? '工程P图需指定主原图，请在当前项目精修。' : undefined} onClick={() => { if (wallpaperEnabled && wallpaperTargetError) { fixGeneration('format'); return; } setGroupBatchOpen(true); }}><Layers3 size={16} />分组批量生成</button>} layout={layout} onTool={openTool} saveStatus={busy ? '正在制作，已发生费用保留' : selectedImage ? '真实图片已保存到当前项目' : '尚未生成图片 · 可以先添加参考'} selectionLabel={draft.mode === 'refine' && draft.references.length ? isGalleryImageBase(draft) ? '精修基底跟随当前结果' : draft.references.length + ' 份固定精修参考' : selectedImage ? '当前所选图片：' + selectedImage.name : '未选择图片'} navigation={<ImageHistoryNavigation images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} />} navigationLabel="图片结果" panel={panel} selectionTools={<>{(textSelection || selectedImage && (localUndo.available || localRedo.available)) && <SelectionHistoryToolbar label={textSelection ? '选中的图片描述文字' : '当前图片'} exactSelection={!!textSelection} selectedCount={textSelection ? Array.from(localValue.slice(localStart, localEnd)).length : 0} image={!textSelection} selectionPreview={textSelection ? localValue.slice(localStart, localEnd) : selectedImage?.name} canUndo={localUndo.available} canRedo={localRedo.available} reason={!localUndo.available && !localRedo.available ? localUndo.reason : undefined} disabled={busy || importing || saving} onUndo={() => { void moveSelection('undo'); }} onRedo={() => { void moveSelection('redo'); }} onClearSelection={textSelection ? () => setTextSelection(undefined) : undefined} />}</>} cost={<CostTotal summary={costSummary} />} busy={busy || importing || saving} exporting={saving} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={!!selectedImage} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onExport={() => { if (selectedImage) void saveImage(selectedImage); }} deliveryPanel={selectedImage && <DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="image" artifactIds={[selectedImage.id]} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} sourceRevision={JSON.stringify({ id: selectedImage.id, target: deliveryTarget })} checks={imageDeliveryChecks({ ...(imageMetadata.id === selectedImage.id ? imageMetadata : {}), expectedSize: deliveryTarget.size, requiresTransparency, mimeType: selectedImage.mimeType, artifactAvailable: true })} />} >
+    <StudioWorkbench projectName={project.name} kind="image" hasContent={!!selectedImage} titleActions={redPacketEnabled ? undefined : <button type="button" className="btn btn-ghost" disabled={engineeringEnabled} title={engineeringEnabled ? '工程P图需指定主原图，请在当前项目精修。' : undefined} onClick={() => { if (wallpaperEnabled && wallpaperTargetError) { fixGeneration('format'); return; } setGroupBatchOpen(true); }}><Layers3 size={16} />分组批量生成</button>} layout={layout} onTool={openTool} saveStatus={busy ? '正在制作，已发生费用保留' : selectedImage ? '真实图片已保存到当前项目' : '尚未生成图片 · 可以先添加参考'} selectionLabel={draft.mode === 'refine' && draft.references.length ? isGalleryImageBase(draft) ? '精修基底跟随当前结果' : draft.references.length + ' 份固定精修参考' : selectedImage ? '当前所选图片：' + selectedImage.name : '未选择图片'} navigation={<ImageHistoryNavigation images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} />} navigationLabel="图片结果" panel={panel} selectionTools={<>{(textSelection || selectedImage && (localUndo.available || localRedo.available)) && <SelectionHistoryToolbar label={textSelection ? '选中的图片描述文字' : '当前图片'} exactSelection={!!textSelection} selectedCount={textSelection ? Array.from(localValue.slice(localStart, localEnd)).length : 0} image={!textSelection} selectionPreview={textSelection ? localValue.slice(localStart, localEnd) : selectedImage?.name} canUndo={localUndo.available} canRedo={localRedo.available} reason={!localUndo.available && !localRedo.available ? localUndo.reason : undefined} disabled={busy || importing || saving} onUndo={() => { void moveSelection('undo'); }} onRedo={() => { void moveSelection('redo'); }} onClearSelection={textSelection ? () => setTextSelection(undefined) : undefined} />}</>} cost={<CostTotal summary={costSummary} />} busy={busy || importing || saving} exporting={saving} canUndo={edits.canUndo} canRedo={edits.canRedo} canExport={redPacketEnabled ? !!coverSource && !!props.workflowRunner.exportRedPacketCover : !!selectedImage} onUndo={() => moveHistory('undo')} onRedo={() => moveHistory('redo')} onExport={() => { if (redPacketEnabled) void exportRedPacketCover(); else if (selectedImage) void saveImage(selectedImage); }} deliveryPanel={!redPacketEnabled && selectedImage && <DeliveryPanel inline visible={layout.tool === 'delivery' && layout.rightOpen && !layout.focus} projectId={project.id} kind="image" artifactIds={[selectedImage.id]} deliveryContext={project.lastLiveStateSignature} onDelivered={(receipt, selection) => props.onProjectDelivered ? props.onProjectDelivered(project.id, receipt, selection) : props.onUpdateProject(project.id, { status: 'complete', updatedAt: new Date().toISOString() })} onInvalidated={() => { if (project.confirmedDelivery) props.onUpdateProject(project.id, { confirmedDelivery: undefined, ...(project.status === 'complete' ? { status: 'review' as const } : {}) }); }} sourceRevision={JSON.stringify({ id: selectedImage.id, target: deliveryTarget })} checks={imageDeliveryChecks({ ...(imageMetadata.id === selectedImage.id ? imageMetadata : {}), expectedSize: deliveryTarget.size, requiresTransparency, mimeType: selectedImage.mimeType, artifactAvailable: true })} />} >
+      {!redPacketEnabled && <>
       {deliveryTarget.wallpaperTarget && <div className="sw-scope-label"><strong>所选壁纸目标：{deliveryTarget.wallpaperTarget.width} × {deliveryTarget.wallpaperTarget.height} px</strong><span>当前保存版本，调整下一次尺寸不会改动它。</span></div>}
       {deliveryTarget.engineeringReferenceId && <div className="sw-scope-label"><strong>工程成品 · 原图尺寸 {deliveryTarget.size?.replace('x', ' × ')} px</strong><span>原图与编辑版本独立保留。</span></div>}
       {!selectedImage && project.localOutputArtifactIds?.[0] && <section className="image-local-tool-card"><span className="image-local-tool-icon" aria-hidden="true"><Layers3 size={19} /></span><div className="image-local-tool-copy"><h3>继续本地图片排版</h3><p>已保存的图层与原图仍在，编辑和导出不调用模型。</p></div><button type="button" className="btn btn-secondary" onClick={() => { setCommerceDocumentId(undefined); setCommerceSource(project.localOutputArtifactIds![0]); }}>打开排版</button></section>}
@@ -720,10 +809,12 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
           <button type="button" className="btn btn-secondary" onClick={() => setCommerceSource(selectedImage.id)}>排版／保护区</button>
         </section>}
       </div>
-      <ImageGallery hideActions showHistory={false} onCreate={() => layout.openPanel('ai')} reference={draft.mode === 'refine' && draft.references.length ? { name: draft.references[0].name, url: referencePreview, loading: checkingReferences, error: referenceError } : undefined} onImageReady={inspectImageMetadata} onMetadataReady={inspectNativePreviewMetadata} images={images} selectedId={selectedImage?.id} runner={props.workflowRunner} onSelect={selectImage} onRefine={refineImage} onSave={artifact => { void saveImage(artifact); }} saving={saving} canRefine={!busy && !importing} />
+      </>}
+      {redPacketEnabled ? <RedPacketCoverPreview key={coverSource?.id || 'empty'} source={coverSource} runner={props.workflowRunner} original={gallery}
+        disabled={busy || importing} exporting={saving} exportError={coverExportError} onExport={() => { void exportRedPacketCover(); }} /> : gallery}
     </StudioWorkbench>
     {commerceSource && <CommerceEditorDialog props={props} projectId={project.id} artifactId={commerceSource} documentId={commerceDocumentId} onClose={() => { setCommerceSource(undefined); setCommerceDocumentId(undefined); }} onExport={() => props.notify('本地图层成品已保存到项目，可在项目文件中查看。')} />}
-    {groupBatchOpen && <Suspense fallback={<p role="status">正在打开分组生成…</p>}><ImageGroupBatchPanel key={props.workspaceId + '/' + project.id} props={props} project={project} settings={{ model: generationModel, credentialId: groupCredential, size: draft.size, background: task.parameters.imageBackground, imageOptions: effectiveImageOptions(draft.imageOptions, generationModel?.modelId, 'image-generation'), wallpaperEnabled: draft.wallpaperEnabled, wallpaperTarget: draft.wallpaperTarget }} busy={busy || importing || saving} onClose={() => setGroupBatchOpen(false)} /></Suspense>}
+    {!redPacketEnabled && groupBatchOpen && <Suspense fallback={<p role="status">正在打开分组生成…</p>}><ImageGroupBatchPanel key={props.workspaceId + '/' + project.id} props={props} project={project} settings={{ model: generationModel, credentialId: groupCredential, size: draft.size, background: task.parameters.imageBackground, imageOptions: effectiveImageOptions(draft.imageOptions, generationModel?.modelId, 'image-generation'), wallpaperEnabled: draft.wallpaperEnabled, wallpaperTarget: draft.wallpaperTarget }} busy={busy || importing || saving} onClose={() => setGroupBatchOpen(false)} /></Suspense>}
     {purposeManager && <PurposeTemplates templates={props.configuration.useTemplates || []} workspaceId={props.workspaceId} workspaceName={props.workspace.name} initialMode={purposeManager} onSave={props.configuration.saveUseTemplate} onDelete={props.configuration.deleteUseTemplate} onClose={() => setPurposeManager(undefined)} />}
     {promptPickerOpen && <PromptPicker useTemplates={props.configuration.useTemplates} prompts={props.prompts} category="image" onClose={() => setPromptPickerOpen(false)} onUse={(template, content) => { props.onUsePrompt(template, content); setPromptPickerOpen(false); }} />}
     {promptEditorDraft && <PromptEditor categories={props.configuration.categories} useTemplates={props.configuration.useTemplates} initial={promptEditorDraft} onClose={() => setPromptEditorDraft(null)} onSave={(value, id) => { props.onSavePrompt(value, id); setPromptEditorDraft(null); }} />}

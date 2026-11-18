@@ -25,6 +25,7 @@ import './focused-shell.css';
 import { creationPrompt } from './lib/creation-quality';
 import { CREATION_PROFILES } from './lib/creation-profiles';
 import { pickImageOutputOptions } from './lib/image-output-options';
+import { redPacketCoverGenerationSize, WECHAT_RED_PACKET_COVER } from './lib/wechat-red-packet-cover';
 import { quickImageWorkflowBudget, quickImageWorkflowSteps, quickImageWorkflowTail, quickWorkflowTail } from './lib/quick-workflow';
 import { illustratedDocumentSteps } from './lib/document-illustrations';
 import { assetApplicationTarget, assertAssetImage } from './lib/asset-application';
@@ -559,9 +560,10 @@ export default function App() {
     if (currentRuns.some(run => run.mode !== 'live' || run.status !== 'waiting-review')) { notify('项目正在执行或已暂停，请在当前任务中继续、等待或取消后再生成。', 'info'); return; }
     const replaceWaitingReviewRunId = currentRuns.find(run => run.mode === 'live' && run.status === 'waiting-review')?.id;
     const kind = parameters?.capability || (project.kind === 'image' ? action === 'AI 复核' ? 'vision' : action === 'AI 精修' ? 'image-editing' : 'image-generation' : 'text');
+    const redPacketCover = parameters?.redPacketCover === true && project.kind === 'image' && ['image-generation', 'image-editing'].includes(kind);
     if (parameters?.engineeringEnabled && (!parameters.engineeringReferenceId || parameters.attachmentIds?.[0] !== parameters.engineeringReferenceId || kind !== 'image-editing')) { notify('工程P图请先上传或选择至少一张静态原图，并明确修改要求。', 'error'); return; }
     if (parameters?.beadBaseRequestId && (!/^[A-Za-z0-9-]{1,60}$/.test(parameters.beadBaseRequestId) || kind !== 'image-editing' || !parameters.attachmentIds?.length || parameters.wallpaperTarget || parameters.engineeringEnabled)) { notify('拼豆AI底图整理需要本次上传的静态原图，请重新选择底图。', 'error'); return; }
-    const id = parameters?.beadBaseRequestId ? `quick-${project.id}-bead-base` : `quick-${project.id}-${kind}-${action === '初次生成' ? 'create' : action === '重新生成' ? 'regenerate' : action === 'AI 精修' ? 'refine' : 'review'}${parameters?.documentImages ? `-illustrated-${parameters.documentImages.mode}` : ''}${parameters?.wallpaperTarget ? '-wallpaper' : ''}${parameters?.engineeringEnabled ? '-engineering' : ''}`;
+    const id = parameters?.beadBaseRequestId ? `quick-${project.id}-bead-base` : redPacketCover ? `quick-${project.id}-${kind}-red-packet-cover` : `quick-${project.id}-${kind}-${action === '初次生成' ? 'create' : action === '重新生成' ? 'regenerate' : action === 'AI 精修' ? 'refine' : 'review'}${parameters?.documentImages ? `-illustrated-${parameters.documentImages.mode}` : ''}${parameters?.wallpaperTarget ? '-wallpaper' : ''}${parameters?.engineeringEnabled ? '-engineering' : ''}`;
     const existing = configuration.workflows.find(flow => flow.id === id);
     const models = configuration.models.filter(item => !item.demo && item.enabled && item.capabilities.includes(kind) && configuration.connections.some(connection => connection.id === item.connectionId && connection.enabled && !connection.demo));
     const model = studioModel(models, parameters?.modelConfigId || existing?.steps[0]?.modelConfigId);
@@ -569,11 +571,11 @@ export default function App() {
     if (parameters?.credentialId && !credentialId) { notify('所选 Key 已不可用或不属于当前模型，请重新选择后再继续。', 'error'); return; }
     const instruction = parameters?.prompt || (action === 'AI 复核' ? '检查当前内容中的错误、遗漏和需要人工核对的内容，输出清楚的检查报告。' : project.description || `根据本次需求制作${KIND_LABEL[project.kind]}内容，保留已提供事实，缺失信息标为待确认。`);
     const corePrompt = action === 'AI 精修' && kind === 'text' && project.kind !== 'image' ? `${instruction}\n请输出可直接交付的完整修订内容，不要只输出修改建议。保留未要求修改的事实、数字和段落，无法核实的信息标注待确认。` : instruction;
-    const prompt = creationPrompt(project.kind, corePrompt, action === 'AI 复核' ? 'vision' : kind, { imageSize: parameters?.imageSize, imageBackground: parameters?.imageBackground, hasReferences: Boolean(parameters?.attachmentIds?.length) });
+    const prompt = creationPrompt(project.kind, corePrompt, action === 'AI 复核' ? 'vision' : kind, { imageSize: redPacketCover ? undefined : parameters?.imageSize, imageBackground: parameters?.imageBackground, hasReferences: Boolean(parameters?.attachmentIds?.length) });
     const previousLimit = existing?.steps[0]?.maxOutputTokens;
     const maxOutputTokens = kind === 'text' && project.kind !== 'image' && action !== 'AI 复核' ? previousLimit && previousLimit !== 4096 ? previousLimit : CREATION_PROFILES[project.kind].outputTokens : previousLimit || 4096;
-    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, ...pickImageOutputOptions(parameters), ...(parameters?.beadBaseRequestId ? { beadBaseRequestId: parameters.beadBaseRequestId } : {}), count, imageSize: parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
-    const tail = parameters?.beadBaseRequestId ? [] : quickWorkflowTail(project.kind, kind, action, parameters?.documentImages ? undefined : quickImageWorkflowTail(existing?.steps));
+    const firstStep: WorkflowStep = { id: existing?.steps[0]?.id || crypto.randomUUID(), name: action, kind, prompt, inputSource: 'project', budgetCents: quickImageWorkflowBudget(existing?.steps), enabled: true, modelConfigId: parameters?.modelConfigId || model?.id, credentialId, maxOutputTokens, ...pickImageOutputOptions(parameters), ...(parameters?.beadBaseRequestId ? { beadBaseRequestId: parameters.beadBaseRequestId } : {}), count: redPacketCover ? 1 : count, imageSize: redPacketCover ? redPacketCoverGenerationSize(model?.modelId) : parameters?.imageSize || '1024x1024', imageBackground: parameters?.imageBackground || 'auto' };
+    const tail = redPacketCover || parameters?.beadBaseRequestId ? [] : quickWorkflowTail(project.kind, kind, action, parameters?.documentImages ? undefined : quickImageWorkflowTail(existing?.steps));
     let steps: WorkflowStep[];
     try { steps = quickImageWorkflowSteps(firstStep, tail, parameters?.wallpaperTarget, parameters?.engineeringReferenceId); }
     catch (cause) { notify(cause instanceof Error ? cause.message : '图片数量无效。', 'error'); return; }
@@ -582,12 +584,12 @@ export default function App() {
       try { steps = illustratedDocumentSteps(firstStep, tail, parameters.documentImages, configuration, parameters.input || instruction); }
       catch (cause) { notify(cause instanceof Error ? cause.message : '图文工作流配置未完成。', 'error'); return; }
     }
-    const draft: WorkflowDraft = { name: existing?.name || `${project.name} · ${action}`, description: parameters?.documentImages ? '完整正文与独立插图自动排版，成品可继续编辑。配图和正文调用分别记费。' : '由工作台创建，可编辑步骤、模型和提示词后重复使用。', outputKind: project.kind, businessCategoryId: project.businessCategoryId, steps };
+    const draft: WorkflowDraft = { name: redPacketCover ? `${project.name} · ${WECHAT_RED_PACKET_COVER}` : existing?.name || `${project.name} · ${action}`, description: redPacketCover ? '固定导出 957 × 1278 JPEG，原图保存在项目。' : parameters?.documentImages ? '完整正文与独立插图自动排版，成品可继续编辑。配图和正文调用分别记费。' : '由工作台创建，可编辑步骤、模型和提示词后重复使用。', outputKind: project.kind, businessCategoryId: project.businessCategoryId, steps };
     if (!configuration.saveWorkflow(draft, id, { silent: true })) return;
     rememberProject(projectId, workspaceId);
     const previousImages = projectImageContent(workflowRunner.runs, projectId, workflowRunner.trashedArtifacts).images.slice(0, 1).map(item => item.id);
     const input = parameters?.input?.trim() || (['image-generation', 'image-editing'].includes(kind) ? '按当前提示词和参考文件执行。' : project.description || '按当前提示词执行。');
-    setGenerationIntent({ token: crypto.randomUUID(), workflowId: id, projectId, input, replaceWaitingReviewRunId, attachmentIds: parameters?.attachmentIds !== undefined ? parameters.attachmentIds : ['image-editing', 'vision'].includes(kind) ? previousImages : [] });
+    setGenerationIntent({ token: crypto.randomUUID(), workflowId: id, projectId, input, replaceWaitingReviewRunId, ...(redPacketCover ? { redPacketCover: true } : {}), attachmentIds: parameters?.attachmentIds !== undefined ? parameters.attachmentIds : ['image-editing', 'vision'].includes(kind) ? previousImages : [] });
     return true;
   };
   const onUseStudioAction: PageProps['onUseStudioAction'] = (id, projectId, input, attachmentIds) => {

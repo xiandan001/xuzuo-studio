@@ -1,3 +1,4 @@
+const { COVER_TARGET } = require('./red-packet-cover-export.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { imageType, rasterDimensions } = require('./image-output-formats.cjs');
 
@@ -19,7 +20,7 @@ function checkedPng(input, PNG) {
   }
   try { return PNG.sync.read(buffer); } catch { throw Error('PNG原图无法完整解码，原图与费用保留。'); }
 }
-function samplePixels(source, target, output, preserveAlpha) {
+function samplePixels(source, target, output, preserveAlpha, matte) {
   const { scale, left, top } = wallpaperGeometry(source, target);
   const startX = Math.max(0, Math.ceil(left - 0.5)), endX = Math.min(target.width, Math.ceil(left + source.width * scale - 0.5));
   const startY = Math.max(0, Math.ceil(top - 0.5)), endY = Math.min(target.height, Math.ceil(top + source.height * scale - 0.5));
@@ -33,17 +34,17 @@ function samplePixels(source, target, output, preserveAlpha) {
       const wa = (1 - wx) * (1 - wy) * data[a + 3] / 255, wb = wx * (1 - wy) * data[b + 3] / 255, wc = (1 - wx) * wy * data[c + 3] / 255, wd = wx * wy * data[d + 3] / 255;
       const destination = (y * target.width + x) * 4;
       const alpha = wa + wb + wc + wd;
-      for (let channel = 0; channel < 3; channel++) { const color = data[a + channel] * wa + data[b + channel] * wb + data[c + channel] * wc + data[d + channel] * wd; output[destination + channel] = Math.round(preserveAlpha ? alpha ? color / alpha : 0 : color); }
+      for (let channel = 0; channel < 3; channel++) { const color = data[a + channel] * wa + data[b + channel] * wb + data[c + channel] * wc + data[d + channel] * wd; output[destination + channel] = Math.round(preserveAlpha ? alpha ? color / alpha : 0 : color + matte * (1 - alpha)); }
       if (preserveAlpha) output[destination + 3] = Math.round(alpha * 255);
     }
   }
 }
-function fitRasterPng(input, loadModule, preserveAlpha) {
+function fitRasterPng(input, loadModule, preserveAlpha, matte = 0) {
   const issue = wallpaperTargetError(input?.target); if (issue) throw Error(issue);
   const { PNG } = loadModule('pngjs'), source = checkedPng(input, PNG), target = input.target;
   const output = Buffer.alloc(target.width * target.height * 4);
   if (!preserveAlpha) for (let at = 3; at < output.length; at += 4) output[at] = 255;
-  samplePixels(source, target, output, preserveAlpha);
+  samplePixels(source, target, output, preserveAlpha, matte);
   return PNG.sync.write({ width: target.width, height: target.height, data: output }, { colorType: preserveAlpha ? 6 : 2, inputColorType: 6, deflateLevel: 6, filterType: 4 });
 }
 function fitWallpaperPng(input, loadModule = require) { return fitRasterPng(input, loadModule, false); }
@@ -51,4 +52,8 @@ function fitEngineeringPng(input, loadModule = require) {
   if (input?.target?.fit !== 'contain') throw Error('工程图片需完整保留画面，不能自动裁切图纸或标注。');
   try { return fitRasterPng(input, loadModule, true); } catch (error) { error.message = error.message.replaceAll('壁纸', '工程图片'); throw error; }
 }
-module.exports = { fitWallpaperPng, fitEngineeringPng, wallpaperGeometry };
+function cropRedPacketCoverPng(input, loadModule = require) {
+  try { return fitRasterPng({ buffer: input.buffer, target: COVER_TARGET }, loadModule, false, 255); }
+  catch (error) { error.message = error.message.replaceAll('壁纸', '微信红包封面'); throw error; }
+}
+module.exports = { fitWallpaperPng, fitEngineeringPng, cropRedPacketCoverPng, wallpaperGeometry };

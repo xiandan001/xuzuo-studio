@@ -113,7 +113,7 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
     finally { referencePending.current = false; if (referenceScope.current === scope) setRefreshingReferences(false); }
   }
   const archived = Boolean(run.hiddenAt || run.trashedAt);
-  const [confirmation, setConfirmation] = useState<{ action: 'retry' | 'continue'; stepId?: string; name: string; outputLimit?: number } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ action: 'retry' | 'continue'; stepId?: string; attemptId?: string; name: string; outputLimit?: number } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [continueBudget, setContinueBudget] = useState('');
   const [continueBudgetError, setContinueBudgetError] = useState('');
@@ -180,21 +180,22 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
   }
   function retry(stepId: string, name: string) { if (live && !props.preferences.confirmGeneration) { props.workflowRunner.retry(run.id, stepId); return; } if (live) { setAcknowledged(false); setConfirmation({ action: 'retry', stepId, name }); } else props.workflowRunner.retry(run.id, stepId); }
   const outputLimit = workflowOutputRetryLimit(run);
+  const continuingStep = run.snapshot.steps[run.stepIndex];
+  const continuingAttempt = run.attempts.filter(attempt => attempt.stepId === continuingStep?.id).at(-1);
   function continueRun() {
     if (!live || !props.preferences.confirmGeneration) {
       if (outputLimit === undefined) props.workflowRunner.resume(run.id);
       else props.workflowRunner.resume(run.id, undefined, outputLimit);
       return;
     }
-    const step = run.snapshot.steps[run.stepIndex];
-    setContinueBudget(step?.budgetCents == null ? '' : money(step.budgetCents)); setContinueBudgetError(''); setAcknowledged(false);
-    setConfirmation({ action: 'continue', stepId: step?.id, name: step?.name || '从当前位置继续', outputLimit });
+    setContinueBudget(continuingStep?.budgetCents == null ? '' : money(continuingStep.budgetCents)); setContinueBudgetError(''); setAcknowledged(false);
+    setConfirmation({ action: 'continue', stepId: continuingStep?.id, attemptId: continuingAttempt?.id, name: continuingStep?.name || '从当前位置继续', outputLimit });
   }
   function confirm() {
     if (!confirmation || !acknowledged) return;
     if (confirmation.action === 'retry' && confirmation.stepId) props.workflowRunner.retry(run.id, confirmation.stepId);
     else {
-      if (confirmation.stepId !== run.snapshot.steps[run.stepIndex]?.id || confirmation.outputLimit !== outputLimit) { setContinueBudgetError('当前步骤已变化，请关闭后重新确认。'); return; }
+      if (confirmation.stepId !== continuingStep?.id || confirmation.attemptId !== continuingAttempt?.id || confirmation.outputLimit !== outputLimit) { setContinueBudgetError('当前步骤或尝试已变化，请关闭后重新确认。'); return; }
       let limit: number | undefined;
       try { limit = parseOptionalBudget(continueBudget); } catch (error) { setContinueBudgetError(error instanceof Error ? error.message : '请填写非负有效金额或留空。'); return; }
       if (confirmation.outputLimit === undefined) props.workflowRunner.resume(run.id, limit ?? null);
@@ -215,7 +216,7 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
           {canRetryStep && <RememberedDetails rememberKey={`task:${run.id}:${step.id}:retry-step`}><summary>单步重试</summary><button type="button" className="btn btn-ghost wf-retry-step" aria-label={`重试步骤 ${step.name}`} onClick={() => retry(step.id, step.name)} title={live ? '再次向服务商请求，可能再次收费' : '新增模拟调用与费用'}><RotateCcw size={13} />重试此步</button></RememberedDetails>}
         </>}</div></div>;
     })}</div>}{run.retryStepOnly && <div className="wf-retry-notice"><RotateCcw size={13} /><span>{run.status === 'complete' ? '本次仅完成单步重试，后续步骤未重新运行；已有结果和历史费用仍保留。' : '本次仅重试所选步骤，后续步骤不会自动重新运行。'}</span></div>}
-    {embedded && outputLimit !== undefined && <p className="wf-retry-notice"><RotateCcw size={14} />继续时将当前步骤输出上限提高到 {outputLimit} Token。</p>}
+    {!archived && outputLimit !== undefined && <p className="wf-retry-notice"><RotateCcw size={14} />继续时会为当前步骤使用 {outputLimit} Token 的输出上限，已完成的步骤会保留。</p>}
     <footer>
       {!embedded && <span><ShieldCheck size={13} />{canResumeLocalImageExport(run) ? '继续本地适配不调用模型，已发生费用保留' : live ? '每次重试独立计费，返回用量后自动累计花费' : '演示费用按尝试累计，历史记录保留'}</span>}
       <div>

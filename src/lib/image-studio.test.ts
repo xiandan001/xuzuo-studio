@@ -182,3 +182,30 @@ describe('图片工作台的真实结果与描述', () => {
     expect(imageTaskRequest({ ...draft, references: [{ id: 'person', name: '人物.png' }], background: 'transparent' }).parameters).toMatchObject({ modelConfigId: 'editing-model', capability: 'image-editing', attachmentIds: ['person'], imageBackground: 'transparent' });
   });
 });
+
+describe('微信红包封面固定生成规格', () => {
+  it('持久草稿中的历史尺寸、背景、数量、壁纸和格式不能改变红包请求', () => {
+    const corrupted = readImageDraft(JSON.stringify({
+      preset: '微信红包封面', prompt: '原创橘猫，保留暖红色背景，画上「岁岁平安」', mode: 'create', size: '1536x1024',
+      background: 'transparent', quantity: 8, wallpaperEnabled: true, wallpaperTarget: { width: 3840, height: 2160, fit: 'contain' },
+      imageOptions: { imageOutputFormat: 'gif', imageFrameCount: 4, imageFrameDurationMs: 200 },
+    }), '');
+    const task = imageTaskRequest(corrupted, undefined, 'gpt-image-1.5');
+    expect(task).toMatchObject({ count: 1, parameters: { imageSize: '1024x1536', imageBackground: 'opaque', imageOutputFormat: 'png', capability: 'image-generation' } });
+    expect(task.parameters).not.toHaveProperty('wallpaperTarget');
+    expect(task.parameters).not.toHaveProperty('imageFrameCount');
+    expect(task.parameters.prompt).toContain('顶部适当留白');
+    expect(task.parameters.prompt).toContain('不绘制微信界面');
+    expect(imageCreationDescription(task.parameters.prompt)).toBe(corrupted.prompt);
+  });
+
+  it('使用当前图片编辑模型与附件，固定 PNG 原图规格并保持空输入校验', () => {
+    const cover = { ...readImageDraft(null, ''), preset: '微信红包封面', mode: 'refine' as const, refinePrompt: '保留参考宠物的花色', editingModelId: 'cover-edit' };
+    const task = imageTaskRequest(cover, 'selected-cover', 'gpt-image-2.6-flare');
+    const [width, height] = task.parameters.imageSize.split('x').map(Number);
+    expect(width / height).toBeCloseTo(957 / 1278, 2);
+    expect(task).toMatchObject({ count: 1, parameters: { imageBackground: 'opaque', imageOutputFormat: 'png', attachmentIds: ['selected-cover'], modelConfigId: 'cover-edit', capability: 'image-editing' } });
+    expect(imageCreationDescription(task.parameters.prompt)).toBe(cover.refinePrompt);
+    expect(imageTaskRequest({ ...cover, refinePrompt: ' ' }).parameters.prompt.trim()).toBe('');
+  });
+});

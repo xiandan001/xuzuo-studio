@@ -9,6 +9,7 @@ import type { ImageUseTemplateSnapshot } from './image-use-templates';
 import type { WallpaperTarget } from '../wallpaper-types';
 import { readWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
 import { engineeringImagePrompt } from './engineering-image';
+import { WECHAT_RED_PACKET_COVER, redPacketCoverGenerationSize, redPacketCoverPrompt } from './wechat-red-packet-cover';
 export { IMAGE_PRESETS, IMAGE_SIZES, PRESET_PROMPTS } from './image-use-templates';
 
 export type ImageMode = 'create' | 'refine';
@@ -164,6 +165,24 @@ export function imageMissingReferences(draft: ImageDraft, selectedImageId?: stri
 }
 
 export function imageTaskRequest(draft: ImageDraft, selectedImageId?: string, modelId?: string) {
+  if (draft.preset === WECHAT_RED_PACKET_COVER) {
+    const attachmentIds = imageReferenceIds(draft.mode, draft.references, selectedImageId);
+    const capability = imageCapability(draft.mode, attachmentIds);
+    const description = draft.mode === 'refine' ? draft.refinePrompt : draft.prompt;
+    return {
+      count: 1,
+      parameters: {
+        prompt: description.trim() ? redPacketCoverPrompt(description) : description,
+        input: '',
+        attachmentIds,
+        imageSize: redPacketCoverGenerationSize(modelId),
+        imageBackground: 'opaque' as const,
+        capability,
+        modelConfigId: capability === 'image-editing' ? draft.editingModelId : draft.generationModelId,
+        ...effectiveImageOptions({ imageOutputFormat: 'png', imageQuality: draft.imageOptions?.imageQuality, imageComplexity: draft.imageOptions?.imageComplexity, imageMarkupId: draft.imageOptions?.imageMarkupId }, modelId, capability),
+      },
+    };
+  }
   const target = draft.wallpaperEnabled ? readWallpaperTarget(draft.wallpaperTarget) : undefined;
   const engineering = !draft.wallpaperEnabled && draft.preset === '工程P图';
   const animation = draft.mode === 'refine' && !draft.wallpaperEnabled && !engineering ? draft.animationReference : undefined;

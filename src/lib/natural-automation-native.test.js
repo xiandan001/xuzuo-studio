@@ -12,7 +12,7 @@ const { createModelRuntime } = require('../../electron/model-runtime.cjs');
 const { remap, createIdMap } = require('../../electron/backup-format.cjs');
 const { mergeAutomationBackup } = require('../../electron/automation-backup.cjs');
 const { ruleCreationFingerprint } = require('../../electron/automation-rule-identity.cjs');
-const { parseNaturalAutomationPlan } = require('../../electron/natural-automation-plan.runtime.cjs');
+const { compileNaturalAutomationPlan, parseNaturalAutomationPlan } = require('../../electron/natural-automation-plan.runtime.cjs');
 const { PNG: PngImage } = require('pngjs');
 const { fitEngineeringPng } = require('../../electron/wallpaper-worker.cjs');
 const roots = [], services = [], releases = [], base = path.resolve('work');
@@ -241,6 +241,37 @@ describe('真实引擎内的自然语言规划', () => {
     const before = await deliverySource({ projectId: 'project', kind: 'image', artifactIds: [] }); expect(before.files.map(file => file.id)).toEqual([edited.id]);
     await f.engine.control({ id: run.id, action: 'resume' }); await f.service.start(input); await until(() => f.service.read(input), value => value.status === 'failed');
     const after = await deliverySource({ projectId: 'project', kind: 'image', artifactIds: [] }); expect(after.sourceHash).toBe(before.sourceHash); expect(after.files).toEqual(before.files);
+  });
+  it('自然图片核对使用新预算，截断的可解析 JSON 仍需明确续跑后才能交付', async () => {
+    const reviewLimits = [];
+    const reply = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    const f = await fixture({ fetchOverride: async (url, options) => {
+      if (url.endsWith('/images/generations')) return reply({ data: [{ b64_json: PNG.toString('base64') }] });
+      const body = JSON.parse(options.body), vision = Array.isArray(body.messages[0].content);
+      if (vision) reviewLimits.push(body.max_tokens);
+      return reply({ choices: [{ message: { content: vision ? '{"passed":true,"score":90,"issues":[],"summary":"主体完整"}' : '已整理真实制作要求' }, finish_reason: vision && reviewLimits.length === 1 ? 'length' : 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
+    } });
+    const compiled = compileNaturalAutomationPlan({ ...plan, maxRepairs: 0 }, f.project, { models: f.models, connections: [f.connection], credentials: await f.credentials.list(), workflows: [] });
+    const workflow = { ...f.workflow, ...compiled.workflow }, review = workflow.steps.find(step => step.qualityGate);
+    const { id } = await f.engine.start({ project: f.project, workflow, models: f.models, connections: [f.connection], input: compiled.rule.input, variables: {}, attachmentIds: [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
+    await f.engine.drain();
+    const stopped = await f.engine.runDetail(id);
+    expect(stopped).toMatchObject({ status: 'failed', stepIndex: 2 });
+    expect(reviewLimits).toEqual([4096]); expect(f.calls).toHaveLength(3);
+    const truncated = stopped.attempts.at(-1);
+    expect(truncated).toMatchObject({ stepId: review.id, status: 'failed', errorCode: 'INCOMPLETE_OUTPUT', incompleteReason: 'output-limit' });
+    expect(truncated.summary).toContain('主体完整');
+    expect(stopped.qualityReviews || []).toEqual([]);
+    expect(stopped.attempts.some(attempt => attempt.stepId === workflow.steps[3].id)).toBe(false);
+    await f.engine.snapshot(); expect(reviewLimits).toEqual([4096]);
+    const next = await Promise.allSettled([f.engine.control({ id, action: 'continue', stepMaxOutputTokens: 6144 }), f.engine.control({ id, action: 'continue', stepMaxOutputTokens: 6144 })]);
+    expect(next.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+    await f.engine.drain();
+    const ready = await f.engine.runDetail(id);
+    expect(reviewLimits).toEqual([4096, 6144]); expect(f.calls).toHaveLength(4);
+    expect(ready).toMatchObject({ status: 'waiting-review', stepIndex: 4, qualityReviews: [{ stepId: review.id, passed: true }] });
+    expect(ready.attempts.slice(0, 3)).toEqual(stopped.attempts);
+    expect(ready.attempts[4].artifacts.some(artifact => artifact.id === stopped.attempts[1].artifacts[0].id)).toBe(true);
   });
   it('独立图片验收拦下后明确调整本地导出尺寸，保留透明度、原图和收费，继续等待最终人工验收', async () => {
     const bitmap = new PngImage({ width: 1254, height: 1254 });

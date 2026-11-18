@@ -292,6 +292,13 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         return result;
       },
     } : {}),
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.exportRedPacketCover === 'function' ? {
+      async exportRedPacketCover(input: import('../live-types').RedPacketCoverExportInput) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.exportRedPacketCover) throw Error('当前桌面后台不支持导出微信红包封面。');
+        return bridge.exportRedPacketCover(input);
+      },
+    } : {}),
     ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.exportWallpaper4K === 'function' ? {
       async exportWallpaper4K(input: import('../live-types').Wallpaper4KExportInput) {
         const bridge = window.desktop?.runtime;

@@ -119,6 +119,32 @@ describe('本地编译与真实配置选择', () => {
     const result = compileImage({ ...imagePlan(), steps: imagePlan().steps.slice(0, 2), maxRepairs: 0 });
     expect(result.workflow.steps.map(step => step.kind)).toEqual(['text', 'image-generation', 'vision', 'export', 'manual-review']); expect(result.workflow.steps[2].qualityGate?.maxRepairs).toBe(0);
   });
+  it('新计划的图片检查留出推理空间，只要求简洁意见和完整验收结论', () => {
+    const result = compileImage(); const vision = result.workflow.steps.filter(step => step.kind === 'vision');
+    expect(vision.map(step => step.maxOutputTokens)).toEqual([4096, 4096]);
+    expect(vision.every(step => step.prompt.includes('至多 8 条'))).toBe(true);
+    expect(vision.at(-1)?.prompt).toContain('返回完整 JSON');
+    expect(result.workflow.steps[0].maxOutputTokens).toBe(2048);
+    const proposed = imagePlan(); proposed.steps.pop();
+    const final = compileImage({ ...proposed, maxRepairs: 0 }).workflow.steps.find(step => step.qualityGate)!;
+    expect(final.prompt).toContain(proposed.steps.at(-1)!.instruction);
+    expect(final.prompt.match(/至多 8 条/g)).toHaveLength(1);
+  });
+
+  it('长核对提高预算，模型选择和有效推理强度在编译及桌面后台保持一致', () => {
+    const config = configuration(); config.connections[1].providerId = 'openai'; config.models[1].modelId = 'gpt-6.1-terra';
+    const bindings = { vision: { reasoningEffort: 'xhigh' as const } };
+    const image = compileNaturalAutomationPlan(imagePlan(), project(), config, bindings);
+    const native = require('../../electron/natural-automation-plan.runtime.cjs').compileNaturalAutomationPlan(imagePlan(), project(), config, bindings);
+    const summarize = (result: typeof image) => result.workflow.steps.filter(step => step.kind === 'vision').map(({ maxOutputTokens, reasoningEffort, modelConfigId }) => ({ maxOutputTokens, reasoningEffort, modelConfigId }));
+    expect(summarize(image)).toEqual(Array(2).fill({ maxOutputTokens: 6144, reasoningEffort: 'xhigh', modelConfigId: 'model-vision' }));
+    expect(summarize(native)).toEqual(summarize(image));
+    const long = { ...imagePlan(), acceptance: ['主体清晰', '表情一致', '边缘自然', '比例一致', '文字准确', '留白充足'] };
+    expect(compileImage(long).workflow.steps.filter(step => step.kind === 'vision').map(step => step.maxOutputTokens)).toEqual([6144, 6144]);
+    const documentReview = (plan: NaturalAutomationPlan) => compileNaturalAutomationPlan(plan, project('word'), configuration()).workflow.steps.find(step => step.qualityGate)?.maxOutputTokens;
+    expect(documentReview(wordPlan())).toBe(2048);
+    expect(documentReview({ ...wordPlan(), acceptance: long.acceptance })).toBe(4096);
+  });
   it('图片编辑前独立意见不会阻塞有限修订，跨文字准备仍引用最近实际图片', () => {
     const result = compileImage({ ...imagePlan(), steps: [imagePlan().steps[0], { kind: 'text', name: '组织画面文字', instruction: '围绕已确认信息精炼文案' }, imagePlan().steps[2]] });
     const edit = result.workflow.steps.find(step => step.kind === 'image-editing')!, position = result.workflow.steps.indexOf(edit);

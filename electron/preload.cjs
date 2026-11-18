@@ -205,6 +205,7 @@ contextBridge.exposeInMainWorld('desktop', {
     exportRecovery: input => ipcRenderer.invoke('runtime:bead-export-recovery', input),
   },
   runtime: {
+    exportRedPacketCover: input => ipcRenderer.invoke('runtime:export-red-packet-cover', input),
     exportWallpaper4K: input => ipcRenderer.invoke('runtime:export-wallpaper-4k', input),
     saveImageMarkup: input => ipcRenderer.invoke('runtime:save-image-markup', input),
     onProjectFilesChanged: listener => { const receive = (_event, value) => { if (value && typeof value.projectId === 'string') listener(value.projectId); }; ipcRenderer.on('runtime:project-files-changed', receive); return () => ipcRenderer.removeListener('runtime:project-files-changed', receive); },

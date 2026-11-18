@@ -41,16 +41,28 @@ describe('首页异常任务就地处理', () => {
     const f = await render('failed', {
       error,
       stepIndex: 1,
-      snapshot: { steps: [{ id: 'plan' }, { id: 'check', kind: 'vision', enabled: true, maxOutputTokens: 2048 }] } as WorkflowRun['snapshot'],
+      snapshot: { steps: [{ id: 'plan' }, { id: 'check', kind: 'vision', enabled: true }] } as WorkflowRun['snapshot'],
       attempts: [{ stepId: 'plan', status: 'complete' }, { stepId: 'check', status: 'failed', error, usage: { outputTokens } }] as WorkflowRun['attempts'],
     });
     expect(host.textContent).not.toContain('修复模型设置');
     expect(host.textContent?.includes('从 2048 提高到 4096 Token')).toBe(outputTokens === 2048);
     expect(f.control).not.toHaveBeenCalled();
-    await click('继续制作');
+    await click(outputTokens === 2048 ? '继续当前步骤' : '继续制作');
     const request = f.control.mock.calls[0][0];
     expect(request).toMatchObject({ id: 'run', action: 'continue' });
     expect(request.stepMaxOutputTokens).toBe(outputTokens === 2048 ? 4096 : undefined);
+  });
+  it('明确的输出截断给新核对预算预选小步提高，仍等用户点击后才发送', async () => {
+    const f = await render('failed', {
+      stepIndex: 0,
+      snapshot: { steps: [{ id: 'review', name: '检查图片', kind: 'vision', enabled: true, maxOutputTokens: 4096 }] } as WorkflowRun['snapshot'],
+      attempts: [{ stepId: 'review', status: 'failed', errorCode: 'INCOMPLETE_OUTPUT', incompleteReason: 'output-limit', usage: { outputTokens: 3000 } }] as WorkflowRun['attempts'],
+    });
+    expect(host.textContent).toContain('从 4096 提高到 6144 Token');
+    expect(f.control).not.toHaveBeenCalled();
+    await click('重新读取状态'); expect(f.control).not.toHaveBeenCalled();
+    await click('继续当前步骤'); expect(f.control).toHaveBeenCalledOnce();
+    expect(f.control.mock.calls[0][0]).toMatchObject({ id: 'run', action: 'continue', stepMaxOutputTokens: 6144 });
   });
   it('操作失败不假报完成，解除禁用并显示可读错误', async () => {
     const f = await render('interrupted'); f.control.mockRejectedValueOnce(Error('后台暂不可用')); await click('继续制作');

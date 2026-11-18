@@ -14,6 +14,7 @@ export function workflowOutputRetryLimit(run: WorkflowRun): number | undefined {
   if (!Number.isSafeInteger(limit) || limit < 16 || limit >= 16384) return;
   const used = attempt.usage?.outputTokens;
   if (attempt.incompleteReason === 'output-limit' || (typeof used === 'number' && Number.isSafeInteger(used) && used >= limit)) {
-    return Math.min(limit * 2, 16384);
+    const increase = limit < 2048 ? limit : limit < 8192 ? 2048 : 4096;
+    return Math.min(limit + increase, 16384);
   }
 }

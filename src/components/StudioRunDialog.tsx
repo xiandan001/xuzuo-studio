@@ -16,6 +16,8 @@ export function StudioRunDialog({ props, intent, onClose }: { props: PageProps; 
   useEffect(() => { if (!valid) { props.notify('关联流程或项目类型已变化，请重新选择功能。', 'error'); onClose(); } }, [valid, props.notify, onClose]);
   if (!workflow || !project || !valid) return null;
   const saveConfiguration = (next: WorkflowDefinition) => { props.configuration.saveWorkflow(next, workflow.id, { silent: true }); };
-  if (editing) return <WorkflowEditor props={props} initial={workflow} workflowId={workflow.id} lockedOutputKind={project.kind} initialStepId={context.focusStepId} initialField={context.focusField} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} />;
-  return <RunWorkflowDialog props={props} workflow={workflow} initial={context} studio autoStart={automatic} onConfigure={saveConfiguration} onClose={onClose} onStarted={onClose} onEdit={next => { setAutomatic(false); setContext(next); setEditing(true); }} />;
+  if (editing && !intent.redPacketCover) return <WorkflowEditor props={props} initial={workflow} workflowId={workflow.id} lockedOutputKind={project.kind} initialStepId={context.focusStepId} initialField={context.focusField} onClose={() => setEditing(false)} onSaved={() => setEditing(false)} />;
+  return <RunWorkflowDialog props={props} workflow={workflow} initial={context} studio autoStart={automatic} redPacketCover={intent.redPacketCover}
+    onConfigure={saveConfiguration} onClose={onClose} onStarted={onClose}
+    onEdit={intent.redPacketCover ? undefined : next => { setAutomatic(false); setContext(next); setEditing(true); }} />;
 }

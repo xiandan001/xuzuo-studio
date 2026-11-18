@@ -1,5 +1,11 @@
 # macOS 开发与验收
 
+## 2.12.8 新增微信红包封面与复核续跑简化（2026-11-19）
+
+图片工作台可切换到「微信红包封面」。输入主题即可生成一张竖版原图，风格和参考图可选。原图生成后任务直接完成，可在工作台查看位置模拟并导出。导出时居中适配为 957 × 1278 JPEG，体积至多 500,000 字节，原图保留。封面表单和生成确认均使用固定尺寸。参考 [微信红包封面制作指南](https://github.com/VaneAi888/vane-gpt-image-skills/blob/main/docs/wechat-red-packet-cover.md)。
+
+自然方案按复核复杂度预设输出上限，并要求简短的意见和完整验收结论。旧任务输出截断时可按当前步骤继续，应用会带入建议上限。已完成内容与用量记录保留。
+
 ## 2.12.7 重构自动化运行台（2026-11-18）
 
 自动化入口直达运行台。排队、启动、执行与待处理任务共用一份列表，派工与本机运行关联后只显示一条。规则管理和流程模板保留独立入口。
@@ -190,7 +196,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.7/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.8/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -211,7 +217,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.7/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.8/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

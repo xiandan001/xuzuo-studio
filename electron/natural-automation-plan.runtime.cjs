@@ -325,6 +325,13 @@ function bindingResolver(configuration, bindings, missing) {
         return result;
     };
 }
+const conciseReview = '只列影响交付的发现。把相同问题合并为至多 8 条，每条用一句话写明检查到的位置和下一步。无需展开推理或复述需求。';
+function reviewOutputLimit(kind, plan, effort, instruction = '') {
+    const checks = [...plan.acceptance, ...plan.constraints];
+    const longer = effort === 'high' || effort === 'xhigh' || effort === 'max' || checks.length >= 7
+        || plan.objective.length + instruction.length + checks.reduce((length, check) => length + check.length, 0) >= 3000;
+    return kind === 'vision' ? (longer ? 6144 : 4096) : (longer ? 4096 : 2048);
+}
 function compileNaturalAutomationPlan(input, project, configuration, bindings = {}, options = {}) {
     const plan = validate(input);
     const calendarResolved = options.calendarResolved === true && ['manual', 'schedule'].includes(plan.trigger.type);
@@ -361,7 +368,8 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         const draft = (0, animation_workflow_1.makeAnimationWorkflow)(document, configuration), source = draft.steps[0], compose = draft.steps[1], steps = [source];
         let previous = source.id;
         for (let round = 0; round < plan.maxRepairs; round++) {
-            steps.push({ id: `animation-check-${round + 1}`, name: `检查PNG图集 ${round + 1}/${plan.maxRepairs}`, kind: 'vision', role: 'reviewer', inputSource: 'previous', enabled: true, prompt: `依据实际静态PNG图集检查角色身份、姿态、手部、格数、透明边缘和裁切，提出明确修复意见；不要声称看过尚未合成的GIF播放。\n目标：${plan.objective}`, ...select('vision') });
+            const vision = select('vision');
+            steps.push({ id: `animation-check-${round + 1}`, name: `检查PNG图集 ${round + 1}/${plan.maxRepairs}`, kind: 'vision', role: 'reviewer', inputSource: 'previous', enabled: true, maxOutputTokens: reviewOutputLimit('vision', plan, vision.reasoningEffort), prompt: `依据实际静态PNG图集检查角色身份、姿态、手部、格数、透明边缘和裁切。不要声称看过尚未合成的GIF。${conciseReview}\n目标：${plan.objective}`, ...vision });
             const editId = `animation-refine-${round + 1}`;
             steps.push({ ...source, id: editId, name: `精修PNG图集 ${round + 1}/${plan.maxRepairs}`, kind: 'image-editing', inputSource: 'previous', imageSourceStepId: previous, referenceArtifactIds: [], prompt: `${(0, animation_document_1.animationGenerationPrompt)({ ...document, columns: compose.animation.columns, rows: compose.animation.rows }, [document.entries[0]])}\n\n保留实际原图与未要求变化的区域，按前一步检查意见精修，仍输出同一布局的静态PNG。`, ...select('image-editing') });
             previous = editId;
@@ -376,7 +384,11 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     const imageOutputs = [];
     let latestImage, lastText, edits = 0;
     const add = (step) => { steps.push(step); return step; };
-    const opinion = () => add({ id: crypto.randomUUID(), name: '独立检查并提出精修意见', role: 'reviewer', kind: 'vision', prompt: `依据用户目标检查实际图片，列出可操作的精修意见。不要只写通过或自评，不声称检查了未提供的图片。\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}`, inputSource: 'previous', enabled: true, maxOutputTokens: 2048, ...select('vision') });
+    function reviewImage(name, instruction) {
+        const binding = select('vision');
+        return add({ id: crypto.randomUUID(), name, role: 'reviewer', kind: 'vision', prompt: `${instruction}\n依据实际提供的图片检查，以可见证据为准。${conciseReview}`, inputSource: 'previous', enabled: true, maxOutputTokens: reviewOutputLimit('vision', plan, binding.reasoningEffort, instruction), ...binding });
+    }
+    const opinion = () => reviewImage('独立检查并提出精修意见', `检查用户目标与实际图片，给出可操作的精修意见。\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}`);
     const imageStep = (kind, name, instruction) => {
         if (kind === 'image-editing' && latestImage && steps.at(-1)?.kind !== 'vision')
             opinion();
@@ -412,7 +424,7 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         else if (proposed.kind === 'vision') {
             if (!latestImage && !references.length)
                 missing.add('图片检查：请添加参考图片或先生成实际图片');
-            add({ id: crypto.randomUUID(), name: proposed.name, role: 'reviewer', kind: 'vision', prompt: `${proposed.instruction}\n依据实际提供的图片给出独立、可操作的意见，不编造不可见细节。`, inputSource: 'previous', enabled: true, maxOutputTokens: 2048, ...select('vision') });
+            reviewImage(proposed.name, proposed.instruction);
         }
         else {
             lastText = add({ id: crypto.randomUUID(), name: proposed.name, role: 'producer', kind: 'text', prompt: `${proposed.instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}`, inputSource: ['image-generation', 'image-editing'].includes(steps.at(-1)?.kind || '') ? 'project' : 'previous', enabled: true, maxOutputTokens: creation_profiles_1.CREATION_PROFILES[project.kind].outputTokens, ...select('text') });
@@ -451,7 +463,10 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     }
     const sourceId = project.kind === 'image' ? latestImage : lastText.id;
     const existingFinalReview = project.kind === 'image' && steps.at(-1)?.kind === 'vision' ? steps.pop() : undefined;
-    const reviewer = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name, prompt: `本次检查要求：${existingFinalReview.prompt}\n\n${base.steps[2].prompt}` } : {}), ...select(project.kind === 'image' ? 'vision' : 'text'), qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
+    const reviewKind = project.kind === 'image' ? 'vision' : 'text', reviewBinding = select(reviewKind);
+    const reviewInstruction = existingFinalReview ? plan.steps.at(-1)?.instruction || '' : '';
+    const reviewPrompt = [reviewInstruction && `本次检查要求：${reviewInstruction}`, base.steps[2].prompt, conciseReview, 'summary 用一至两句话写明结论与仍需核对的要点。即使全部通过也须返回完整 JSON。'].filter(Boolean).join('\n\n');
+    const reviewer = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name } : {}), prompt: reviewPrompt, maxOutputTokens: reviewOutputLimit(reviewKind, plan, reviewBinding.reasoningEffort, reviewInstruction), ...reviewBinding, qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
     const delivery = { ...base.steps[3], contentSourceStepId: sourceId, ...(wallpaperRequested ? { name: '适配设备壁纸', wallpaperTarget: wallpaperTarget || null, contentSourceStepId: undefined, contentSourceStepIds: [...imageOutputs] } : {}) };
     if (wallpaperRequested) {
         add(delivery);

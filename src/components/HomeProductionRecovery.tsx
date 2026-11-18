@@ -53,14 +53,14 @@ export function HomeProductionRecovery({ run, project, props, onRead }: { run: W
     {run.referenceIssue || needsModel ? <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => props.navigate(run.referenceIssue ? project.kind === 'image' ? 'images' : 'documents' : 'models', project.id)}>
       修复{run.referenceIssue ? '参考资料' : '模型设置'}<ArrowRight size={14} />
     </button> : showContinue && <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => { void act('continue'); }}>
-      {busy === 'continue' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}继续制作
+      {busy === 'continue' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}{stepMaxOutputTokens === undefined ? '继续制作' : '继续当前步骤'}
     </button>}
     {canCancel && <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => { void act('cancel'); }}>
       {busy === 'cancel' ? <LoaderCircle size={14} className="spin" /> : <Square size={14} />}取消后续制作
     </button>}
     <p>{showContinue ? <>
-      {stepMaxOutputTokens !== undefined && `继续时将此步骤的输出上限从 ${originalLimit} 提高到 ${stepMaxOutputTokens} Token。`}
-      继续会从当前步骤处理，已完成内容保留。再次调用模型会新增费用。
+      {stepMaxOutputTokens !== undefined && `继续时将“${step?.name || '当前步骤'}”的输出上限从 ${originalLimit} 提高到 ${stepMaxOutputTokens} Token。`}
+      从当前步骤继续，保留已完成内容。再次调用模型会新增费用。
     </> : '重新读取和修改设置不调用模型，已有结果和费用保留。'}</p>
     {error && <p className="home-plan-error" role="alert">{error}</p>}
   </div>;
