@@ -9,6 +9,7 @@ export interface WorkspaceFilesBridge {
   ensureProject: (input: { projectId: string; workspaceId: string; name: string }) => Promise<ProjectLocation>;
   chooseProjectFolder: (input: { workspaceId: string }) => Promise<ProjectFolderSelection | null>;
   createProject: (input: { selectionId: string; name: string }) => Promise<ProjectLocation>;
+  createDefaultProject?: (input: { projectId: string; workspaceId: string; name: string }) => Promise<ProjectLocation>;
   moveProject: (input: { projectId: string; workspaceId: string; name: string }) => Promise<ProjectLocation>;
   open: (input: { workspaceId?: string; projectId?: string }) => Promise<void>;
 }

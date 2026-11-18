@@ -114,7 +114,7 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     await click('继续制作'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
   });
   it('无项目先保留完整方案，明确制作并完成项目回调后才预检和派发一次', async () => {
-    const f = await fixture(); expect(host.textContent).toContain(plan.name); expect(host.textContent).toContain('开始制作时选择'); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
+    const f = await fixture(); expect(host.textContent).toContain(plan.name); expect(host.textContent).toContain('开始制作时创建项目'); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
     await click('按这个方案制作'); expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
     await f.created(); await until(() => f.trigger.mock.calls.length === 1, 'new project production dispatch');
     expect(f.saveWorkflow).toHaveBeenCalledOnce(); expect(f.preflight).toHaveBeenCalledOnce(); expect(f.readJobs()[0].projectId).toBe('new-project'); expect(f.readRules()[0].workflowId).toBe(f.readWorkflows()[0].id);

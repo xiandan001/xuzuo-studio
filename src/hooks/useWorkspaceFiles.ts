@@ -58,6 +58,14 @@ export function useWorkspaceFiles(options: Options) {
       if (result) await refresh();
       return result;
     },
+    async createDefaultProject(project: Pick<Project, 'id' | 'workspaceId' | 'name'>) {
+      const bridge = window.desktop?.workspaceFiles;
+      if (!bridge?.createDefaultProject) throw new Error('请在最新版桌面应用中创建作品。');
+      const workspace = current.current.workspaces.find(item => item.id === project.workspaceId && !item.removedAt);
+      if (!workspace) throw new Error('作品所属工作区不可用。');
+      if (!workspace.directory && !await ensureBound(workspace)) return null;
+      return bridge.createDefaultProject({ projectId: project.id, workspaceId: workspace.id, name: project.name });
+    },
     async createProject(selection: ProjectFolderSelection, name: string) {
       const bridge = window.desktop?.workspaceFiles;
       if (!bridge?.createProject) throw new Error('本地项目创建需要新版桌面应用。');

@@ -31,8 +31,14 @@ describe('可编辑模板的明确来源与素材选择', () => {
     const ui = await setup('commerce'); const choices = [...document.querySelectorAll<HTMLInputElement>('.template-options input[type="checkbox"]')]; await act(async () => { choices[0].click(); choices[1].click(); }); await click('保存模板'); expect(ui.saved).toHaveBeenCalledWith(expect.objectContaining({ retain: expect.objectContaining({ content: true, assets: true }) })); expect(ui.onClose).toHaveBeenCalledOnce();
   });
   it('从动画工程新建后直接进入现有GIF工作台，新草稿不带旧模型或Key', async () => {
-    const ui = await setup('animation', 'copy'); await click('选择新项目文件夹并创建'); const call = vi.mocked(ui.props.onCreateProject).mock.calls[0]; expect(call[0]).toBe('image'); await act(async () => { call[1]!.onCreated!({ ...project, id: 'target', name: '新动画' }); });
+    const ui = await setup('animation', 'copy'); await click('创建并继续'); const call = vi.mocked(ui.props.onCreateProject).mock.calls[0]; expect(call[0]).toBe('image'); expect(call[1]).toMatchObject({ quick: true, initial: { name: '已有作品副本', description: '从已保存作品或模板创建' } }); await act(async () => { call[1]!.onCreated!({ ...project, id: 'target', name: '新动画' }); });
     expect(ui.instantiated).toHaveBeenCalledWith(expect.objectContaining({ creativeSource: { kind: 'animation' }, targetProjectId: 'target' })); const draft = JSON.parse(localStorage.getItem(imageDraftKey('target'))!); expect(draft.preset).toBe('GIF动画工坊'); expect([draft.generationModelId, draft.editingModelId]).toEqual(['', '']); expect(draft.references).toEqual([]); expect(ui.props.navigate).toHaveBeenCalledWith('images', 'target');
+  });
+  it('实例化回执未确认只重试已创建的新项目，既不重走命名也不再创建项目', async () => {
+    const ui = await setup('animation', 'copy'); ui.instantiated.mockRejectedValueOnce(Error('复制回执尚未确认，原文件保留')); expect(ui.props.onCreateProject).not.toHaveBeenCalled(); expect(ui.instantiated).not.toHaveBeenCalled();
+    await click('创建并继续'); const options = vi.mocked(ui.props.onCreateProject).mock.calls[0][1]!; await act(async () => options.onCreated!({ ...project, id: 'target', name: '已创建的新项目' }));
+    expect(document.body.textContent).toContain('回执尚未确认'); expect(ui.props.navigate).not.toHaveBeenCalled(); expect(ui.props.onCreateProject).toHaveBeenCalledOnce();
+    await click('重试保存到新项目'); expect(ui.props.onCreateProject).toHaveBeenCalledOnce(); expect(ui.instantiated).toHaveBeenCalledTimes(2); expect(ui.instantiated).toHaveBeenNthCalledWith(1, expect.objectContaining({ targetProjectId: 'target' })); expect(ui.instantiated).toHaveBeenNthCalledWith(2, expect.objectContaining({ targetProjectId: 'target' })); expect(ui.props.navigate).toHaveBeenCalledWith('images', 'target');
   });
   it('同一弹窗换来源后旧项目的文件晚回包不会串入新项目列表', async () => {
     let release!: (files: ArtifactMetadata[]) => void; const old = new Promise<ArtifactMetadata[]>(resolve => { release = resolve; }), other = { ...project, id: 'other-project', name: '新来源' }, owned = { ...file, id: 'other-image', projectId: other.id, name: '仅新项目可见.png' };

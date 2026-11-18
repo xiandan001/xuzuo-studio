@@ -20,5 +20,5 @@ export function HomeBeadEntry({ props, projectId, request }: { props: PageProps;
       setBusy(false); current.current.onUsePrompt(template, request, created.id);
     }, onCancelled: message => { if (mounted.current) { setBusy(false); setIssue(message || '已取消，需求仍保留，尚未调用 AI。'); } } });
   }
-  return <aside className="home-bead-entry" aria-label="拼豆制图入口"><Palette size={22} /><div><strong>用真实网格制作拼豆图纸</strong><p>{BEAD_WORKSPACE_NOTICE}</p>{issue && <p role="status">{issue}</p>}</div><button type="button" className="btn btn-primary" disabled={busy} onClick={open}>{busy ? '正在选择保存位置…' : '打开拼豆工作台'}<ArrowUpRight size={16} /></button></aside>;
+  return <aside className="home-bead-entry" aria-label="拼豆制图入口"><Palette size={22} /><div><strong>用真实网格制作拼豆图纸</strong><p>{BEAD_WORKSPACE_NOTICE}</p>{issue && <p role="status">{issue}</p>}</div><button type="button" className="btn btn-primary" disabled={busy} onClick={open}>{busy ? '正在准备项目…' : '打开拼豆工作台'}<ArrowUpRight size={16} /></button></aside>;
 }

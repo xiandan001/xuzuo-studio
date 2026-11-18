@@ -150,6 +150,7 @@ export default function App() {
   const activeProject = studioProject || selectedProject || projects[0] || { ...INITIAL_PROJECTS[0], id: '', workspaceId, name: '', costCents: 0, version: 0 };
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [newProject, setNewProject] = useState<NewProjectDraft | null>(null);
+  const [projectTypeLocked, setProjectTypeLocked] = useState(false);
   const newProjectRef = useRef(newProject); newProjectRef.current = newProject;
   const projectCreationCompletion = useRef<{ workspaceId: string; onCreated?: (project: Project) => void; onCancelled?: (error?: string) => void } | undefined>(undefined);
   useEffect(() => { if (projectCreationCompletion.current?.workspaceId !== workspaceId) projectCreationCompletion.current = undefined; }, [workspaceId]);
@@ -312,8 +313,16 @@ export default function App() {
     const workflow = configuration.workflows.find(workflow => workflow.id === workflowId), source = workspaceIdRef.current;
     if (!workflow) return;
     const project = projects.find(project => project.id === activeId && project.kind === workflow.outputKind) || projects.find(project => project.kind === workflow.outputKind);
-    if (!project) { notify('请先创建同类型项目，再为此流程配置自动化。', 'info'); return; }
-    void confirmTransition().then(allowed => { if (allowed && source === workspaceIdRef.current) { navigateNow('automation', project.id); setAutomationIntent({ token: crypto.randomUUID(), workspaceId: source, projectId: project.id, workflowId, input: project.description }); } });
+    void confirmTransition().then(allowed => {
+      if (!allowed || source !== workspaceIdRef.current) return;
+      const configure = (target: Project) => {
+        if (source !== workspaceIdRef.current || target.workspaceId !== source) return;
+        navigateNow('automation', target.id);
+        setAutomationIntent({ token: crypto.randomUUID(), workspaceId: source, projectId: target.id, workflowId, input: target.description });
+      };
+      if (project) configure(project);
+      else void beginProject(workflow.outputKind, undefined, configure, { initial: { name: workflow.name } });
+    });
   };
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => { if (guardedEditorSessions().length) { event.preventDefault(); event.returnValue = ''; } };
@@ -576,32 +585,38 @@ export default function App() {
     rememberProject(projectId, workspaceId);
     setGenerationIntent({ token: crypto.randomUUID(), workflowId: action.workflowId, projectId, input: input?.trim() || project.description, attachmentIds, replaceWaitingReviewRunId });
   };
-  const beginProject = async (kind: ProjectKind = 'ppt', promptIntent?: PromptIntent, onCreated?: (project: Project) => void, options?: ProjectStartOptions) => {
-    if (selectingProjectFolderRef.current || creatingProjectRef.current) { options?.onCancelled?.('正在处理另一个保存位置，请稍后再试。'); return; }
-    const sourceWorkspaceId = workspaceIdRef.current, epoch = ++projectDraftEpoch.current;
-    const completion = onCreated || options?.onCancelled ? { workspaceId: sourceWorkspaceId, onCreated, onCancelled: options?.onCancelled } : undefined;
-    selectingProjectFolderRef.current = true; setSelectingProjectFolder(true); setFormError('');
-    try {
-      if (!onCreated && !await confirmTransition() || sourceWorkspaceId !== workspaceIdRef.current || epoch !== projectDraftEpoch.current) return;
-      projectCreationCompletion.current = completion;
-      if (!window.desktop?.workspaceFiles?.chooseProjectFolder || !window.desktop.workspaceFiles.createProject) { setProjectFolderUnavailable(true); completion?.onCancelled?.('请在桌面应用中选择本地保存位置。'); return; }
-      const selection = await workspaceFiles.chooseProjectFolder(sourceWorkspaceId);
-      if (!selection || sourceWorkspaceId !== workspaceIdRef.current || epoch !== projectDraftEpoch.current) { if (projectCreationCompletion.current === completion) projectCreationCompletion.current = undefined; completion?.onCancelled?.(); return; }
-      setProjectFolderUnavailable(false);
-      const next: NewProjectDraft = { selection, kind, name: (options?.initial?.name || selection.name).slice(0, 50), description: options?.initial?.description || promptIntent?.template.description || '', budget: '', promptIntent };
-      if (options?.quick && completion?.onCreated) await createProject(next, true);
-      else setNewProject(next);
-    } catch (cause) {
-      if (sourceWorkspaceId === workspaceIdRef.current && epoch === projectDraftEpoch.current) {
-        const message = projectCreationError(cause, '项目文件夹选择未完成。');
-        completion?.onCancelled?.(message);
-        if (isWorkspaceConnectionError(message)) setProjectConnectionRecovery({ workspaceId: sourceWorkspaceId, directory: workspaceStateRef.current.workspaces.find(item => item.id === sourceWorkspaceId)?.directory || '', message, connected: false, action: 'new', kind, promptIntent });
-        else { if (projectCreationCompletion.current === completion) projectCreationCompletion.current = undefined; notify(message, 'error'); }
-      }
+  function defaultProjectFolder(id: string, projectId: string = crypto.randomUUID()) {
+    return {
+      mode: 'workspace' as const, workspaceId: id, projectId,
+      directory: workspaceStateRef.current.workspaces.find(item => item.id === id)?.directory || '',
+      name: '',
+    };
+  }
+  const beginProject = async (requestedKind?: ProjectKind, promptIntent?: PromptIntent, onCreated?: (project: Project) => void, options?: ProjectStartOptions) => {
+    if (selectingProjectFolderRef.current || creatingProjectRef.current || newProjectRef.current) {
+      options?.onCancelled?.('请先完成当前的新建作品操作。'); return;
     }
-    finally { selectingProjectFolderRef.current = false; setSelectingProjectFolder(false); }
+    const source = workspaceIdRef.current, epoch = ++projectDraftEpoch.current;
+    selectingProjectFolderRef.current = true;
+    try {
+      if (!onCreated && !await confirmTransition() || source !== workspaceIdRef.current || epoch !== projectDraftEpoch.current) return;
+      const bridge = window.desktop?.workspaceFiles;
+      if (!bridge?.createDefaultProject || !bridge.chooseProjectFolder || !bridge.createProject) {
+        setProjectFolderUnavailable(true); options?.onCancelled?.('请在最新版桌面应用中创建作品。'); return;
+      }
+      projectCreationCompletion.current = { workspaceId: source, onCreated, onCancelled: options?.onCancelled };
+      setFormError(''); setProjectFolderUnavailable(false);
+      const next: NewProjectDraft = {
+        kind: requestedKind || 'ppt', selection: defaultProjectFolder(source),
+        name: (options?.initial?.name || promptIntent?.template.name || '').trim().slice(0, 50),
+        description: options?.initial?.description ?? promptIntent?.template.description ?? '', budget: '', promptIntent,
+      };
+      setProjectTypeLocked(!!requestedKind);
+      if (options?.quick && onCreated && next.name) await createProject(next, true);
+      else setNewProject(next);
+    } finally { selectingProjectFolderRef.current = false; }
   };
-  const onCreateProject: PageProps['onCreateProject'] = (kind = 'ppt', options) => { void beginProject(kind, undefined, options?.onCreated, options); };
+  const onCreateProject: PageProps['onCreateProject'] = (kind, options) => { void beginProject(kind, undefined, options?.onCreated, options); };
   const closeNewProject = () => {
     if (creatingProjectRef.current || selectingProjectFolderRef.current) return;
     projectDraftEpoch.current++; projectCreationCompletion.current?.onCancelled?.(); projectCreationCompletion.current = undefined; setNewProject(null); setProjectFolderUnavailable(false); setProjectConnectionRecovery(undefined); setFormError('');
@@ -614,7 +629,7 @@ export default function App() {
     try {
       const selection = await workspaceFiles.chooseProjectFolder(draft.selection.workspaceId);
       if (!selection || epoch !== projectDraftEpoch.current || workspaceIdRef.current !== draft.selection.workspaceId) return;
-      setNewProject(value => value?.selection.selectionId === draft.selection.selectionId ? { ...value, selection, name: value.name === draft.selection.name.slice(0, 50) ? selection.name.slice(0, 50) : value.name } : value);
+      setNewProject(value => value?.selection.projectId === draft.selection.projectId ? { ...value, selection, name: value.name || selection.name.slice(0, 50) } : value);
     } catch (cause) {
       if (epoch === projectDraftEpoch.current && workspaceIdRef.current === draft.selection.workspaceId) {
         const message = projectCreationError(cause, '文件夹未能更换，原选择已保留。');
@@ -641,7 +656,7 @@ export default function App() {
       if (location === null) return false;
       if (!location) throw new Error('请在桌面应用内选择本地工作区文件夹。');
       created = true;
-      const next: ProjectConnectionRecovery = { workspaceId: id, directory: location.directory, message: '新工作区已创建。请选择独立项目文件夹继续，原工作区的项目和费用已保留。', connected: true, action: 'new', kind: recovery.kind, promptIntent: recovery.promptIntent, draft };
+      const next: ProjectConnectionRecovery = { workspaceId: id, directory: location.directory, message: '新工作区已创建，可以继续填写作品信息。', connected: true, action: 'new', kind: recovery.kind, promptIntent: recovery.promptIntent, draft };
       flushSync(() => {
         setWorkspaces(items => [...items, { id, name, description, directory: location.directory, createdAt: new Date().toISOString() }]);
         setPreferencesByWorkspace(items => ({ ...items, [id]: { ...INITIAL_PREFERENCES, studioName: name } }));
@@ -650,14 +665,8 @@ export default function App() {
         setPendingGeneration(null); setPromptToApply(undefined); setGenerationIntent(undefined); setSearchOpen(false); setNotificationOpen(false);
       });
       if (epoch !== projectDraftEpoch.current || workspaceIdRef.current !== id) { notify(`工作区“${name}”已创建，可从左侧切换。`); return true; }
-      try {
-        const selection = await workspaceFiles.chooseProjectFolder(id);
-        if (selection && epoch === projectDraftEpoch.current && workspaceIdRef.current === id) {
-          setNewProject(recoverProjectDraft(next, selection)); setProjectConnectionRecovery(undefined); setProjectFolderUnavailable(false); setFormError('');
-        }
-      } catch (cause) {
-        if (epoch === projectDraftEpoch.current && workspaceIdRef.current === id) setProjectConnectionRecovery({ ...next, connected: !isWorkspaceConnectionError(projectCreationError(cause, '')), message: projectCreationError(cause, '项目文件夹尚未选择，可继续重试。') });
-      }
+      setNewProject(recoverProjectDraft(next, defaultProjectFolder(id)));
+      setProjectConnectionRecovery(undefined); setProjectFolderUnavailable(false); setFormError('');
       return true;
     } finally {
       selectingProjectFolderRef.current = false; setSelectingProjectFolder(false);
@@ -679,10 +688,10 @@ export default function App() {
         setProjectConnectionRecovery(value => value?.workspaceId === recovery.workspaceId ? { ...value, directory: result.directory, connected: true, message: '工作区已重新连接，账本和旧项目记录均已保留。' } : value);
       }
       if (recovery.action === 'commit') { if (currentOperation()) { setFormError(''); setProjectConnectionRecovery(undefined); notify('工作区已重新连接，项目信息已保留，可以继续创建项目。'); } return; }
-      const selection = await workspaceFiles.chooseProjectFolder(recovery.workspaceId);
+      const selection = recovery.action === 'new' ? defaultProjectFolder(recovery.workspaceId) : await workspaceFiles.chooseProjectFolder(recovery.workspaceId);
       if (!selection || !currentOperation()) return;
       if (recovery.action === 'new') setNewProject(recoverProjectDraft(recovery, selection));
-      else setNewProject(value => value && value.selection.selectionId === recovery.selectionId ? { ...value, selection, name: value.name === value.selection.name.slice(0, 50) ? selection.name.slice(0, 50) : value.name } : value);
+      else setNewProject(value => value && value.selection.selectionId === recovery.selectionId ? { ...value, selection, name: value.name || selection.name.slice(0, 50) } : value);
       setFormError(''); setProjectFolderUnavailable(false); setProjectConnectionRecovery(undefined);
     } catch (cause) {
       if (currentOperation()) {
@@ -744,7 +753,7 @@ export default function App() {
     const completion = projectCreationCompletion.current;
     if (!draft || creatingProjectRef.current || selectingProjectFolderRef.current && !quick) return;
     if (draft.selection.workspaceId !== workspaceIdRef.current) { closeNewProject(); return; }
-    const invalid = (message: string) => { setFormError(message); if (quick) { setNewProject(draft); completion?.onCancelled?.(message); } };
+    const invalid = (message: string) => { setFormError(message); if (quick) setNewProject(draft); };
     if (!draft.name.trim()) { invalid('先为这份作品起一个名字。'); return; }
     let budgetCents: number | undefined;
     try { budgetCents = parseOptionalBudget(draft.budget); }
@@ -752,24 +761,31 @@ export default function App() {
     const project: Project = { id: draft.selection.projectId, workspaceId: draft.selection.workspaceId, name: draft.name.trim(), kind: draft.kind, description: draft.description.trim(), status: 'draft', updatedAt: new Date().toISOString(), costCents: 0, budgetCents, version: 0, accent: draft.kind === 'ppt' ? 'orange' : draft.kind === 'word' ? 'blue' : draft.kind === 'excel' ? 'green' : 'purple' };
     creatingProjectRef.current = true; setCreatingProject(true);
     try {
-      const location = await workspaceFiles.createProject(draft.selection, project.name);
+      const location = 'mode' in draft.selection
+        ? await workspaceFiles.createDefaultProject(project)
+        : await workspaceFiles.createProject(draft.selection, project.name);
+      if (!location) {
+        if (quick) { projectCreationCompletion.current = undefined; completion?.onCancelled?.(); }
+        return;
+      }
       if (location.projectId !== project.id || location.workspaceId !== project.workspaceId) throw new Error('项目目录登记与当前选择不一致，未添加项目；请重新选择文件夹。');
       project.directory = location.directory;
+      project.name = location.name;
       initializeNewStudioProject(project);
       if (!projectsRef.current.some(item => item.id === project.id)) projectsRef.current = [project, ...projectsRef.current];
       setProjects(items => items.some(item => item.id === project.id) ? items : [project, ...items]);
       if (workspaceIdRef.current !== project.workspaceId || completion && projectCreationCompletion.current !== completion) { notify('项目已在原工作区创建，文件目录已保留。'); return; }
-      rememberProject(project.id, project.workspaceId); setNewProject(value => value?.selection.selectionId === draft.selection.selectionId ? null : value);
+      rememberProject(project.id, project.workspaceId); setNewProject(value => value?.selection.projectId === draft.selection.projectId ? null : value);
+      projectCreationCompletion.current = undefined;
       if (completion?.onCreated) {
-        projectCreationCompletion.current = undefined;
         try { completion.onCreated(project); }
-        catch (cause) { const message = `作品已创建，当前对话设置尚未保存。${cause instanceof Error ? cause.message : ''} 可在我的作品中继续。`; completion.onCancelled?.(message); notify(message, 'error'); }
+        catch (cause) { const message = `作品已创建，后续操作尚未完成。${cause instanceof Error ? cause.message : ''} 可在我的作品中继续。`; completion.onCancelled?.(message); notify(message, 'error'); return; }
       }
       else { setView(project.kind === 'image' ? 'images' : 'documents'); if (draft.promptIntent) applyPrompt(project, draft.promptIntent); }
-      notify('项目已创建，产物会保存到所选文件夹。');
+      if (!completion?.onCreated) notify(`已创建「${project.name}」`);
     } catch (cause) {
       const message = projectCreationError(cause, '项目目录未能创建，当前信息已保留。');
-      if (quick) { setNewProject(draft); completion?.onCancelled?.(message); }
+      if (quick) setNewProject(draft);
       if (isWorkspaceConnectionError(message) && workspaceIdRef.current === project.workspaceId) setProjectConnectionRecovery({ workspaceId: project.workspaceId, directory: workspaceStateRef.current.workspaces.find(item => item.id === project.workspaceId)?.directory || '', message, connected: false, action: 'commit', kind: draft.kind, promptIntent: draft.promptIntent, selectionId: draft.selection.selectionId });
       else setFormError(message);
     }
@@ -841,7 +857,7 @@ export default function App() {
       <AppNavigation view={view} onNavigate={navigate} />
       <div className="sidebar-bottom"><button className="sidebar-budget sidebar-budget-compact" aria-label="真实调用账本" title={`真实调用账本 · ${costSummaryPrimary(liveCost)}${costSummarySecondary(liveCost) ? ` · ${costSummarySecondary(liveCost)}` : ''} · 本区月度预算 ${budgetLabel(preferences.monthlyBudget == null ? undefined : Math.round(preferences.monthlyBudget * 100))}`} onClick={() => navigate('finance')}><Wallet size={15} /><span>费用与报价</span><strong><CostTotal summary={liveCost} /></strong>{liveCost.pendingCount > 0 && <em title="软件会自动复算，无需填写费用；点击查看具体缺项。">+{liveCost.pendingCount} 待补齐</em>}<ChevronRight size={13} /></button><button className="profile-button focused-settings-button" aria-label="模型与设置" onClick={() => navigate('models')}><SettingsIcon size={17} /><span>模型与设置</span></button></div>
     </aside><div className="app-main"><header className="app-header"><div className="breadcrumb"><button type="button" className="breadcrumb-workspace" aria-label={`返回${workspace.name}创作对话`} onClick={() => navigate('overview')}>{workspace.name}</button><ChevronRight size={13} /><strong>{['project', 'documents', 'images'].includes(view) && activeProject.id ? activeProject.name : appViewLabel(view)}</strong></div><AppHeaderActions summary={navigationTasks} onNavigate={navigate} onSearch={showSearch} onNotifications={() => setNotificationOpen(value => !value)} onHelp={() => setHelpOpen(true)} onCreateProject={() => onCreateProject()} onOpenFolder={window.desktop?.workspaceFiles && workspace.directory ? () => { void workspaceFiles.open(workspaceId, ['project', 'documents', 'images'].includes(view) && activeProject.directory ? activeProject.id : undefined); } : undefined} notify={notify}><AutomationAttention workspaceId={workspaceId} onOpen={() => navigate('automation')} representedReviewRunIds={workflowRunner.runs.filter(run => run.workspaceId === workspaceId && run.status === 'waiting-review' && !run.hiddenAt && !run.trashedAt && projects.some(project => project.id === run.projectId)).map(run => run.id)} /></AppHeaderActions></header>
-      <main className={`app-content content-${view}`}><>{chatLedger.error && <div className="inline-notice" role="alert">{chatLedger.error}<button type="button" className="text-button" onClick={chatLedger.refresh}>重新同步费用</button></div>}</>{workflowRunner.simulationStorage?.issue && <StorageRecoveryBanner title="模拟任务历史" issue={workflowRunner.simulationStorage.issue} onExport={workflowRunner.simulationStorage.exportOriginal} onReload={workflowRunner.simulationStorage.reload} onReset={workflowRunner.simulationStorage.reset} />}{configuration.storageIssue && <StorageRecoveryBanner title="模型与工作流配置" issue={configuration.storageIssue} onExport={configuration.exportOriginalStorage} onReload={configuration.reloadStorage} onReset={configuration.resetStorage} />}{['documents', 'images'].includes(view) && !workspace.directory && <WorkspaceFolderBar workspace={workspace} project={['documents', 'images'].includes(view) && activeProject.id ? activeProject : undefined} onBind={() => { void workspaceFiles.bind(workspaceId); }} onOpen={projectId => { void workspaceFiles.open(workspaceId, projectId); }} />}{(projects.length === 0 && !['overview', 'projects', 'finance', 'assets', 'settings', 'prompts', 'categories', 'workflows', 'models', 'automation', 'tools', 'activity', 'business'].includes(view)) || (view === 'images' && !projects.some(item => item.kind === 'image')) || (view === 'documents' && !projects.some(item => item.kind !== 'image')) ? <EmptyWorkspace workspace={workspace} projectCount={projects.length} trashedProjectCount={trashedProjects.length} onOpenTrash={() => navigate('projects')} kind={view === 'images' ? 'image' : 'ppt'} onCreateProject={() => onCreateProject(view === 'images' ? 'image' : 'ppt')} onOpenPrompts={() => navigate('prompts')} /> : <div key={workspaceId} className="workspace-panel"><ManagementNavigation view={view} navigate={navigate} />{(view === 'documents' || view === 'images') && <Suspense fallback={null}><StudioRunStatus key={`${workspaceId}-${activeProject.id}`} props={props} /></Suspense>}<Suspense fallback={<div className="empty-state" role="status">正在打开页面…</div>}>{panels[view]()}</Suspense></div>}</main><footer className="statusbar"><span><ShieldCheck size={12} /> 数据仅存于本机浏览器 / 桌面应用</span><span>工作台 v{APP_VERSION} {window.desktop?.validationProfile && <span className="validation-profile-badge">独立测试窗口 · 非正式工作区</span>}<i /> 真实与模拟分开记录</span></footer>
+      <main className={`app-content content-${view}`}><>{chatLedger.error && <div className="inline-notice" role="alert">{chatLedger.error}<button type="button" className="text-button" onClick={chatLedger.refresh}>重新同步费用</button></div>}</>{workflowRunner.simulationStorage?.issue && <StorageRecoveryBanner title="模拟任务历史" issue={workflowRunner.simulationStorage.issue} onExport={workflowRunner.simulationStorage.exportOriginal} onReload={workflowRunner.simulationStorage.reload} onReset={workflowRunner.simulationStorage.reset} />}{configuration.storageIssue && <StorageRecoveryBanner title="模型与工作流配置" issue={configuration.storageIssue} onExport={configuration.exportOriginalStorage} onReload={configuration.reloadStorage} onReset={configuration.resetStorage} />}{['documents', 'images'].includes(view) && !workspace.directory && <WorkspaceFolderBar workspace={workspace} project={['documents', 'images'].includes(view) && activeProject.id ? activeProject : undefined} onBind={() => { void workspaceFiles.bind(workspaceId); }} onOpen={projectId => { void workspaceFiles.open(workspaceId, projectId); }} />}{(projects.length === 0 && !['overview', 'projects', 'finance', 'assets', 'settings', 'prompts', 'categories', 'workflows', 'models', 'automation', 'tools', 'activity', 'business'].includes(view)) || (view === 'images' && !projects.some(item => item.kind === 'image')) || (view === 'documents' && !projects.some(item => item.kind !== 'image')) ? <EmptyWorkspace workspace={workspace} projectCount={projects.length} trashedProjectCount={trashedProjects.length} onOpenTrash={() => navigate('projects')} kind={view === 'images' ? 'image' : 'ppt'} onCreateProject={() => onCreateProject(view === 'images' ? 'image' : undefined)} onOpenPrompts={() => navigate('prompts')} /> : <div key={workspaceId} className="workspace-panel"><ManagementNavigation view={view} navigate={navigate} />{(view === 'documents' || view === 'images') && <Suspense fallback={null}><StudioRunStatus key={`${workspaceId}-${activeProject.id}`} props={props} /></Suspense>}<Suspense fallback={<div className="empty-state" role="status">正在打开页面…</div>}>{panels[view]()}</Suspense></div>}</main><footer className="statusbar"><span><ShieldCheck size={12} /> 数据仅存于本机浏览器 / 桌面应用</span><span>工作台 v{APP_VERSION} {window.desktop?.validationProfile && <span className="validation-profile-badge">独立测试窗口 · 非正式工作区</span>}<i /> 真实与模拟分开记录</span></footer>
     </div></div>
 
     {toast && <div role="status" className={`toast toast-${toast.type}`}><span>{toast.type === 'success' ? <Check size={16} /> : <CircleHelp size={16} />}</span>{toast.message}<button aria-label="关闭提示" onClick={() => setToast(null)}><X size={14} /></button></div>}
@@ -850,7 +866,7 @@ export default function App() {
     {notificationOpen && <div className="notification-popover"><div><strong>最近动态</strong><button className="btn-icon" aria-label="关闭通知" onClick={() => setNotificationOpen(false)}><X size={15} /></button></div><p>同一任务合并显示，点击直达对应记录。</p>{!notificationItems.length && <p>还没有调用记录。</p>}{notificationItems.map(({ key, entry }) => { const run = entry.workflowRunId ? workflowRunner.runs.find(item => item.id === entry.workflowRunId && item.workspaceId === workspaceId && item.projectId === entry.projectId) : undefined; const status = run ? taskStatusLabel(run) : entry.scope === 'chat' ? entry.status === 'processing' ? '正在回复' : entry.status === 'complete' ? '回复已完成' : '回复需要处理' : entry.action; return <button type="button" key={key} onClick={() => onOpenNotification(entry)}><span className="notification-circle">{run?.status === 'running' || !run && entry.status === 'processing' ? <LoaderCircle size={15} className="spin" /> : run?.status === 'waiting-review' || run?.status === 'paused' ? <CircleHelp size={15} /> : (run ? run.status === 'complete' : entry.status === 'complete') ? <Check size={15} /> : <X size={15} />}</span><span><strong>{entry.projectName}</strong><small>{entry.billingMode === 'live' ? '真实' : '模拟'} · {status} · {entry.time}</small></span></button>; })}</div>}
 
     {generationIntent && <Suspense fallback={<PreparingGeneration onCancel={() => setGenerationIntent(undefined)} />}><StudioRunDialog key={generationIntent.token} props={props} intent={generationIntent} onClose={() => setGenerationIntent(undefined)} /></Suspense>}
-    {(newProject || projectFolderUnavailable) && !projectConnectionRecovery && <NewProjectDialog draft={newProject} workspaceName={workspaces.find(item => item.id === newProject?.selection.workspaceId)?.name || workspace.name} returnToSelection={projectCreationCompletion.current?.workspaceId === workspaceId} unavailable={projectFolderUnavailable} busy={creatingProject} picking={selectingProjectFolder} error={formError} onChange={changes => { setFormError(''); setNewProject(value => value && { ...value, ...changes }); }} onChooseFolder={() => { void changeProjectFolder(); }} onCreate={() => { void createProject(); }} onClose={closeNewProject} />}
+    {(newProject || projectFolderUnavailable) && !projectConnectionRecovery && <NewProjectDialog draft={newProject} workspaceName={workspaces.find(item => item.id === newProject?.selection.workspaceId)?.name || workspace.name} returnToSelection={!!projectCreationCompletion.current?.onCreated} typeLocked={projectTypeLocked} onResetFolder={() => { if (creatingProjectRef.current || selectingProjectFolderRef.current) return; setFormError(''); setNewProject(value => value && { ...value, selection: defaultProjectFolder(workspaceId, value.selection.projectId) }); }} unavailable={projectFolderUnavailable} busy={creatingProject} picking={selectingProjectFolder} error={formError} onChange={changes => { setFormError(''); setNewProject(value => value && { ...value, ...changes }); }} onChooseFolder={() => { void changeProjectFolder(); }} onCreate={() => { void createProject(); }} onClose={closeNewProject} />}
     {projectConnectionRecovery && !creatingRecoveryWorkspace && <ProjectCreationRecovery workspaceName={workspaces.find(item => item.id === projectConnectionRecovery.workspaceId)?.name || workspace.name} directory={projectConnectionRecovery.directory} message={projectConnectionRecovery.message} connected={projectConnectionRecovery.connected} busy={selectingProjectFolder} onReconnect={() => { void reconnectProjectCreation(); }} onNewWorkspace={() => setCreatingRecoveryWorkspace(true)} onClose={closeProjectConnectionRecovery} />}
     {projectConnectionRecovery && creatingRecoveryWorkspace && <WorkspaceCreateDialog workspaces={workspaces} recovery onCreate={createRecoveryWorkspace} onClose={() => { if (!selectingProjectFolderRef.current) setCreatingRecoveryWorkspace(false); }} />}
 

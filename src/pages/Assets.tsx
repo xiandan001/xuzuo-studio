@@ -43,6 +43,8 @@ export function Assets(props: PageProps) {
   const currentWorkspace = useRef(workspaceId); currentWorkspace.current = workspaceId;
   const assetLoadRequest = useRef(0);
   const previewRequest = useRef(0);
+  const creationRequest = useRef(0);
+  const [creationReturn, setCreationReturn] = useState<{ workspaceId: string; token: number; asset?: StudioAsset; builtin?: BuiltinAsset; projectId?: string; cancelled?: boolean; issue?: string }>();
   const searchOpening = useRef(''), searchIdentity = useRef(props.searchTarget?.token); searchIdentity.current = props.searchTarget?.token;
   const pending = useRef(busy); pending.current = busy;
   useEffect(() => registerEditorSession({ id: `assets-${workspaceId}`, projectId: '', label: '正在保存素材文件', getState: () => ({ dirty: false, pending: ['import', 'attach', 'save', 'builtin-import', 'builtin-attach', 'builtin-save'].includes(pending.current) || pending.current.startsWith('category-') || pending.current.startsWith('batch-') }), save: async () => false, exportRecovery: () => false }), [workspaceId]);
@@ -68,6 +70,16 @@ export function Assets(props: PageProps) {
   }
   useEffect(() => { setCategoryState({ categories: [], builtinAssignments: {}, assignments: {} }); setCategoryReady(false); setCategoryError(''); setSelectedCategory('all'); setBuiltinCollection('all'); void loadCategories(); }, [workspaceId, workspace.directory, bridge]);
   useEffect(() => { previewRequest.current++; setSelected(undefined); setSelectedBuiltin(undefined); setPreview(undefined); setPreviewError(''); setAssets([]); setError(''); setBusy(''); if (tab === 'mine') void load(); }, [workspaceId, workspace.directory, bridge, tab]);
+  useEffect(() => { creationRequest.current++; setCreationReturn(undefined); }, [workspaceId]);
+  useEffect(() => {
+    if (!creationReturn || creationReturn.workspaceId !== workspaceId || creationReturn.token !== creationRequest.current || !creationReturn.cancelled && (!creationReturn.projectId || !projects.some(project => project.id === creationReturn.projectId && project.workspaceId === workspaceId))) return;
+    pending.current = ''; setBusy('');
+    if (creationReturn.projectId) setTargetId(creationReturn.projectId);
+    if (creationReturn.asset) void show(creationReturn.asset, true);
+    if (creationReturn.builtin) setSelectedBuiltin(creationReturn.builtin);
+    if (creationReturn.issue) setPreviewError(creationReturn.issue);
+    setCreationReturn(undefined);
+  }, [creationReturn, projects, workspaceId, workspace.directory]);
   useEffect(() => {
     const target = props.searchTarget; if (!target || target.kind !== 'asset' || busy) return;
     if (target.workspaceId && target.workspaceId !== workspaceId) { props.onSearchTargetConsumed?.(target.token); return; }
@@ -86,7 +98,11 @@ export function Assets(props: PageProps) {
       finally { if (currentWorkspace.current === workspaceId && searchIdentity.current === target.token) props.onSearchTargetConsumed?.(target.token); }
     })();
   }, [props.searchTarget?.token, workspaceId, tab, bridge, busy]);
-  useEffect(() => { if (!projects.some(project => project.id === targetId && project.workspaceId === workspaceId)) setTargetId(projects.find(project => project.workspaceId === workspaceId)?.id || ''); }, [projects, targetId, workspaceId]);
+  useEffect(() => {
+    const created = creationReturn?.workspaceId === workspaceId ? creationReturn.projectId : undefined;
+    if (created && projects.some(project => project.id === created && project.workspaceId === workspaceId)) { if (targetId !== created) setTargetId(created); return; }
+    if (!projects.some(project => project.id === targetId && project.workspaceId === workspaceId)) setTargetId(projects.find(project => project.workspaceId === workspaceId)?.id || '');
+  }, [projects, targetId, workspaceId, creationReturn]);
   useEffect(() => {
     if (!selected) return;
     const close = (event: KeyboardEvent) => {
@@ -121,11 +137,20 @@ export function Assets(props: PageProps) {
     catch (cause) { if (currentWorkspace.current === id) setError(workflowPublicError(cause, '素材状态未能保存。')); }
     finally { if (currentWorkspace.current === id) setBusy(''); }
   }
-  async function show(asset: StudioAsset) {
-    if (!bridge || asset.archivedAt || busy) return;
+  async function show(asset: StudioAsset, restoring = false) {
+    if (!bridge || asset.archivedAt || busy && !restoring) return;
     const request = ++previewRequest.current; setSelected(asset); setPreview(undefined); setPreviewError('');
     try { const result = await bridge.preview({ workspaceId, id: asset.id }); if (request === previewRequest.current) setPreview(result); }
     catch (cause) { if (request === previewRequest.current) setPreviewError(workflowPublicError(cause, '暂不能预览，可另存后打开。')); }
+  }
+  function createMaterialProject(asset?: StudioAsset, builtin?: BuiltinAsset) {
+    if ((!asset && !builtin) || creationReturn || pending.current || busy) return;
+    const id = workspaceId, token = ++creationRequest.current, intent = { workspaceId: id, token, asset, builtin };
+    setCreationReturn(intent); pending.current = 'project-create'; setBusy('project-create'); setPreviewError('');
+    props.onCreateProject(undefined, {
+      onCreated: project => { if (currentWorkspace.current === id && creationRequest.current === token && project.workspaceId === id) setCreationReturn({ ...intent, projectId: project.id }); },
+      onCancelled: issue => { if (currentWorkspace.current === id && creationRequest.current === token) setCreationReturn({ ...intent, cancelled: true, issue }); },
+    });
   }
   function showAssetError(message: string) {
     if (selected || selectedBuiltin) setPreviewError(message); else { setError(message); notify(message, 'error'); }
@@ -280,7 +305,7 @@ export function Assets(props: PageProps) {
     </>}
     </>}
     </div></div>
-    {selectedBuiltin && <BuiltinAssetDetails categoryField={categoryField(selectedBuiltin.id, true)} asset={selectedBuiltin} props={props} targetId={targetId} onTarget={setTargetId} busy={busy} error={previewError} onClose={() => setSelectedBuiltin(undefined)} onImport={() => { void builtinAction('import'); }} onAttach={() => { void builtinAction('attach'); }} onSave={() => { void builtinAction('save'); }} onLink={kind => { void openBuiltinLink(selectedBuiltin, kind); }} />}
-    {selected && <ModalPortal onClose={() => { previewRequest.current++; setSelected(undefined); }} busy={!!busy}><div className="op-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { previewRequest.current++; setSelected(undefined); } }}><section className="op-modal asset-library-preview" role="dialog" aria-modal="true" aria-label="真实素材预览"><header><h2>{selected.name}</h2><button autoFocus className="btn-icon" disabled={!!busy} aria-label="关闭素材预览" onClick={() => { previewRequest.current++; setSelected(undefined); }}><X size={18} /></button></header><div className="asset-library-preview-body">{previewError && <p role="alert">{previewError}</p>}{preview ? <PreviewContent artifact={{ ...selected, path: '' }} preview={preview} /> : !previewError && <p><LoaderCircle size={18} className="spin" />正在读取真实文件</p>}<label>目标项目<Select aria-label="素材目标项目" value={targetId} onValueChange={setTargetId} options={[{ value: '', label: '请选择项目' }, ...projects.map(project => ({ value: project.id, label: project.name }))]} /></label>{projects.filter(project => project.workspaceId === workspaceId).length === 0 && <button className="btn btn-secondary" onClick={() => { setSelected(undefined); props.onCreateProject(); }}>新建项目</button>}<p>加入时会复制实际文件；此后归档素材不会破坏项目副本。仅适配的正文/图像功能会读取相应资料，不会仅凭文件名冒充已理解。</p>{categoryField(selected.id)}{selected.provenance && <section className="asset-license-info asset-owned-provenance" aria-label="素材来源与许可"><h3><ShieldCheck size={17} />来源与使用许可</h3><p>{selected.provenance.author} · {selected.provenance.licenseName}</p><p>{selected.provenance.usageNote}</p><RememberedDetails rememberKey={`asset:${selected.id}:library-license`}><summary>查看本地许可说明</summary><pre>{BUILTIN_ASSETS.some(asset => asset.id === selected.provenance!.builtinId) ? builtinAssetLicense(BUILTIN_ASSETS.find(asset => asset.id === selected.provenance!.builtinId)!)?.notice || selected.provenance.licenseNotice : selected.provenance.licenseNotice}</pre></RememberedDetails></section>}</div><footer><button className="btn btn-secondary" disabled={!!busy} onClick={() => { void save(); }}><Download size={15} />另存文件</button><button className="btn btn-primary" disabled={!!busy || !targetId || selected.unavailable} onClick={() => { void attach(); }}>{busy === 'attach' ? '正在复制' : projects.find(project => project.id === targetId) ? assetUsageLabel(projects.find(project => project.id === targetId)!.kind, selected.kind === 'image') : '选择项目后使用'}</button></footer></section></div></ModalPortal>}
+    {selectedBuiltin && <BuiltinAssetDetails categoryField={categoryField(selectedBuiltin.id, true)} asset={selectedBuiltin} props={props} targetId={targetId} onTarget={setTargetId} busy={busy} error={previewError} onClose={() => setSelectedBuiltin(undefined)} onCreate={() => createMaterialProject(undefined, selectedBuiltin)} onImport={() => { void builtinAction('import'); }} onAttach={() => { void builtinAction('attach'); }} onSave={() => { void builtinAction('save'); }} onLink={kind => { void openBuiltinLink(selectedBuiltin, kind); }} />}
+    {selected && <ModalPortal onClose={() => { previewRequest.current++; setSelected(undefined); }} busy={!!busy}><div className="op-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { previewRequest.current++; setSelected(undefined); } }}><section className="op-modal asset-library-preview" role="dialog" aria-modal="true" aria-label="真实素材预览"><header><h2>{selected.name}</h2><button autoFocus className="btn-icon" disabled={!!busy} aria-label="关闭素材预览" onClick={() => { previewRequest.current++; setSelected(undefined); }}><X size={18} /></button></header><div className="asset-library-preview-body">{previewError && <p role="alert">{previewError}</p>}{preview ? <PreviewContent artifact={{ ...selected, path: '' }} preview={preview} /> : !previewError && <p><LoaderCircle size={18} className="spin" />正在读取真实文件</p>}<label>目标项目<Select aria-label="素材目标项目" value={targetId} onValueChange={setTargetId} options={[{ value: '', label: '请选择项目' }, ...projects.map(project => ({ value: project.id, label: project.name }))]} /></label>{projects.filter(project => project.workspaceId === workspaceId).length === 0 && <button className="btn btn-secondary" disabled={!!busy} onClick={() => createMaterialProject(selected)}>新建作品</button>}<p>加入时会复制实际文件；此后归档素材不会破坏项目副本。仅适配的正文/图像功能会读取相应资料，不会仅凭文件名冒充已理解。</p>{categoryField(selected.id)}{selected.provenance && <section className="asset-license-info asset-owned-provenance" aria-label="素材来源与许可"><h3><ShieldCheck size={17} />来源与使用许可</h3><p>{selected.provenance.author} · {selected.provenance.licenseName}</p><p>{selected.provenance.usageNote}</p><RememberedDetails rememberKey={`asset:${selected.id}:library-license`}><summary>查看本地许可说明</summary><pre>{BUILTIN_ASSETS.some(asset => asset.id === selected.provenance!.builtinId) ? builtinAssetLicense(BUILTIN_ASSETS.find(asset => asset.id === selected.provenance!.builtinId)!)?.notice || selected.provenance.licenseNotice : selected.provenance.licenseNotice}</pre></RememberedDetails></section>}</div><footer><button className="btn btn-secondary" disabled={!!busy} onClick={() => { void save(); }}><Download size={15} />另存文件</button><button className="btn btn-primary" disabled={!!busy || !targetId || selected.unavailable} onClick={() => { void attach(); }}>{busy === 'attach' ? '正在复制' : projects.find(project => project.id === targetId) ? assetUsageLabel(projects.find(project => project.id === targetId)!.kind, selected.kind === 'image') : '选择项目后使用'}</button></footer></section></div></ModalPortal>}
   </div>;
 }

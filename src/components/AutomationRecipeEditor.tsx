@@ -6,8 +6,8 @@ import { ModalPortal } from './ModalPortal';
 import { Select } from './Select';
 import { AutomationProjectField } from './AutomationProjectField';
 
-export function AutomationRecipeEditor({ props, onClose, onCreated }: { props: PageProps; onClose: () => void; onCreated: (projectId: string, name: string, input: string) => void }) {
-  const [projectId, setProjectId] = useState(props.activeProject.id || props.projects[0]?.id || ''), [name, setName] = useState(''), [goal, setGoal] = useState(''), [acceptance, setAcceptance] = useState('覆盖本次要求\n不虚构事实、数据与承诺\n提供完整可编辑成品'), [constraints, setConstraints] = useState(''), [repairs, setRepairs] = useState('1'), [error, setError] = useState('');
+export function AutomationRecipeEditor({ props, initialProjectId, onClose, onCreated }: { props: PageProps; initialProjectId?: string; onClose: () => void; onCreated: (projectId: string, name: string, input: string) => void }) {
+  const [projectId, setProjectId] = useState(initialProjectId || props.activeProject.id || props.projects[0]?.id || ''), [name, setName] = useState(''), [goal, setGoal] = useState(''), [acceptance, setAcceptance] = useState('覆盖本次要求\n不虚构事实、数据与承诺\n提供完整可编辑成品'), [constraints, setConstraints] = useState(''), [repairs, setRepairs] = useState('1'), [error, setError] = useState('');
   function create() {
     const project = props.projects.find(project => project.id === projectId); if (!project || !goal.trim()) { setError('请选择项目并写清要完成的目标。'); return; }
     const title = name.trim() || `${project.name} · 标准自动化流程`;

@@ -74,6 +74,7 @@ try {
   sourceNames.push('src/components/DocumentArtifactPreview.tsx','src/components/document-artifact-preview.css','src/hooks/useDocumentPreviewImages.ts','src/hooks/useDocumentImagePreviews.ts','src/lib/document-image-previews.ts','src/lib/document-preview.ts','src/document-preview-types.ts','src/components/ProjectTemplateActions.tsx','src/components/project-template.css','src/hooks/useProjectTemplateSources.ts','src/lib/project-template-image.ts','src/project-template-types.ts','electron/project-templates.cjs','electron/project-template-creative.cjs','electron/project-template-backup.cjs','electron/commerce-text-renderer.cjs','electron/editor-store.cjs','electron/editor-document.cjs','electron/spreadsheet-store.cjs');
   sourceNames.push('src/components/DocumentImageTools.tsx', 'src/lib/document-image-binding.ts', 'src/components/document-illustrations.css');
   sourceNames.push('electron/commerce-reflow-jobs.cjs', 'electron/commerce-render-recovery.cjs');
+  sourceNames.push('electron/default-project-folder.cjs');
   for (const relative of sourceNames) sources[relative] = hash(await fs.readFile(path.join(root, relative)));
   const owner = { dependencyRoot: path.join(dependencyRoot, 'node_modules'), localRuntime, kind: 'xuzuo-production-usability', nonce, commit: report.commit, parentPid: process.pid, temporaryRoot, dist: await fs.realpath(dist), output: await fs.realpath(output), files, sources };
   await fs.mkdir(path.join(temporary, 'profile'), { recursive: true });

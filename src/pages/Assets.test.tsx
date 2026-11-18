@@ -28,13 +28,13 @@ describe('素材库内置内容与旧桌面兼容', () => {
   it('无桌面时预览许可和图片仍可用，复制保存按钮不可伪装成功', () => {
     vi.stubGlobal('window', {});
     const asset = BUILTIN_ASSETS.find(item => item.origin === 'open-source')!;
-    const html = renderToStaticMarkup(<BuiltinAssetDetails asset={asset} props={props} targetId="" onTarget={() => {}} busy="" error="" onClose={() => {}} onImport={() => {}} onAttach={() => {}} onSave={() => {}} onLink={() => {}} />);
+    const html = renderToStaticMarkup(<BuiltinAssetDetails asset={asset} props={props} targetId="" onTarget={() => {}} busy="" error="" onClose={() => {}} onCreate={() => {}} onImport={() => {}} onAttach={() => {}} onSave={() => {}} onLink={() => {}} />);
     expect(html).toContain('来源与使用许可'); expect(html).toContain('Copyright'); expect(html).toContain('当前可浏览和预览'); expect(html).toContain('完整预览');
     expect(html).toMatch(/disabled=""[^>]*>[\s\S]*?另存素材包/); expect(html).toContain('rel="noreferrer"');
   });
   it('旧版有assets桥但无builtin方法时解释升级需要，不加载或写入工作区', () => {
     const list = vi.fn(); vi.stubGlobal('window', { desktop: { assets: { list } } });
-    const html = renderToStaticMarkup(<BuiltinAssetDetails asset={BUILTIN_ASSETS[0]} props={props} targetId="" onTarget={() => {}} busy="" error="" onClose={() => {}} onImport={() => {}} onAttach={() => {}} onSave={() => {}} onLink={() => {}} />);
+    const html = renderToStaticMarkup(<BuiltinAssetDetails asset={BUILTIN_ASSETS[0]} props={props} targetId="" onTarget={() => {}} busy="" error="" onClose={() => {}} onCreate={() => {}} onImport={() => {}} onAttach={() => {}} onSave={() => {}} onLink={() => {}} />);
     expect(html).toContain('请安装新版桌面应用'); expect(list).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { key, inside, safeFolder, checkedDirectory, checkedFile, copyProjectTree, verifyProjectTree, atomicJson } = require('./workspace-paths.cjs');
 const { inspectSelectedProjectFolder, prepareSelectedProjectFolder } = require('./project-folder.cjs');
+const { prepareDefaultProjectFolder, removeDefaultProjectIntent, defaultDirectoryKey } = require('./default-project-folder.cjs');
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value);
 const validPurge = item => item && validId(item.projectId) && validId(item.workspaceId) && typeof item.name === 'string' && ['ppt', 'word', 'excel', 'image'].includes(item.kind) && Number.isFinite(Date.parse(item.purgedAt)) && Number.isFinite(Date.parse(item.trashedAt)) && Number.isSafeInteger(item.costCents) && item.costCents >= 0 && (item.directory === undefined || typeof item.directory === 'string' && path.isAbsolute(item.directory)) && Array.isArray(item.directories) && item.directories.every(value => typeof value === 'string' && path.isAbsolute(value));
 const clone = value => structuredClone(value);
@@ -234,7 +235,7 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
         transition.next.projects = transition.next.projects.filter(item => item.projectId !== projectId); transition.next.locations = transition.next.locations.filter(item => item.projectId !== projectId); transition.next.purgedProjects = next.purgedProjects;
         transition.migrations = transition.migrations.filter(item => item.projectId !== projectId); await atomicJson(fs, journalFile, transition);
       }
-      await atomicJson(fs, filename, next); state = next; return clone(next.purgedProjects.find(item => item.projectId === projectId));
+      await atomicJson(fs, filename, next); state = next; await removeDefaultProjectIntent({ fs, controlDirectory: root, projectId, workspaceId }); return clone(next.purgedProjects.find(item => item.projectId === projectId));
     }); },
     setArtifactMigrator(value) { if (typeof value !== 'function') throw new TypeError('缺少产物迁移处理器。'); migrator = value; },
     validateDirectory,
@@ -256,6 +257,23 @@ function createWorkspaceStorage({ directory, fileSystem = defaultFileSystem }) {
         const next = clone(state); addLocation(next, item);
         await commit(next, [{ projectId: item.projectId, from: null, to: item.directory }]);
         return clone(item);
+      });
+    },
+    async createDefaultProject(input) {
+      return serial(async () => {
+        await assertNotPurged(input?.projectId); await settle();
+        if (!input || !validId(input.projectId) || !validId(input.workspaceId) || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 50) throw Error('作品名称需要1至50个字符，编号和工作区必须有效。');
+        const workspace = state.workspaces.find(item => item.workspaceId === input.workspaceId); if (!workspace) throw Error('请先为这个工作区选择本地文件夹。');
+        await checkedWorkspace(workspace);
+        const previous = state.projects.find(item => item.projectId === input.projectId);
+        const cleanup = () => removeDefaultProjectIntent({ fs, controlDirectory: root, projectId: input.projectId, workspaceId: input.workspaceId });
+        if (previous) { if (previous.workspaceId !== input.workspaceId) throw Error('此作品已属于另一个工作区，未移动或重新创建。'); await validateDirectory(previous.directory, previous.projectId); await cleanup().catch(() => undefined); return clone(previous); }
+        if (state.locations.some(item => item.projectId === input.projectId)) throw Error('此作品已有历史目录登记，未另建或重建原目录。');
+        const reserved = [...state.projects, ...state.locations].map(item => defaultDirectoryKey(item.directory));
+        const isLocationAvailable = candidate => { const value = defaultDirectoryKey(candidate); return !reserved.some(item => value === item || value.startsWith(item + path.sep) || item.startsWith(value + path.sep)); };
+        const item = await prepareDefaultProjectFolder({ fs, controlDirectory: root, workspace, input: { projectId: input.projectId, workspaceId: input.workspaceId, name: input.name.trim() }, inspectFolder: inspectProjectFolder, assertPathAvailable: assertPurgePathAvailable, isLocationAvailable });
+        staged.push({ projectId: item.projectId, directory: item.directory });
+        const next = clone(state); addLocation(next, item); await commit(next, [{ projectId: item.projectId, from: null, to: item.directory }]); await cleanup().catch(() => undefined); return clone(item);
       });
     },
     async importLocations({ workspaces, projects }) {

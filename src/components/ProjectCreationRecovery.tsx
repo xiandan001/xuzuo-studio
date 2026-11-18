@@ -41,7 +41,7 @@ export function ProjectCreationRecovery({ workspaceName, directory, message, con
     <div className="project-connection-directory"><span><FolderOpen size={16} />原工作区文件夹</span><code>{directory || '请在文件夹窗口中选择原工作区位置'}</code></div>
     <p className="project-connection-message" role="status">{displayMessage}</p>
     <div className="project-recovery-options">
-      <section className="project-recovery-option"><h3>{connected ? '继续当前工作区' : '继续使用原工作区'}</h3><p>{connected ? '在已连接的工作区内选择或新建独立项目文件夹。' : '只恢复上方原位置的连接。原工作区恢复窗口不能在 D 盘改建其它目录。'}</p><button ref={primary} className="btn btn-primary" disabled={busy} onClick={onReconnect}>{busy ? <><LoaderCircle size={16} className="spin" />正在处理…</> : <><FolderSync size={16} />{connected ? '选择项目文件夹并继续' : '恢复原工作区'}</>}</button></section>
+      <section className="project-recovery-option"><h3>{connected ? '继续当前工作区' : '继续使用原工作区'}</h3><p>{connected ? '返回当前作品，继续完成创建。' : '只恢复上方原位置的连接。原工作区恢复窗口不能在 D 盘改建其它目录。'}</p><button ref={primary} className="btn btn-primary" disabled={busy} onClick={onReconnect}>{busy ? <><LoaderCircle size={16} className="spin" />正在处理…</> : <><FolderSync size={16} />{connected ? '继续创建作品' : '恢复原工作区'}</>}</button></section>
       <section className="project-recovery-option"><h3>换到新位置开始</h3><p>可以在 D 盘或其它本地磁盘选择、新建工作区文件夹，再继续本次项目。</p><button className="btn btn-secondary" disabled={busy} onClick={onNewWorkspace}><FolderPlus size={16} />在新位置新建工作区</button></section>
     </div>
     <p className="project-connection-note">旧项目、账本和回收站记录保留在原工作区，当前填写的项目信息也会保留。已删除的旧项目文件夹不会因此重建。</p>

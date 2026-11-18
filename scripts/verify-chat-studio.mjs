@@ -399,6 +399,7 @@ sourceNames.push('src/components/ChatAttachments.tsx', 'src/components/chat-atta
   );
   sourceNames.push('src/lib/chat-window.ts', 'src/components/ChatPlanReference.tsx', 'src/components/chat-plan-reference.css', 'src/lib/document-image-binding.ts');
   sourceNames.push('scripts/verify-bead-native.cjs', 'src/workers/spreadsheet-calculation.worker.ts', 'src/lib/spreadsheet-incremental.ts', 'assets/library/catalog.json');
+  sourceNames.push('electron/default-project-folder.cjs');
   for (const name of sourceNames) sources[name] = hash(await fs.readFile(path.join(root, name)));
   const dependencyRoot = path.join(root, ...(localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
   assert.equal((await fs.realpath(dependencyRoot)).toLowerCase(), dependencyRoot.toLowerCase(), 'Native dependency root must be an ordinary expected directory');

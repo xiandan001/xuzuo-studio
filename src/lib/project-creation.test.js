@@ -4,9 +4,9 @@ const { registerProjectCreation } = createRequire(import.meta.url)('../../electr
 
 function fixture() {
   const handlers = new Map(), showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ['C:/workspace/chosen'] }));
-  const storage = { list: vi.fn(async () => ({ workspaces: [{ workspaceId: 'workspace', directory: 'C:/workspace' }], projects: [] })), reconnectRoot: vi.fn(async input => ({ ...input, repaired: true, missingProjectIds: ['old'] })), validateWorkspace: vi.fn(async () => 'C:/workspace'), inspectProjectFolder: vi.fn(async input => ({ ...input, folderName: 'chosen' })), claimProjectFolder: vi.fn(async input => input) };
+  const storage = { list: vi.fn(async () => ({ workspaces: [{ workspaceId: 'workspace', directory: 'C:/workspace' }], projects: [] })), reconnectRoot: vi.fn(async input => ({ ...input, repaired: true, missingProjectIds: ['old'] })), validateWorkspace: vi.fn(async () => 'C:/workspace'), inspectProjectFolder: vi.fn(async input => ({ ...input, folderName: 'chosen' })), claimProjectFolder: vi.fn(async input => input), createDefaultProject: vi.fn(async input => input) };
   registerProjectCreation({ handle: (name, action) => handlers.set(name, action), dialog: { showOpenDialog }, getWindow: () => ({}), workspaceStorage: storage, withProjectWrite: (_id, action) => action() });
-  return { storage, showOpenDialog, choose: input => handlers.get('workspace-project-folder')(input), create: input => handlers.get('workspace-create-project')(input), reconnect: input => handlers.get('workspace-reconnect')(input) };
+  return { storage, showOpenDialog, choose: input => handlers.get('workspace-project-folder')(input), create: input => handlers.get('workspace-create-project')(input), createDefault: input => handlers.get('workspace-create-default-project')(input), reconnect: input => handlers.get('workspace-reconnect')(input) };
 }
 describe('folder-first native selection authority', () => {
   it('cancel selects no project and an arbitrary renderer path cannot be committed', async () => {
@@ -55,6 +55,24 @@ describe('folder-first native selection authority', () => {
     f.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] }); await f.choose({ workspaceId: 'workspace' });
     expect(f.showOpenDialog.mock.calls.at(-1)[1].defaultPath).toBe(selected.directory);
     await expect(f.create({ selectionId: selected.selectionId, name: 'first' })).resolves.toMatchObject({ projectId: selected.projectId });
+  });
+});
+
+describe('default creation shares the native single-process admission guard', () => {
+  it('pending default create excludes other creates, pickers and reconnect until its result settles', async () => {
+    const f = fixture(); let release;
+    f.storage.createDefaultProject.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const request = { projectId: 'default-one', workspaceId: 'workspace', name: 'name' }, task = f.createDefault(request); await Promise.resolve();
+    await expect(f.createDefault({ ...request, projectId: 'default-two' })).rejects.toThrow('处理中');
+    await expect(f.choose({ workspaceId: 'workspace' })).rejects.toThrow('处理中'); await expect(f.reconnect({ workspaceId: 'workspace' })).rejects.toThrow('处理中');
+    release(request); expect(await task).toEqual(request); await expect(f.choose({ workspaceId: 'workspace' })).resolves.toBeTruthy();
+  });
+  it('a pending native folder picker prevents default allocation instead of creating a second project', async () => {
+    const f = fixture(); let release;
+    f.showOpenDialog.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const picking = f.choose({ workspaceId: 'workspace' }); await Promise.resolve();
+    await expect(f.createDefault({ projectId: 'default', workspaceId: 'workspace', name: 'name' })).rejects.toThrow('处理中'); expect(f.storage.createDefaultProject).not.toHaveBeenCalled();
+    release({ canceled: true, filePaths: [] }); expect(await picking).toBeNull();
   });
 });
 

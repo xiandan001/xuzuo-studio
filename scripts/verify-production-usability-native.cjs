@@ -223,7 +223,7 @@ async function scenario() {
     const portable = await data.templates.exportWorkspace(data.context.workspaceId), template = portable.items[0]; assert.equal(template.creative.kind, 'commerce');
     assert(!JSON.stringify(template).includes('客户甲')); for (const forbidden of ['credentialId', 'fee', 'ledger', 'costCents']) assert(!JSON.stringify(template).includes('"' + forbidden + '"'));
     await click('.puf-template-host button', '使用已保存模板'); await until('real saved template selected', 'document.querySelector("[aria-label=选择项目模板]")?.textContent.includes("独立可编辑海报模板")');
-    await fill('[aria-label="模板或新作品名称"]', '独立新海报'); await click('.project-template-dialog footer button', '选择新项目文件夹并创建');
+    await fill('[aria-label="模板或新作品名称"]', '独立新海报'); await click('.project-template-dialog footer button', '创建并继续');
     await until('instantiated real project opens editable layers', 'document.querySelector(".cle-text-content")!==null', 15000);
     assert.equal(data.calls.templateInstantiations, 1); assert.equal(data.calls.createdProjects, 1);
     await fill('[aria-label="准确文字内容"]', '新商品售价 88 元'); await click('.cle-heading button', '保存');

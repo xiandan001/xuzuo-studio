@@ -160,6 +160,7 @@ contextBridge.exposeInMainWorld('desktop', {
     reconnect: input => ipcRenderer.invoke('runtime:workspace-reconnect', input),
     chooseProjectFolder: input => ipcRenderer.invoke('runtime:workspace-project-folder', input),
     createProject: input => ipcRenderer.invoke('runtime:workspace-create-project', input),
+    createDefaultProject: input => ipcRenderer.invoke('runtime:workspace-create-default-project', input),
     list: () => ipcRenderer.invoke('runtime:workspace-list'),
     repair: input => ipcRenderer.invoke('runtime:workspace-repair', input),
     choose: input => ipcRenderer.invoke('runtime:workspace-choose', input),

@@ -39,7 +39,7 @@ describe('业务制作真实React集成（Native bridge模拟，不调用API）'
     const saved = b.current('workspace-a').orders[0]; expect(saved.brief).toBe('这是切换阶段前刚刚输入的内容。'); expect(saved.bindings.text).toEqual({ modelConfigId: 'second-model', credentialId: 'saved-key' }); expect(b.bridge.start).not.toHaveBeenCalled();
   });
   it('新建项目使用本地目录入口，回调创建对应制作单且不执行模型', async () => {
-    const b = backend(), ui = await mountBusiness(b); await click(ui.host.querySelector('[aria-label="选择业务制作套餐"]')!, '商家商品套餐'); await click(ui.host, '选择文件夹，新建项目');
+    const b = backend(), ui = await mountBusiness(b); await click(ui.host.querySelector('[aria-label="选择业务制作套餐"]')!, '商家商品套餐'); await click(ui.host, '新建制作项目');
     expect(ui.props.onCreateProject).toHaveBeenCalledWith('image', expect.objectContaining({ quick: true, onCreated: expect.any(Function) }));
     const options = vi.mocked(ui.props.onCreateProject).mock.calls[0][1]!; const project = { ...ui.props.projects[0], id: 'folder-project', name: '本地目录创建的商品项目' };
     await act(async () => options.onCreated!(project)); expect(b.current('workspace-a').orders[0]).toMatchObject({ recipe: 'merchant', sourceProjectId: project.id, name: project.name }); expect(ui.host.textContent).toContain('商品与真实资料'); expect(b.bridge.start).not.toHaveBeenCalled();
