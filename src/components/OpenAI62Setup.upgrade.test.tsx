@@ -74,7 +74,7 @@ it('快捷接入列出Astra和Sol，由用户明确选用新型号并复用已�
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) { return this === trigger ? { x: 0, y: 40, left: 0, top: 40, right: 320, bottom: 84, width: 320, height: 44, toJSON: () => ({}) } : { x: 0, y: 0, left: 0, top: 0, right: 1024, bottom: 768, width: 1024, height: 768, toJSON: () => ({}) }; });
   await act(async () => trigger.click());
   const options = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')];
-  for (const name of ['GPT-6.2 Astra', 'GPT-6.2 Sol']) expect(options.some(option => option.textContent?.includes(name) && !option.disabled), options.map(option => option.textContent)).toBe(true);
+  for (const name of ['GPT-6.2 Astra', 'GPT-6.2 Sol']) expect(options.some(option => option.textContent?.includes(name) && !option.disabled), options.map(option => option.textContent).join(", ")).toBe(true);
   const chosen = options.find(option => option.textContent?.includes('GPT-6.2 Sol'))!; await act(async () => chosen.click()); expect(localStorage.getItem(CONFIGURATION_KEY)).toBe(before);
   await click('保存并完成接入'); await vi.waitFor(() => expect(document.body.textContent).toContain('已接入，可以开始使用')); unchangedLegacy();
   expect(current.models).toHaveLength(legacy.models.length + 1); expect(current.models.at(-1)?.modelId).toBe('gpt-6.2-sol'); expect(current.connections).toHaveLength(1); expect(current.credentials).toHaveLength(1);
