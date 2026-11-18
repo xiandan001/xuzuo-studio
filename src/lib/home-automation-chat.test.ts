@@ -4,7 +4,9 @@ import { homeChatCommand, homeChatSendIssue, homeChatKey, homeFirstRetryInput, h
 describe('首页对话记录与明确本地指令', () => {
   it('只有明确创建/运行短命令才本地执行，不把普通需求或否定句当操作', () => {
     expect(homeChatCommand('就按这个创建。')).toBe('create'); expect(homeChatCommand('运行一次')).toBe('run');
+    expect(homeChatCommand('执行方案。')).toBe('run'); expect(homeChatCommand('执行这个方案！')).toBe('run');
     expect(homeChatCommand('不要创建')).toBeUndefined(); expect(homeChatCommand('创建一个产品宣传图流程')).toBeUndefined(); expect(homeChatCommand('先别创建，换成暖色')).toBeUndefined();
+    expect(homeChatCommand('先不要执行这个方案')).toBeUndefined(); expect(homeChatCommand('执行这个方案前先把尺寸改小')).toBeUndefined();
   });
   it('同一真实规划消息重复到达只更新一次，保留原请求和费用引用', () => {
     const conversation = newHomeConversation('workspace', 'conversation');

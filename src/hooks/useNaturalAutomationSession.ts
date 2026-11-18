@@ -67,17 +67,30 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
   }, () => { try { store.persist({ ...store.current.current, needsSetup: false }); } catch { props.notify('任务已开始，可在任务中心查看；当前草稿保存未完成。', 'info'); } onClose(); });
   const locked = busy || readiness.busy || runBusy;
   const runScope = () => { const value = latest.current.store.current.current; return `${latest.current.props.workspaceId}/${value.projectId}/${value.acceptedRequestId || value.requestId || ''}`; };
-  function finishRun(result: AutomationActionResult) { const flight = runFlight.current; if (!flight) return; clearTimeout(flight.timer); runFlight.current = undefined; if (mounted.current) { setRunBusy(false); if (result.status === 'needs-input') setPreparationRequest(value => value + 1); } flight.resolve(result); }
+  function finishRun(result: AutomationActionResult) {
+    const flight = runFlight.current;
+    if (!flight) return;
+    clearTimeout(flight.timer);
+    runFlight.current = undefined;
+    if (mounted.current) {
+      setRunBusy(false);
+      if (result.status === 'needs-input') setPreparationRequest(value => value + 1);
+      if (result.status === 'failed' && result.error) setError(result.error);
+    }
+    flight.resolve(result);
+  }
   useEffect(() => () => { finishRun({ status: 'failed' }); }, []);
   useEffect(() => { if (runFlight.current && runFlight.current.scope !== runScope()) finishRun({ status: 'failed' }); }, [props.workspaceId, draft.projectId, draft.acceptedRequestId]);
   useEffect(() => {
     const flight = runFlight.current;
-    if (!flight?.ruleId || flight.dispatched || readiness.loadedRuleId !== flight.ruleId || readiness.dispatchLoading || savedWorkflow?.id !== store.current.current.workflowId) return;
+    if (!flight?.ruleId || flight.dispatched || readiness.loadedRuleId !== flight.ruleId || savedWorkflow?.id !== store.current.current.workflowId) return;
     if (flight.scope !== runScope()) { finishRun({ status: 'failed' }); return; }
     flight.dispatched = true;
+    clearTimeout(flight.timer);
     if (readiness.remaining) { readiness.reveal(); finishRun({ status: 'needs-input' }); return; }
+    // The run action reads current native state before submitting; a background status refresh does not gate it.
     void readiness.perform('run', { reuseCompleted: !flight.repeat, continuation: flight.continuation }).then(result => { if (runFlight.current === flight) finishRun(result); });
-  }, [runToken, readiness.loadedRuleId, readiness.dispatchLoading, readiness.remaining, savedWorkflow?.id]);
+  }, [runToken, readiness.loadedRuleId, readiness.remaining, savedWorkflow?.id]);
   function createAndRun(options: { repeat?: boolean; continuation?: AutomationContinuation } = {}): Promise<AutomationActionResult> {
     if (targetPurged) { setError('保存项目已永久删除，不能重新运行或查看旧作品；历史费用保留。'); return Promise.resolve({ status: 'failed' }); }
     if (runFlight.current) return runFlight.current.promise;
@@ -86,12 +99,19 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
     const current = store.current.current;
     if (!current.ruleId && !current.workflowSaved && !existingFlow && (result.error || !project || project.kind !== current.plan?.outputKind || result.compiled?.missing.length || current.plan && naturalPreparationMissing(current.plan, current.preparationAnswers || {}).length)) { setPreparationRequest(value => value + 1); return Promise.resolve({ status: 'needs-input' }); }
     let resolve!: (result: AutomationActionResult) => void; const promise = new Promise<AutomationActionResult>(done => { resolve = done; });
-    const flight = { scope: runScope(), token: crypto.randomUUID(), ruleId: undefined as string | undefined, dispatched: false, repeat: !!options.repeat, continuation: options.continuation && { ...options.continuation }, promise, resolve, timer: undefined as ReturnType<typeof setTimeout> | undefined }; runFlight.current = flight; setRunBusy(true); setRunToken(flight.token);
-    flight.timer = setTimeout(() => { if (runFlight.current === flight) { setError('运行设置还未读取完成，当前方案保留。请再次确认开始；不会自动运行。'); finishRun({ status: 'failed' }); } }, 20000);
-    void ensureCreated().then(rule => {
+    const flight = { scope: runScope(), token: crypto.randomUUID(), ruleId: undefined as string | undefined, dispatched: false, repeat: !!options.repeat, continuation: options.continuation && { ...options.continuation }, promise, resolve, timer: undefined as ReturnType<typeof setTimeout> | undefined }; runFlight.current = flight; setRunBusy(true);
+    // Creation has its own deadline. Only time the wait for settings after creation has completed.
+    const ruleSource = currentRule && savedWorkflow?.id === currentRule.workflowId
+      ? Promise.resolve(currentRule)
+      : ensureCreated();
+    void ruleSource.then(rule => {
       if (runFlight.current !== flight) return;
       if (!rule || flight.scope !== runScope()) { finishRun({ status: 'failed' }); return; }
-      flight.ruleId = rule.id; setRunToken(`${flight.token}:ready`);
+      flight.ruleId = rule.id;
+      flight.timer = setTimeout(() => {
+        if (runFlight.current === flight) finishRun({ status: 'failed', error: '方案已保存，运行设置暂未读取完成。请重新点击执行。' });
+      }, 10000);
+      setRunToken(flight.token);
     });
     return promise;
   }
@@ -125,6 +145,7 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
       return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : '已有方案未能恢复，原记录和费用保留。'); return false; }
   }
-  return { store, draft, setDraft, project, selected, bindings, result, planning, error, setError, busy, locked, frozen, savedRule: currentRule, setSavedRule, readiness, entries, ownerId, targetPurged, billingOwnerPurged, save, ensureCreated, createAndRun, runBusy, preparationRequest, newDraft, changeProject, setProductionBinding, adoptDraft, existingFlow, savedWorkflow };
+  const requestPreparation = () => setPreparationRequest(value => value + 1);
+  return { store, draft, setDraft, project, selected, bindings, result, planning, error, setError, busy, locked, frozen, savedRule: currentRule, setSavedRule, readiness, entries, ownerId, targetPurged, billingOwnerPurged, save, ensureCreated, createAndRun, runBusy, preparationRequest, requestPreparation, newDraft, changeProject, setProductionBinding, adoptDraft, existingFlow, savedWorkflow };
 }
 export type NaturalAutomationSession = ReturnType<typeof useNaturalAutomationSession>;

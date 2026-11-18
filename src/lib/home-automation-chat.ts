@@ -74,7 +74,7 @@ export function upsertHomeMessage(conversation: HomeAutomationConversation, mess
 export function homeChatCommand(text: string): 'create' | 'run' | undefined {
   const value = text.trim().replace(/[。！!！]+$/g, '');
   if (/^(?:创建|创建吧|确认创建|就按这个创建|按这个方案创建|创建这个自动化|保存这套自动化)$/.test(value)) return 'create';
-  if (/^(?:运行一次|开始运行|按方案运行一次|运行这个自动化)$/.test(value)) return 'run';
+  if (/^(?:运行一次|开始运行|按方案运行一次|运行这个自动化|执行方案|执行这个方案)$/.test(value)) return 'run';
   return undefined;
 }
 export function homeRefinementCommand(text: string): number | undefined {

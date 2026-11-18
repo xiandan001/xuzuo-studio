@@ -2,16 +2,24 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PageProps } from '../types';
 import type { NaturalAutomationSession } from '../hooks/useNaturalAutomationSession';
+import type { AutomationJob } from '../automation-types';
 import { HomePlanCard } from './HomePlanCard';
 const plan = { version: 1, name: '产品宣传图', objective: '制作清晰的商品宣传图', outputKind: 'image', trigger: { type: 'manual' }, steps: [{ name: '生成实际图片', kind: 'image-generation', instruction: '保留商品结构' }], questions: [], constraints: [], acceptance: ['清晰'], unsupported: [], maxRepairs: 0, illustrations: { mode: 'none', count: 0 } };
-function html(options: { created?: boolean; job?: boolean; artifact?: boolean; unknown?: boolean; scheduled?: boolean; waiting?: boolean; targetPurged?: boolean; billingOwnerPurged?: boolean; questions?: boolean; failedFollowup?: boolean; sessionError?: string; continuation?: boolean } = {}) {
-  const project = { id: 'project', workspaceId: 'workspace', kind: 'image', name: '本地作品' }, job = options.job ? { id: 'job', ruleId: 'rule', runId: 'run', dispatchKey: 'dispatch', status: options.waiting ? 'decision' : 'complete' } : undefined;
+function html(options: { created?: boolean; job?: boolean; artifact?: boolean; unknown?: boolean; scheduled?: boolean; waiting?: boolean; targetPurged?: boolean; billingOwnerPurged?: boolean; questions?: boolean; failedFollowup?: boolean; sessionError?: string; continuation?: boolean; direct?: 'ready' | 'pending' | 'run'; jobWithoutRun?: Pick<AutomationJob, 'status' | 'error'> } = {}) {
+  const project = { id: 'project', workspaceId: 'workspace', kind: 'image', name: '本地作品' };
+  const job = options.job || options.jobWithoutRun ? { id: 'job', ruleId: 'rule', runId: options.job ? 'run' : undefined, dispatchKey: 'dispatch', status: options.waiting ? 'decision' : 'complete', ...options.jobWithoutRun } : undefined;
   const props = { workspaceId: 'workspace', workspace: { name: '工作区' }, ledger: [], projects: options.targetPurged ? [] : [project], purgedProjects: options.targetPurged ? [{ ...project, purgedAt: '2026-11-04T04:00:00Z' }] : options.billingOwnerPurged ? [{ id: 'owner', workspaceId: 'workspace', name: '原规划项目', purgedAt: '2026-11-04T04:00:00Z' }] : [], configuration: { models: [], connections: [], credentials: [], workflows: [] }, workflowRunner: { runs: options.job ? [{ id: 'run', workspaceId: 'workspace', projectId: 'project', mode: 'live', workflowId: 'flow', snapshot: { outputKind: 'image', steps: [] }, status: options.waiting ? 'waiting-review' : 'complete', attempts: [{ status: 'complete', artifacts: options.artifact ? [{ id: 'image', name: '真实结果.png', kind: 'image', mimeType: 'image/png', bytes: 1024 }] : [] }] }] : [] } } as unknown as PageProps;
   const selectedPlan = { ...plan, ...(options.scheduled ? { trigger: { type: 'schedule', intervalMinutes: 60 } } : {}), ...(options.questions ? { questions: ['产品名称是什么？'] } : {}) };
   const session = { draft: { plan: selectedPlan, projectId: 'project', workflowId: 'flow', bindings: {}, ruleId: options.created ? 'rule' : undefined }, project, bindings: {}, result: {}, planning: { active: false }, readiness: { capabilities: [], answers: {}, bindings: {}, errors: [], lastJob: job, dispatchUnknown: options.unknown }, preparationRequest: 0 } as unknown as NaturalAutomationSession;
   session.draft.acceptedRequestId = 'first-plan'; session.draft.requestId = options.failedFollowup ? 'next-plan' : 'first-plan'; session.error = options.sessionError || '';
   if (options.failedFollowup) session.planning.record = { id: 'next-plan', status: 'failed' } as NonNullable<NaturalAutomationSession['planning']['record']>;
-  return renderToStaticMarkup(<HomePlanCard props={props} session={session} continuation={options.continuation ? { previousRuleId: 'previous-rule', previousRunId: 'previous-run' } : undefined} />);
+  const execution = options.direct && {
+    pending: options.direct === 'pending',
+    run: options.direct === 'run' ? props.workflowRunner.runs[0] : undefined,
+    execute: async () => ({ status: 'started' as const }),
+    read: async () => undefined,
+  };
+  return renderToStaticMarkup(<HomePlanCard props={props} session={session} deferProject={!!options.direct} execution={execution || undefined} continuation={options.continuation ? { previousRuleId: 'previous-rule', previousRunId: 'previous-run' } : undefined} />);
 }
 describe('首页方案只突出当前用户主动作', () => {
   it('第二轮规划失败不把错误挂到上一轮成功作品，本轮执行错误仍正常显示', () => {
@@ -25,6 +33,27 @@ describe('首页方案只突出当前用户主动作', () => {
   });
   it('新方案突出按方案制作，保存流程保持低权重，高级设置不默认展开', () => { const view = html(); expect(view).toContain('按这个方案制作'); expect(view).toContain('仅保存流程'); expect(view).toContain('步骤与高级设置'); expect(view).not.toContain('role="region" aria-label="制作前补充信息"'); });
   it('创建后还未开始，主动作变为继续制作', () => { expect(html({ created: true })).toContain('继续制作'); });
+  it('方案卡区分已保存、已接收与尚无运行记录的派工错误', () => {
+    expect(html({ created: true })).toContain('流程已保存，尚未执行。');
+    const queued = html({ created: true, jobWithoutRun: { status: 'queued' } });
+    expect(queued).toContain('任务已接收，正在排队。');
+    expect(queued).toContain('查看制作进度');
+    const failed = html({ created: true, jobWithoutRun: { status: 'decision', error: '模型账户需要重新授权' } });
+    expect(failed).toContain('role="alert">模型账户需要重新授权');
+    expect(failed).not.toContain('仅保存流程');
+  });
+  it('聊天一次性执行在启动前允许另存，受理未知时只允许读取，已有产物直接显示', () => {
+    const ready = html({ direct: 'ready' });
+    expect(ready).toContain('执行方案');
+    expect(ready).toContain('仅保存为自动化');
+    const pending = html({ direct: 'pending' });
+    expect(pending).toContain('读取任务状态');
+    expect(pending).not.toContain('>执行方案<');
+    expect(pending).not.toContain('仅保存为自动化');
+    const started = html({ direct: 'run', job: true, artifact: true });
+    expect(started).toContain('真实结果.png');
+    expect(started).not.toContain('>执行方案<');
+  });
   it('实际有成品的已完成job原位显示真实结果和导出；完成但无成品只看步骤，不伪造成品', () => { const ready = html({ created: true, job: true, artifact: true }); expect(ready).toContain('作品已生成'); expect(ready).toContain('真实结果.png'); expect(ready).toContain('打开编辑器'); expect(ready).toContain('导出图片'); const empty = html({ created: true, job: true }); expect(empty).toContain('查看结果与步骤'); expect(empty).not.toContain('>导出图片<'); });
   it('等待人工检查时保留实际作品和人工验收状态，打开或导出不冒充已交付', () => { const view = html({ created: true, job: true, artifact: true, waiting: true }); expect(view).toContain('作品已生成'); expect(view).toContain('待人工验收'); expect(view).not.toContain('当前版本已交付'); expect(html({ created: true, job: true, waiting: true })).toContain('查看结果与步骤'); });
   it('提交受理未知时只读取任务状态，不用默认主按钮重复运行', () => { expect(html({ created: true, unknown: true })).toContain('读取任务状态'); });

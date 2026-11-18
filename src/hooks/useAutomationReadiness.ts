@@ -73,8 +73,10 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
     const stillCurrent = () => mounted.current && current.current.props.workspaceId === source.props.workspaceId && current.current.rule?.id === source.rule?.id;
     try {
       if (action === 'pause') { await bridge.setEnabled({ id: source.rule.id, enabled: false }); const snapshot = await bridge.snapshot(source.props.workspaceId), updated = snapshot.rules.find(item => item.id === source.rule!.id); if (stillCurrent() && updated) { setOriginRevision(updated.updatedAt); source.onSaved(updated); } return { status: 'saved' }; }
-      const authoritative = (await readAutomationSnapshot(bridge, source.props.workspaceId)).rules.find(rule => rule.id === source.rule!.id);
+      const snapshot = await readAutomationSnapshot(bridge, source.props.workspaceId);
       if (!stillCurrent()) return { status: 'failed' };
+      if (snapshot.available === false || snapshot.issue) throw Error(snapshot.issue || '自动化服务暂不可用，尚未开始制作。');
+      const authoritative = snapshot.rules.find(rule => rule.id === source.rule!.id);
       if (!authoritative) throw Error('当前规则暂时无法读取，请先读取原记录，尚未开始制作。');
       if (authoritative.enabled) throw Error('这条自动化仍在自动运行，请先在自动化设置中暂停，再调整或试运行。');
       if (!recovery.retry()) throw Error('运行设置草稿未能保存，请先重试保存或导出恢复稿。');
@@ -85,19 +87,31 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
         const check = await source.props.workflowRunner.preflight(bound, project.id, input, source.rule.variables, attachments);
         if (!check.ok) { if (stillCurrent()) { setErrors(check.errors); reveal(); } return { status: 'needs-input' }; }
       }
+      if (!stillCurrent()) return { status: 'failed' };
       const changed = source.workflow.steps.some((step, index) => step.modelConfigId !== bound.steps[index].modelConfigId || step.credentialId !== bound.steps[index].credentialId || step.reasoningEffort !== bound.steps[index].reasoningEffort);
       if (changed && !source.props.configuration.saveWorkflow(bound, bound.id, { silent: true })) throw Error('调用设置未能可靠保存，原流程和费用保留。');
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      if (!stillCurrent()) return { status: 'failed' };
       const latest = current.current.props;
       await bridge.syncContext({ workspaceId: source.props.workspaceId, workspaces: latest.workspaces, projects: latest.projects, workflows: latest.configuration.workflows.map(item => item.id === bound.id ? bound : item), models: latest.configuration.models, connections: latest.configuration.connections });
+      if (!stillCurrent()) return { status: 'failed' };
       const updated = await bridge.saveRule({ ...source.rule, id: source.rule.id, enabled: false, input, preparation: { questions, answers: Object.fromEntries(questions.map(question => [question, naturalQuestionAnswer(source.answers, question)])) } });
       if (!stillCurrent()) return { status: 'failed' };
       setOriginRevision(updated.updatedAt); setOriginFlow(flowFingerprint(bound)); setChangedCapabilities([]);
       source.onSaved(updated);
       if (action === 'run') {
         const result = await dispatchAutomationOnce(bridge, localStorage, source.props.workspaceId, updated.id, { ...options, isCurrent: stillCurrent });
-        if (stillCurrent()) { setDispatchScope(`${source.props.workspaceId}/${source.rule.id}`); setDispatchUnknown(result.status === 'unknown'); setDispatchError(result.error || ''); if (result.job) setLastJob(result.job); if (result.job) { source.props.notify(result.status === 'started' ? '制作任务已启动，实际调用费用会逐次记录。' : '已找到原制作任务，没有重复提交。'); source.onRun?.(result.job); } }
+        if (stillCurrent()) {
+          dispatchGeneration.current++;
+          setDispatchLoading(false);
+          setDispatchScope(`${source.props.workspaceId}/${source.rule.id}`);
+          setDispatchUnknown(result.status === 'unknown');
+          setDispatchError(result.error || '');
+          if (result.job) {
+            setLastJob(result.job);
+            source.props.notify(result.status === 'started' ? '制作任务已启动，实际调用费用会逐次记录。' : '已找到原制作任务，没有重复提交。');
+            source.onRun?.(result.job);
+            void readDispatch();
+          }
+        }
         return result;
       }
       else if (action === 'enable') { await bridge.setEnabled({ id: updated.id, enabled: true }); const snapshot = await bridge.snapshot(source.props.workspaceId), enabled = snapshot.rules.find(item => item.id === updated.id); if (stillCurrent() && enabled) { setOriginRevision(enabled.updatedAt); source.onSaved(enabled); source.props.notify('自动触发已启用。'); } }

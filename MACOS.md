@@ -1,5 +1,11 @@
 # macOS 开发与验收
 
+## 2.12.2 对话内执行方案（2026-11-18）
+
+新方案点击「执行方案」后，从当前对话派发一次制作任务。「仅保存为自动化」单独保留。此前已保存的方案可以沿用原规则执行，后台状态刷新不会阻塞按钮。启动回执未确认时可读取原任务状态。生成进度和结果显示在对应方案下。
+
+在原样签名包完成启动和退出检查，并用隔离副本与本机测试模型服务验证了新方案及已保存方案。每条路径点击一次都保存 12 张有效 PNG。重载后结果仍显示在原对话，模型请求次数不变。回归通过 3714 项，4 项 Windows 专用用例跳过。报告见 `outputs/release-v2.12.2/chat-execution-validation.json`。
+
 ## 2.12.1 同步 develop-owner（2026-11-18）
 
 合入 `develop-owner` 的 `c3c985b`，包含上次同步后的 11 个提交。聊天支持排队、长记录分段阅读和内容搜索，方案、制作与导出归到相应轮次。新作品可在工作区建立独立目录，也可自选位置；作品面包屑可返回项目列表。
@@ -146,7 +152,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.1/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.2/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -167,7 +173,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.1/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.2/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。

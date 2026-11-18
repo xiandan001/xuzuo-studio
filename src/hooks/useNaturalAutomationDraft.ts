@@ -11,6 +11,7 @@ export interface NaturalAutomationDraft {
   version: 1; workspaceId: string; projectId: string; input: string; planner: NaturalBinding;
   requestId?: string; plan?: NaturalAutomationPlan; bindings: NaturalAutomationBindings;
   workflowId?: string; creationKey?: string; workflowSaved?: boolean; ruleId?: string;
+  chatExecution?: { workflowId: string; runId?: string };
   planningProjectId?: string; preparationAnswers?: Record<string, string>; calendarResolved?: boolean; needsSetup?: boolean;
   acceptedRequestId?: string; acceptedInput?: string; acceptedPlanningProjectId?: string; requestedCalendarResolved?: boolean; cancelledRequestId?: string;
 }
@@ -41,6 +42,7 @@ export function readNaturalAutomationDraft(key: string, fallback: NaturalAutomat
     const value = JSON.parse(raw);
     if (value?.version !== 1 || value.workspaceId !== fallback.workspaceId || typeof value.input !== 'string' || value.input.length > 10000 || typeof value.projectId !== 'string' || !value.planner || !value.bindings) throw Error('format');
     if (value.plan && !editablePlan(value.plan)) throw Error('plan format');
+    if (value.chatExecution !== undefined && (!value.chatExecution || !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.workflowId || '') || value.chatExecution.runId !== undefined && !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.runId))) throw Error('execution format');
     return { draft: value, issue: '' };
   } catch { return { draft: fallback, issue: '这份自动化草稿暂时无法可靠读取，原记录未覆盖。请先导出或恢复原草稿。' }; }
 }

@@ -3,7 +3,8 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutomationContext, AutomationJob, AutomationRule, AutomationRuleDraft } from '../automation-types';
-import type { WorkflowDefinition, WorkflowDraft } from '../configuration-types';
+import type { WorkflowDefinition, WorkflowDraft, WorkflowRun } from '../configuration-types';
+import type { LiveStartResult } from '../live-types';
 import type { ChatTurn } from '../chat-types';
 import type { LedgerEntry, PageProps, Project } from '../types';
 import type { NaturalAutomationDraft } from '../hooks/useNaturalAutomationDraft';
@@ -59,9 +60,17 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
   const copiedFile = { id: 'copied-reference', name: source.name, mimeType: source.mimeType, bytes: source.bytes, kind: source.kind, createdAt: timestamp, path: '', projectId: 'new-project' };
   let failCopy = copyFails;
   const attachToProject = vi.fn(async (input: { projectId: string; attachmentIds: string[] }) => { if (failCopy) { failCopy = false; throw Error('参考材料复制失败，原文件保留'); } return [{ ...copiedFile, projectId: input.projectId }]; });
-  const desktop = { chat: { attachToProject }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
+  let runs: WorkflowRun[] = [];
+  let setRuns!: (runs: WorkflowRun[]) => void;
+  function addRun(workflow: WorkflowDefinition, projectId: string) {
+    const run = { id: 'direct-run', workflowId: workflow.id, workflowName: workflow.name, projectId, workspaceId, input: plan.objective, variables: {}, mode: 'live', status: 'running', snapshot: workflow, attempts: [], stepIndex: 0, createdAt: timestamp, updatedAt: timestamp } as WorkflowRun;
+    runs = [...runs, run]; setRuns(runs); return run;
+  }
+  const startLive = vi.fn(async (workflow: WorkflowDefinition, projectId: string): Promise<LiveStartResult> => ({ status: 'started', runId: addRun(workflow, projectId).id }));
+  const readStartResult = vi.fn(async (): Promise<LiveStartResult> => ({ status: 'rejected', code: 'NO_PENDING_START', error: '没有待确认的启动' }));
+  const desktop = { chat: { attachToProject }, runtime: { snapshot: async () => ({ runs }) }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
   Object.defineProperty(window, 'desktop', { configurable: true, value: desktop });
-  const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn(async (..._args: unknown[]) => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
+  const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn<PageProps['workflowRunner']['preflight']>(async () => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
   const ledger = Object.freeze([{ id: 'prior-cost', projectId: 'trashed-project', projectName: '旧项目', action: '初次生成', model: '已调用的模型', costCents: 27, costState: 'calculated', billingMode: 'live', time: timestamp, status: 'complete' }]) as unknown as LedgerEntry[];
   const savedLedger = JSON.stringify(ledger), key = naturalAutomationDraftStorageKey(workspaceId, { keyPrefix: `xuzuo-chat-production-v1:${conversationId}:${turn.id}` });
   if (staleRule) {
@@ -77,10 +86,12 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
   let updateWorkflows!: (updater: (current: WorkflowDefinition[]) => WorkflowDefinition[]) => void;
   function Harness() {
     const [projects, setProjects] = useState<Project[]>(withProject ? [makeProject()] : []), [workflows, setWorkflows] = useState<WorkflowDefinition[]>(savedWorkflows);
+    const [visibleRuns, updateRuns] = useState(runs); setRuns = updateRuns;
     updateProjects = setProjects; updateWorkflows = setWorkflows; savedWorkflows = workflows;
     applyProjectChanges = (id, changes) => setProjects(current => current.map(project => project.id === id ? { ...project, ...changes } : project));
     const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model], credentials: missing === 'key' ? [] : [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }], workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests } as unknown as PageProps;
     props.onUpdateProject = updateProject;
+    Object.assign(props.workflowRunner, { runs: visibleRuns, startLive, readStartResult });
     return <ChatPlanProduction props={props} turn={activeTurn} conversationId={conversationId} planner={planner} />;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
@@ -89,55 +100,77 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
     await act(async () => { updateProjects([project]); options!.onCreated!(project); });
   }
   async function releaseReferences() { expect(pendingReferences).toBeTruthy(); const value = pendingReferences!; pendingReferences = undefined; await act(async () => applyProjectChanges(value.id, value.changes)); }
-  return { key, directoryRequests, preflight, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, attachToProject, updateProject, releaseReferences, readRules: () => rules, readJobs: () => jobs, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
+  return { key, directoryRequests, preflight, startLive, readStartResult, addRun, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, attachToProject, updateProject, releaseReferences, readRules: () => rules, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
   it('上轮聊天材料先复制成真实项目引用，等props回显后才预检派发', async () => {
-    const f = await fixture({ attachments: true, delayReferences: true }); await click('按这个方案制作'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
+    const f = await fixture({ attachments: true, delayReferences: true }); await click('执行方案'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
     await until(() => f.updateProject.mock.calls.length === 1, 'copied references waiting for parent echo');
     expect(f.attachToProject).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation', projectId: 'new-project', attachmentIds: ['prior-chat-image'] });
     expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await f.releaseReferences(); await until(() => f.trigger.mock.calls.length === 1, 'dispatch after material adoption');
+    await f.releaseReferences(); await until(() => f.startLive.mock.calls.length === 1, 'dispatch after material adoption');
     expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); expect(f.attachToProject).toHaveBeenCalledOnce(); f.verifyLedger();
-    await click('查看制作进度'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.trigger).toHaveBeenCalledOnce();
+    expect(f.startLive).toHaveBeenCalledOnce(); expect(f.saveRule).not.toHaveBeenCalled();
   });
   it('材料复制失败不触发付费流程，重试成功后只派发一次且旧费用保留', async () => {
-    const f = await fixture({ withProject: true, attachments: true, copyFails: true }); await click('按这个方案制作');
+    const f = await fixture({ withProject: true, attachments: true, copyFails: true }); await click('执行方案');
     await until(() => host.textContent!.includes('参考材料复制失败'), 'copy failure shown'); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
-    await click('按这个方案制作'); await until(() => f.trigger.mock.calls.length === 1, 'retry material preparation'); expect(f.attachToProject).toHaveBeenCalledTimes(2); expect(f.preflight).toHaveBeenCalledOnce(); f.verifyLedger();
-    await click('查看制作进度'); expect(f.attachToProject).toHaveBeenCalledTimes(2);
+    await click('执行方案'); await until(() => f.startLive.mock.calls.length === 1, 'retry material preparation'); expect(f.attachToProject).toHaveBeenCalledTimes(2); expect(f.preflight).toHaveBeenCalledOnce(); f.verifyLedger();
+    expect(f.startLive).toHaveBeenCalledOnce(); expect(f.saveRule).not.toHaveBeenCalled();
   });
   it('仅保存带附件的方案不复制、不付费，实际开始时再带入材料', async () => {
-    const f = await fixture({ withProject: true, attachments: true }); await click('以后再做'); await until(() => f.readRules().length === 1, 'saved material plan');
+    const f = await fixture({ withProject: true, attachments: true }); await click('仅保存为自动化'); await until(() => f.readRules().length === 1, 'saved material plan');
     expect(f.attachToProject).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await click('继续制作'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
+    await click('执行方案'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
   });
   it('无项目先保留完整方案，明确制作并完成项目回调后才预检和派发一次', async () => {
     const f = await fixture(); expect(host.textContent).toContain(plan.name); expect(host.textContent).toContain('开始制作时创建项目'); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await click('按这个方案制作'); expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await f.created(); await until(() => f.trigger.mock.calls.length === 1, 'new project production dispatch');
-    expect(f.saveWorkflow).toHaveBeenCalledOnce(); expect(f.preflight).toHaveBeenCalledOnce(); expect(f.readJobs()[0].projectId).toBe('new-project'); expect(f.readRules()[0].workflowId).toBe(f.readWorkflows()[0].id);
-    expect(f.readWorkflows()[0].steps.filter(step => step.kind === 'text').every(step => step.reasoningEffort === 'high')).toBe(true); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
-    await click('查看制作进度'); expect(f.trigger).toHaveBeenCalledOnce();
+    await click('执行方案'); expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
+    await f.created(); await until(() => f.startLive.mock.calls.length === 1, 'new project production dispatch');
+    expect(f.saveWorkflow).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); expect(f.preflight).toHaveBeenCalledOnce();
+    const [workflow, target] = f.startLive.mock.calls[0]; expect(target).toBe('new-project');
+    expect(workflow.steps.filter(step => step.kind === 'text').every(step => step.reasoningEffort === 'high')).toBe(true); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
+    expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution).toEqual({ workflowId: workflow.id, runId: 'direct-run' });
   });
   it.each(['key', 'model'] as const)('缺少%s时不会保存或派发任何生产调用', async missing => {
-    const f = await fixture({ withProject: true, missing }); await click('按这个方案制作');
+    const f = await fixture({ withProject: true, missing }); await click('执行方案');
     expect(f.directoryRequests).not.toHaveBeenCalled(); expect(f.saveWorkflow).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
   });
   it('项目选择取消后保留方案，重新点击仍只打开项目选择且不提前付费', async () => {
-    const f = await fixture(); await click('按这个方案制作'); await act(async () => f.directoryRequests.mock.calls[0][1]!.onCancelled!());
-    expect(host.textContent).toContain(plan.name); await click('按这个方案制作'); expect(f.directoryRequests).toHaveBeenCalledTimes(2); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
+    const f = await fixture(); await click('执行方案'); await act(async () => f.directoryRequests.mock.calls[0][1]!.onCancelled!());
+    expect(host.textContent).toContain(plan.name); await click('执行方案'); expect(f.directoryRequests).toHaveBeenCalledTimes(2); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
   });
   it('只保存流程使用真实保存链，但不会预检、运行或重新调用规划AI', async () => {
-    const f = await fixture({ withProject: true }); await click('以后再做'); await until(() => f.readRules().length === 1, 'saved workflow rule');
+    const f = await fixture({ withProject: true }); await click('仅保存为自动化'); await until(() => f.readRules().length === 1, 'saved workflow rule');
     expect(f.saveWorkflow).toHaveBeenCalledOnce(); expect(f.readRules()[0].enabled).toBe(false); expect(f.trigger).not.toHaveBeenCalled(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
   });
-  it('旧规则目标失效后为新项目fork流程，不复用旧rule、不改旧流程或旧费用', async () => {
+  it('预检明确失败时在原对话显示原因，不保存自动化也不派发', async () => {
+    const f = await fixture({ withProject: true });
+    f.preflight.mockResolvedValueOnce({ ok: false, errors: ['保存目录不可用'], warnings: [], steps: [], unknownCost: false });
+    await click('执行方案');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('保存目录不可用');
+    expect(f.startLive).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled();
+    await click('执行方案'); expect(f.startLive).toHaveBeenCalledOnce();
+  });
+  it('启动回执丢失时只能读取原任务，读取成功后在方案下显示进度', async () => {
+    const f = await fixture({ withProject: true });
+    f.startLive.mockResolvedValueOnce({ status: 'unknown', dispatchKey: 'd'.repeat(64), error: '启动结果尚未确认' });
+    await click('执行方案');
+    const [workflow, projectId] = f.startLive.mock.calls[0];
+    expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution).toEqual({ workflowId: workflow.id });
+    expect([...host.querySelectorAll('button')].some(button => button.textContent?.trim() === '执行方案')).toBe(false);
+    f.readStartResult.mockImplementationOnce(async () => ({ status: 'started', runId: f.addRun(workflow, projectId).id, recovered: true }));
+    await click('读取任务状态');
+    expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution.runId).toBe('direct-run');
+    expect(host.querySelector('[aria-label="当前方案制作结果"]')).not.toBeNull();
+    expect(f.startLive).toHaveBeenCalledOnce(); expect(f.saveRule).not.toHaveBeenCalled();
+  });
+  it('旧规则目标失效后直接执行到新项目，保留旧流程、规则和费用', async () => {
     const f = await fixture({ staleRule: true }), oldRule = JSON.stringify(f.oldRule), oldWorkflow = JSON.stringify(f.oldWorkflow);
-    await click('继续制作'); expect(f.trigger).not.toHaveBeenCalled(); await f.created(makeProject('replacement-project')); await until(() => f.trigger.mock.calls.length === 1, 'forked project production dispatch');
-    const requested = f.trigger.mock.calls[0][0].ruleId; expect(requested).not.toBe('old-rule'); expect(f.readRules().find(rule => rule.id === requested)?.projectId).toBe('replacement-project');
-    expect(JSON.stringify(f.readRules().find(rule => rule.id === 'old-rule'))).toBe(oldRule); expect(JSON.stringify(f.readWorkflows().find(workflow => workflow.id === 'old-workflow'))).toBe(oldWorkflow); expect(f.readWorkflows()).toHaveLength(2); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
-    const draft = JSON.parse(localStorage.getItem(f.key)!); expect(draft.projectId).toBe('replacement-project'); expect(draft.ruleId).toBe(requested); expect(draft.creationKey).not.toBe('original-creation');
+    await click('执行方案'); expect(f.trigger).not.toHaveBeenCalled(); await f.created(makeProject('replacement-project')); await until(() => f.startLive.mock.calls.length === 1, 'replacement project production dispatch');
+    expect(f.startLive.mock.calls[0][1]).toBe('replacement-project'); expect(f.saveRule).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.readRules().find(rule => rule.id === 'old-rule'))).toBe(oldRule); expect(JSON.stringify(f.readWorkflows().find(workflow => workflow.id === 'old-workflow'))).toBe(oldWorkflow); expect(f.readWorkflows()).toHaveLength(1); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
+    const draft = JSON.parse(localStorage.getItem(f.key)!); expect(draft.projectId).toBe('replacement-project'); expect(draft.ruleId).toBeUndefined(); expect(draft.chatExecution.runId).toBe('direct-run'); expect(draft.creationKey).not.toBe('original-creation');
   });
 });
