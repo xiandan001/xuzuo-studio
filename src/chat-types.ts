@@ -33,8 +33,10 @@ export interface ChatTurn {
   credentialId: string;
   reasoningEffort?: ReasoningEffort;
   sourceTurnId?: string;
+  planFromTurnId?: string;
   mode?: 'chat' | 'plan';
   outputKind?: ProjectKind;
+  imagePreset?: '微信红包封面';
   plan?: NaturalAutomationPlan;
   contextTruncated?: boolean;
   attachments?: ChatAttachment[];
@@ -94,8 +96,10 @@ export interface ChatStartRequest {
   credentialId: CredentialMetadata['id'];
   reasoningEffort?: ReasoningEffort;
   sourceTurnId?: string;
+  planFromTurnId?: string;
   mode?: 'chat' | 'plan';
   outputKind?: ProjectKind;
+  imagePreset?: '微信红包封面';
   attachmentIds?: string[];
   target?: ChatTarget;
 }

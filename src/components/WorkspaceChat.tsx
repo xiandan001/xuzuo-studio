@@ -28,7 +28,8 @@ import { normalizeReasoningEffort } from '../lib/reasoning-options';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { ChatAttachments } from './ChatAttachments';
 import { ChatScenarioPicker } from './ChatScenarioPicker';
-import { availableChatScenarios, chatScenarioAttachmentIssue, chatScenarioInput, findChatScenario, type ChatScenario } from '../lib/chat-scenarios';
+import { availableChatScenarios, chatScenarioAttachmentIssue, chatScenarioInput, findChatScenario, replyProductionScenario, type ChatScenario } from '../lib/chat-scenarios';
+import { WECHAT_RED_PACKET_COVER } from '../lib/wechat-red-packet-cover';
 import { recentChatReferences, scenarioChatReferences } from '../lib/chat-reference-selection';
 import { prepareSvgReference } from '../lib/svg-reference';
 import { prepareAnimationReference } from '../lib/generated-animation-reference';
@@ -110,7 +111,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const [kind, setKind] = useRememberedString(`workspace:${props.workspaceId}:chat-format`, 'image');
   const [scenarioId, setScenarioId] = useRememberedString(`workspace:${props.workspaceId}:chat-scenario`, mode === 'plan' ? kind === 'image' ? 'image-poster' : `document-${kind}` : 'chat-default');
   const scenarios = useMemo(() => availableChatScenarios(props.workspaceId, props.configuration.useTemplates), [props.workspaceId, props.configuration.useTemplates]);
-  const scenario = findChatScenario(scenarios, scenarioId), isTool = scenario.entry === 'image-workbench';
+  const scenario = findChatScenario(scenarios, scenarioId);
   const [toolBusy, setToolBusy] = useState(false), toolPending = useRef(false), alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [saveTurn, setSaveTurn] = useState<ChatTurn>();
@@ -122,7 +123,9 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const turns = chat.conversation?.turns || [], latest = turns.at(-1), latestPlan = [...turns].reverse().find(turn => turn.plan);
   const productionLinks = chat.conversation?.productions || [];
   const timeline = useMemo(() => chatTimeline(turns, chat.conversation?.exports || [], productionLinks), [turns, chat.conversation?.exports, productionLinks]);
-  const range = chatWindowRange(timeline.length, windowStart), planReference = useChatPlanReference(props.workspaceId + ':' + conversationId, turns);
+  const range = chatWindowRange(timeline.length, windowStart), planReference = useChatPlanReference(props.workspaceId + ':' + conversationId, turns, input);
+  const separateQuote = !!planReference.reference && !planReference.reference.inDraft;
+  const isTool = scenario.entry === 'image-workbench' && !planReference.reference;
   const visibleTimeline = timeline.slice(range.start, range.end);
   const visibleKeys = visibleTimeline.map(item => item.key).join('\u0000');
   const queued = chat.conversation?.queue || [], willQueue = chat.queue.supported && (chat.running || queued.length > 0);
@@ -219,8 +222,8 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     if (chat.running && (retry || !chat.queue.supported)) return;
     const preparedDiscussion = !retry && targetData && targetAction === 'discuss' && ['image/gif', 'image/svg+xml'].includes(targetData.inspection.artifact.mimeType) ? await discussionReference() : undefined;
     if (!retry && targetData && targetAction === 'discuss' && ['image/gif', 'image/svg+xml'].includes(targetData.inspection.artifact.mimeType) && !preparedDiscussion?.length) return;
-    const selectedFiles = retry?.attachments || preparedDiscussion || (targetData ? attachments.files : scenarioChatReferences(scenario, attachments.files, recentChatReferences(turns), !!selected.model?.capabilities.includes('vision')));
-    const text = retry?.userText || input.text.trim() || (planReference.reference ? mode === 'plan' ? '请依据引用内容规划制作方案。' : '请结合引用内容继续回答。' : selectedFiles.length ? '请结合附件回答，并说明其中的关键信息。' : ''), model = selected.model;
+    const selectedFiles = retry?.attachments || preparedDiscussion || (targetData || planReference.reference ? attachments.files : scenarioChatReferences(scenario, attachments.files, recentChatReferences(turns), !!selected.model?.capabilities.includes('vision')));
+    const text = retry?.userText || input.text.trim() || (separateQuote ? mode === 'plan' ? '请依据引用内容规划制作方案。' : '请结合引用内容继续回答。' : selectedFiles.length ? '请结合附件回答，并说明其中的关键信息。' : ''), model = selected.model;
     const connection = props.configuration.connections.find(item => item.id === model?.connectionId);
     if (!text) return;
     const effectiveFiles = selectedFiles;
@@ -234,7 +237,10 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     const submittedVersion = input.revision.current, attachmentVersion = attachments.revision.current;
     sending.current = true; pinned.current = true; windowScroll.current = 'end'; setWindowStart(undefined); setSearchMatch('');
     try {
-      const request: ChatStartRequest = { id: crypto.randomUUID(), workspaceId: props.workspaceId, conversationId, text, requestText, attachmentIds: selectedFiles.map(file => file.id), model, connection, credentialId: selected.credentialId, reasoningEffort: normalizeReasoningEffort(connection, model, binding.reasoningEffort), target: retry ? retry.target : targetData?.target, mode: retry?.mode || (targetData ? 'chat' : mode === 'plan' ? 'plan' : 'chat'), outputKind: retry?.outputKind || (HOME_CREATION_KINDS.some(item => item.kind === kind) ? kind : 'image') as ProjectKind, ...(retry ? { sourceTurnId: retry.id } : {}) };
+      const imagePreset = retry ? retry.imagePreset : !targetData && mode === 'plan' && scenario.imagePreset === WECHAT_RED_PACKET_COVER ? WECHAT_RED_PACKET_COVER : undefined;
+      const planFromTurnId = retry ? retry.planFromTurnId : !targetData && mode === 'plan' ? planReference.reference?.turnId : undefined;
+      const request: ChatStartRequest = { id: crypto.randomUUID(), workspaceId: props.workspaceId, conversationId, text, requestText, attachmentIds: selectedFiles.map(file => file.id), model, connection, credentialId: selected.credentialId, reasoningEffort: normalizeReasoningEffort(connection, model, binding.reasoningEffort), target: retry ? retry.target : targetData?.target, mode: retry?.mode || (targetData ? 'chat' : mode === 'plan' ? 'plan' : 'chat'), outputKind: retry?.outputKind || (HOME_CREATION_KINDS.some(item => item.kind === kind) ? kind : 'image') as ProjectKind, ...(imagePreset ? { imagePreset } : {}), ...(retry ? { sourceTurnId: retry.id } : {}) };
+      if (planFromTurnId) request.planFromTurnId = planFromTurnId;
       if (!retry) planReference.markSubmitted(request.id);
       const accepted = !retry && willQueue ? await chat.queue.enqueue({ ...request, sceneName: scenario.name }) : await chat.send(request);
       if (accepted && !retry && alive.current) {
@@ -246,7 +252,23 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   }
   function chooseScenario(value: ChatScenario) { setScenarioId(value.id); setMode(value.mode); if (value.outputKind) setKind(value.outputKind); chat.setError(''); textarea.current?.focus(); }
   function switchMode(value: 'chat' | 'plan') { setMode(value); setScenarioId(value === 'chat' ? 'chat-default' : kind === 'image' ? 'image-poster' : `document-${kind}`); }
-  function make(turn: ChatTurn) { planReference.select(turn); setTargetData(undefined); switchMode('plan'); chat.setError(''); textarea.current?.focus({ preventScroll: true }); }
+  function make(turn: ChatTurn) {
+    if (planReference.reference?.turnId === turn.id && planReference.reference.inDraft && mode === 'plan') {
+      textarea.current?.focus({ preventScroll: true });
+      return;
+    }
+    const match = replyProductionScenario(scenarios, turn, turns);
+    if (!attachments.files.length && planReference.reference?.turnId !== turn.id) {
+      const references = turn.contextAttachments?.length ? turn.contextAttachments : turn.attachments;
+      if (references?.length) attachments.restoreDraft(references);
+    }
+    planReference.select(turn);
+    setTargetData(undefined);
+    if (match) chooseScenario(match);
+    else switchMode('plan');
+    chat.setError('');
+    textarea.current?.focus({ preventScroll: true });
+  }
   function openTool() {
     if (toolPending.current) return;
     const files = (attachments.files.length ? attachments.files : (latest?.contextAttachments?.length ? latest.contextAttachments : latest?.attachments || [])).filter(file => file.mimeType.startsWith("image/"));
@@ -315,7 +337,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
       {targetData?.note && <p className="workspace-chat-note">{targetData.note}</p>}
       {targetDiscussionIssue && targetData?.inspection.artifact.mimeType === 'image/gif' && <p className="workspace-chat-note">这份动画尚未作为参考发送。<button type="button" className="text-button" onClick={openGifWorkshop}>打开 GIF 工坊修改</button></p>}
       <textarea ref={textarea} rows={3} maxLength={10000} aria-label="聊天内容" placeholder={targetData ? targetAction === 'edit' ? '说出这份成品要改哪里…直接生成独立修订，原稿与未保存草稿保留' : '先讨论这份成品，你想了解什么？' : scenario.placeholder} value={input.text} onChange={event => input.setText(event.target.value)} onPaste={event => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); addIncomingFiles(files); } }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} />
-      <div className="workspace-chat-composer-footer"><span><button ref={attachmentTrigger} type="button" className="workspace-chat-attachment-add" aria-label="添加聊天附件" aria-expanded={attachmentMenu} disabled={attachments.busy || toolBusy || !chat.available} onClick={() => setAttachmentMenu(value => !value)}>{attachments.busy ? <LoaderCircle size={16} className="spin" /> : <Paperclip size={16} />}附件{attachments.files.length ? ` · ${attachments.files.length}` : ''}</button>{continuingTool ? '直接打开工具，不影响当前回复' : refinement.unknown ? '上次提交尚未确认，请先读取任务状态' : editingTarget ? '输入修改要求，生成独立修订' : !selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? chat.queue.supported ? '可继续写，点击排队后按当前设置发送' : '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span>{stopInComposer ? <div className="chat-queue-send-group">{chat.queue.supported && <button className="chat-queue-submit" type="submit" aria-label="排队发送消息" disabled={(!input.text.trim() && !attachments.files.length && !planReference.reference) || chat.pending || chat.queue.busy || !!chat.queue.unknown || attachments.busy || targetBusy}>{chat.queue.busy ? <LoaderCircle size={15} className="spin" /> : <ArrowUp size={15} />}排队发送</button>}<button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button></div> : <button className={`workspace-chat-send${continuingTool || editingTarget ? ' is-tool' : ''}`} type="submit" disabled={(editingTarget ? !input.text.trim() : !continuingTool && !input.text.trim() && !attachments.files.length && !planReference.reference) || (!continuingTool && (chat.pending || chat.loading)) || attachments.busy || toolBusy || targetBusy || refinement.busy || !!refinement.unknown || chat.queue.busy || !!chat.queue.unknown || !chat.available} aria-label={editingTarget ? '开始精修选定成品' : continuingTool ? `进入${scenario.name}` : willQueue ? '排队发送消息' : '发送聊天消息'}>{chat.pending && !continuingTool || toolBusy || refinement.busy || chat.queue.busy ? <LoaderCircle size={19} className="spin" /> : editingTarget ? <><WandSparkles size={18} /><span>开始精修</span></> : continuingTool ? <><WandSparkles size={18} /><span>进入{scenario.name}</span></> : <ArrowUp size={21} />}</button>}</div>
+      <div className="workspace-chat-composer-footer"><span><button ref={attachmentTrigger} type="button" className="workspace-chat-attachment-add" aria-label="添加聊天附件" aria-expanded={attachmentMenu} disabled={attachments.busy || toolBusy || !chat.available} onClick={() => setAttachmentMenu(value => !value)}>{attachments.busy ? <LoaderCircle size={16} className="spin" /> : <Paperclip size={16} />}附件{attachments.files.length ? ` · ${attachments.files.length}` : ''}</button>{continuingTool ? '直接打开工具，不影响当前回复' : refinement.unknown ? '上次提交尚未确认，请先读取任务状态' : editingTarget ? '输入修改要求，生成独立修订' : !selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? chat.queue.supported ? '可继续写，点击排队后按当前设置发送' : '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span>{stopInComposer ? <div className="chat-queue-send-group">{chat.queue.supported && <button className="chat-queue-submit" type="submit" aria-label="排队发送消息" disabled={(!input.text.trim() && !attachments.files.length && !separateQuote) || chat.pending || chat.queue.busy || !!chat.queue.unknown || attachments.busy || targetBusy}>{chat.queue.busy ? <LoaderCircle size={15} className="spin" /> : <ArrowUp size={15} />}排队发送</button>}<button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button></div> : <button className={`workspace-chat-send${continuingTool || editingTarget ? ' is-tool' : ''}`} type="submit" disabled={(editingTarget ? !input.text.trim() : !continuingTool && !input.text.trim() && !attachments.files.length && !separateQuote) || (!continuingTool && (chat.pending || chat.loading)) || attachments.busy || toolBusy || targetBusy || refinement.busy || !!refinement.unknown || chat.queue.busy || !!chat.queue.unknown || !chat.available} aria-label={editingTarget ? '开始精修选定成品' : continuingTool ? `进入${scenario.name}` : willQueue ? '排队发送消息' : '发送聊天消息'}>{chat.pending && !continuingTool || toolBusy || refinement.busy || chat.queue.busy ? <LoaderCircle size={19} className="spin" /> : editingTarget ? <><WandSparkles size={18} /><span>开始精修</span></> : continuingTool ? <><WandSparkles size={18} /><span>进入{scenario.name}</span></> : <ArrowUp size={21} />}</button>}</div>
       {!chat.available && <p className="workspace-chat-note">真实聊天请使用最新版桌面应用，Key 保存在本机。</p>}
     </form>
     {activePlanTurn && <p className="workspace-chat-bottom-note">制作任务会在后台排队运行；你可以切回“聊天”继续沟通。</p>}

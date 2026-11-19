@@ -34,7 +34,7 @@ const plan = { version: 1 as const, name: '产品合作说明书', objective: '�
 const turn: ChatTurn = { id: 'plan-turn', userText: '制作完整合作说明书', text: JSON.stringify(plan), mode: 'plan', plan, status: 'complete', modelName: '已选择的文字模型', modelId: 'gpt-6.1-terra', modelConfigId: 'text-model', credentialId: 'account-metadata', reasoningEffort: 'high', costCents: 3, costState: 'calculated', createdAt: timestamp, updatedAt: timestamp };
 const makeProject = (id = 'new-project'): Project => ({ id, workspaceId: 'workspace', name: plan.name, kind: 'word', description: plan.objective, costCents: 0, status: 'draft', version: 0, accent: 'blue', updatedAt: timestamp });
 
-async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean } = {}) {
+async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false, cover = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean; cover?: boolean } = {}) {
   const conversationId = 'conversation', workspaceId = 'workspace';
   const planner = { modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: 'high' as const };
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
@@ -56,7 +56,12 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
   });
   const planningStart = vi.fn(async () => { throw Error('A saved chat plan must not be planned or billed again'); });
   const source = { id: 'prior-chat-image', name: '上轮参考图.png', mimeType: 'image/png', kind: 'image' as const, bytes: 123, sha256: 'a'.repeat(64), createdAt: timestamp };
-  const activeTurn = attachments ? { ...turn, attachments: [], contextAttachments: [source] } : turn;
+  const activeTurn: ChatTurn = attachments ? { ...turn, attachments: [], contextAttachments: [source] } : { ...turn };
+  if (cover) {
+    model.capabilities.push('image-generation');
+    activeTurn.imagePreset = '微信红包封面';
+    activeTurn.plan = { ...plan, objective: '制作小猫红包封面', outputKind: 'image', steps: [{ kind: 'image-generation', name: '制作封面', instruction: '画橘猫' }] };
+  }
   const copiedFile = { id: 'copied-reference', name: source.name, mimeType: source.mimeType, bytes: source.bytes, kind: source.kind, createdAt: timestamp, path: '', projectId: 'new-project' };
   let failCopy = copyFails;
   const attachToProject = vi.fn(async (input: { projectId: string; attachmentIds: string[] }) => { if (failCopy) { failCopy = false; throw Error('参考材料复制失败，原文件保留'); } return [{ ...copiedFile, projectId: input.projectId }]; });
@@ -104,6 +109,17 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
+  it('红包方案在明确执行前不派发，创建项目后用红包参数生产并保存场景', async () => {
+    const f = await fixture({ cover: true });
+    expect(JSON.parse(localStorage.getItem(f.key)!).imagePreset).toBe('微信红包封面');
+    expect(f.startLive).not.toHaveBeenCalled();
+    await click('执行方案'); await f.created({ ...makeProject(), kind: 'image' });
+    await until(() => f.startLive.mock.calls.length === 1, 'red packet cover dispatch');
+    const workflow = f.startLive.mock.calls[0][0];
+    expect(workflow.imagePreset).toBe('微信红包封面');
+    expect(workflow.steps.find(step => step.kind === 'image-generation')).toMatchObject({ imageOutputFormat: 'png', count: 1, imageBackground: 'opaque', prompt: expect.stringContaining('微信红包封面构图') });
+    f.verifyLedger();
+  });
   it('上轮聊天材料先复制成真实项目引用，等props回显后才预检派发', async () => {
     const f = await fixture({ attachments: true, delayReferences: true }); await click('执行方案'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
     await until(() => f.updateProject.mock.calls.length === 1, 'copied references waiting for parent echo');

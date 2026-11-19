@@ -230,11 +230,27 @@ describe('普通聊天的真实组件交互', () => {
     expect(f.cancel).toHaveBeenCalledOnce(); expect(host.textContent).toContain('已经写出的内容'); await click('重新回答');
     const [first, second] = f.start.mock.calls.map(call => call[0]); expect(second.id).not.toBe(first.id); expect(second.sourceTurnId).toBe(first.id); expect(f.createProject).not.toHaveBeenCalled();
   });
-  it('聊天回复转制作先填入资料和制作模式，不因切换而创建项目或调用模型', async () => {
-    const f = await fixture(); await input('先讨论产品海报'); await click('发送聊天消息'); await f.update('使用白底与蓝色标题', 'complete'); await click('转为制作方案');
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value).toBe(''); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.textContent).toContain('先出方案，确认后才制作');
-    expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled(); await click('发送聊天消息');
-    expect(f.start.mock.calls[1][0].mode).toBe('plan'); expect(f.start.mock.calls[1][0].requestText).toContain('先讨论产品海报'); expect(f.start.mock.calls[1][0].requestText).toContain('使用白底与蓝色标题'); expect(f.createProject).not.toHaveBeenCalled();
+  it('聊天转制作将原要求与答复填入空输入框，按编辑后的文字发送', async () => {
+    const f = await fixture();
+    const original = '制作好看可爱的微信红包封面', reply = '奶白色小猫趴在红包上。底部加三个铃铛。';
+    await input(original); await click('发送聊天消息'); await f.update(reply, 'complete'); await click('转为制作方案');
+    const prefilled = host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value;
+    expect(prefilled).toContain(original); expect(prefilled).toContain(reply);
+    expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toBe('场景：微信红包封面');
+    expect(host.textContent).toContain('先出方案，确认后才制作');
+    expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+    const edited = prefilled.replace('底部加三个铃铛。', '底部只放一片柿子叶。');
+    await input('');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="发送聊天消息"]')?.disabled).toBe(true);
+    await input(edited); await click('转为制作方案');
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', edited);
+    await click('发送聊天消息');
+    expect(f.start).toHaveBeenCalledTimes(2);
+    const request = f.start.mock.calls[1][0];
+    expect(request).toMatchObject({ mode: 'plan', outputKind: 'image', imagePreset: '微信红包封面', text: edited });
+    expect(request.requestText).toContain('底部只放一片柿子叶。');
+    expect(request.requestText).not.toContain('铃铛');
+    expect(f.createProject).not.toHaveBeenCalled();
   });
   it('未知模型只提供自动，账户摘要代替单Key下拉', async () => {
     const f = await fixture('unknown-model'); const reasoning = host.querySelector<HTMLButtonElement>('[aria-label="推理强度"]')!;
@@ -301,17 +317,54 @@ describe('有界长聊天和保留草稿的制作引用', () => {
     const after = { turns: ids().length, nodes: host.querySelector('.workspace-chat-thread')!.querySelectorAll('*').length };
     expect(before.turns).toBe(300); expect(after.nodes).toBeLessThan(before.nodes / 8);
     await input('跨页未发草稿'); await click('转为制作方案');
+    const selectedDraft = host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value;
+    expect(selectedDraft).toContain('回复正文 0'); expect(selectedDraft.endsWith('跨页未发草稿')).toBe(true);
     await click('查看后 20 条'); await flush(); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-20');
     await click('查看前 20 条'); await flush(); expect(ids()[0]).toBe('turn-0');
     for (const index of [150, 299]) { f.props.searchTarget = { ...f.props.searchTarget!, token: 'search-' + index, turnId: 'turn-' + index }; await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); await flush(); expect(ids()).toHaveLength(20); expect(ids()).toContain('turn-' + index); }
     const readingThread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!; Object.defineProperty(readingThread, 'scrollHeight', { configurable: true, value: 5000 }); readingThread.scrollTop = 123;
     await click('回到最新回复'); await flush(); expect(readingThread.scrollTop).toBe(5000); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-280'); expect(ids().at(-1)).toBe('turn-299');
-    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '跨页未发草稿'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy();
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', selectedDraft);
     expect((await f.read({ conversationId: 'long-conversation' })).turns).toEqual(original); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled(); expect(f.props.ledger).toEqual([]);
     console.log('CHAT_WINDOW_DOM_MEASUREMENT ' + JSON.stringify({ totalTurns: 300, before, after, scope: 'Actual ChatMessagePair DOM under the previous search-to-first 300-turn range versus the bounded WorkspaceChat; no provider calls, not native timing' }));
   });
-  it('转制作不替换输入或附件，引用可取消并随草稿恢复，明确发送前不调用模型', async () => {
-    const f = await fixture(); await input('先讨论作品'); await click('发送聊天消息'); await f.update('回复中的完整创作方向', 'complete');
+  it('自由聊天转制作自动选中微信红包封面，发送时带入原要求、回复、草稿和附件', async () => {
+    const f = await fixture();
+    const original = '制作好看可爱的微信红包封面', reply = '可以做一款「接住好运！」小猫红包封面。', draft = '底色用柿子红，保留奶白色小猫。';
+    await input(original); await click('发送聊天消息'); await f.update(reply, 'complete');
+    f.bridge.importAttachments.mockResolvedValue([{ id: 'cover-palette', name: '配色说明.txt', mimeType: 'text/plain', bytes: 15, kind: 'text', sha256: 'a'.repeat(64), createdAt: now() }]);
+    await addFiles(); await input(draft); await click('转为制作方案');
+    expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toBe('场景：微信红包封面');
+    const combined = host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value;
+    expect(combined).toContain(original); expect(combined).toContain(reply); expect(combined.endsWith(draft)).toBe(true);
+    expect(host.querySelector('[aria-label="本轮附件"]')?.textContent).toContain('配色说明.txt');
+    expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+    await click('发送聊天消息');
+    expect(f.start).toHaveBeenCalledTimes(2);
+    const request = f.start.mock.calls[1][0];
+    expect(request).toMatchObject({ mode: 'plan', outputKind: 'image', text: combined, attachmentIds: ['cover-palette'] });
+    for (const text of [original, reply, draft]) expect(request.requestText).toContain(text);
+    expect(f.createProject).not.toHaveBeenCalled();
+  });
+  it('转换历史回复按所选轮次识别场景，允许手动改选后发送制作方案', async () => {
+    const f = await fixture();
+    await input('帮我制作一张 iPad 壁纸'); await click('发送聊天消息'); await f.update('推荐浅蓝色天空。', 'complete');
+    await input('现在想做微信红包封面'); await click('发送聊天消息'); await f.update('可以设计小猫红包。', 'complete');
+    await click('转为制作方案');
+    expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toBe('场景：壁纸');
+    expect(host.querySelector('[aria-label="发送聊天消息"]')).toBeTruthy();
+    expect(f.start).toHaveBeenCalledTimes(2); expect(f.createProject).not.toHaveBeenCalled();
+    await click('选择使用场景'); await click('使用场景 PPT 演示');
+    expect(host.querySelector('[aria-label="选择使用场景"]')?.textContent).toBe('场景：PPT 演示');
+    expect(f.start).toHaveBeenCalledTimes(2);
+    await click('发送聊天消息');
+    expect(f.start.mock.calls[2][0]).toMatchObject({ mode: 'plan', outputKind: 'ppt' });
+    expect(f.start.mock.calls[2][0].imagePreset).toBeUndefined();
+    expect(f.start.mock.calls[2][0].requestText).toContain('推荐浅蓝色天空。');
+    expect(f.start.mock.calls[2][0].requestText).not.toContain('可以设计小猫红包。');
+  });
+  it('放不进输入框的回复可取消引用并随草稿恢复，发送前不调用模型', async () => {
+    const f = await fixture(); await input('先讨论作品'); await click('发送聊天消息'); await f.update('回复中的完整创作方向' + '详细说明'.repeat(2600), 'complete');
     f.bridge.importAttachments.mockResolvedValue([{ id: 'quoted-material', name: '新需求.txt', mimeType: 'text/plain', bytes: 15, kind: 'text', sha256: 'a'.repeat(64), createdAt: now() }]); await addFiles(); await input('我正在写的新要求'); await click('转为制作方案');
     expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '我正在写的新要求'); expect(host.textContent).toContain('新需求.txt'); expect(f.start).toHaveBeenCalledOnce();
     await act(async () => root!.unmount()); root = undefined; await act(async () => { root = createRoot(host); root.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />); });
@@ -334,17 +387,19 @@ describe('有界长聊天和保留草稿的制作引用', () => {
   });
   it('引用和输入草稿只属于原聊天与工作区，切换不会泄露，返回原聊天可继续', async () => {
     const f = await fixture(); await input('这份资料属于原聊天'); await click('发送聊天消息'); await f.update('原聊天的独立回复', 'complete'); await input('原聊天未发草稿'); await click('转为制作方案');
+    const savedDraft = host.querySelector<HTMLTextAreaElement>('[aria-label="聊天内容"]')!.value;
+    expect(savedDraft).toContain('原聊天的独立回复'); expect(savedDraft.endsWith('原聊天未发草稿')).toBe(true);
     const conversationId = f.read.mock.calls[0][0].conversationId, originalWorkspace = f.props.workspaceId;
     await click('新对话'); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '');
     f.props.searchTarget = { token: 'return-original', kind: 'chat', id: conversationId, name: '原聊天', conversationId, workspaceId: originalWorkspace }; await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />));
-    expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '原聊天未发草稿');
+    expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', savedDraft);
     const other = { ...f.props, workspaceId: 'other-workspace', workspace: { ...f.props.workspace, id: 'other-workspace' }, searchTarget: undefined }; await act(async () => root!.render(<WorkspaceChat props={other} onLegacy={vi.fn()} />));
     expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeNull(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '');
-    await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); expect(host.querySelector('[aria-label="引用的沟通内容"]')).toBeTruthy(); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', '原聊天未发草稿'); expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
+    await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', savedDraft); expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled();
   });
 
   it('调整引用可直接使用原回复内鼠标选中的文字，不把其他区域或按钮文字带入', async () => {
-    const f = await fixture(); await input('保留重点'); await click('发送聊天消息'); await f.update('开头不选。需要引用的重点。结尾不选。', 'complete'); await click('转为制作方案'); await click('调整引用');
+    const f = await fixture(); await input('保留重点'); await click('发送聊天消息'); await f.update('开头不选。需要引用的重点。结尾不选。' + '后文'.repeat(5100), 'complete'); await input('按我选择的重点制作'); await click('转为制作方案'); await click('调整引用');
     const node = host.querySelector('.chat-reply-text p')!.firstChild!;
     const selection = window.getSelection()!, range = document.createRange(); range.setStart(node, 5); range.setEnd(node, 13); selection.removeAllRanges(); selection.addRange(range);
     const exact = selection.toString(); await click('使用选中文字'); expect(host.querySelector('[aria-label="引用的沟通内容"]')?.textContent).toContain('重点片段'); await click('发送聊天消息');

@@ -31,6 +31,23 @@ afterEach(async () => {
   for (const directory of owned.splice(0)) { if (!path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'xuzuo-chat-test-')) throw Error('Unowned cleanup'); await fs.rm(directory, { recursive: true, force: true }); }
 });
 describe('无需项目的普通聊天持久化与计费', () => {
+  it('从历史回复制作只发送用户确认的描述，保留原聊天和其他轮次', async () => {
+    const calls = [];
+    const f = await setup({ execute: async (input, messages) => {
+      calls.push(messages);
+      return { ...receipt, text: input.mode === 'plan' ? JSON.stringify(plan) : '用柿子红底，画奶白色小猫。' };
+    } });
+    await f.service.start({ ...base, text: '制作微信红包封面' });
+    await settled(f.service);
+    await f.service.start({ ...base, id: 'other-turn', text: '另一个作品要做手机壁纸' });
+    const before = await settled(f.service);
+    const text = '以青绿色为底，画一只橘猫。';
+    await f.service.start({ ...base, id: 'edited-brief', mode: 'plan', outputKind: 'image', planFromTurnId: base.id, text, requestText: text });
+    const result = await settled(f.service);
+    expect(calls[2]).toEqual([{ role: 'user', content: text }]);
+    expect(result.turns.slice(0, 2)).toEqual(before.turns);
+    expect(result.turns[2]).toMatchObject({ status: 'complete', userText: text, planFromTurnId: base.id });
+  });
   it('本地文件关联可重复核对并持久化，来源/费用不变，错回复和模型任务不能冒充本地保存', async () => {
     let run;
     const f = await setup({ readRun: async () => structuredClone(run) });
@@ -173,8 +190,10 @@ describe('无需项目的普通聊天持久化与计费', () => {
   it('制作模式也不需要项目，只有通过完整结构验证的方案才可执行', async () => {
     let valid = true;
     const f = await setup({ execute: async () => ({ ...receipt, text: valid ? JSON.stringify(plan) : '{"partial":true}' }) });
-    const request = { ...base, mode: 'plan', outputKind: 'image' }; await f.service.start(request);
-    const value = await settled(f.service); expect(value.turns[0]).toMatchObject({ mode: 'plan', status: 'complete', plan: { name: plan.name, outputKind: 'image' } });
+    const request = { ...base, mode: 'plan', outputKind: 'image', imagePreset: '微信红包封面' }; await f.service.start(request);
+    const value = await settled(f.service); expect(value.turns[0]).toMatchObject({ mode: 'plan', status: 'complete', imagePreset: '微信红包封面', plan: { name: plan.name, outputKind: 'image' } });
+    const reopened = createChatService({ directory: f.directory, credentialStore: credentials }); services.push(reopened);
+    expect(await reopened.read(base)).toMatchObject({ turns: [{ imagePreset: '微信红包封面' }] });
     expect(await fs.readdir(f.directory)).toEqual(['chat-v1']);
     valid = false; await f.service.start({ ...request, id: 'invalid-plan', text: '再来一版' });
     const invalid = (await settled(f.service)).turns[1]; expect(invalid.status).toBe('failed'); expect(invalid.plan).toBeUndefined(); expect(invalid.costCents).toBe(5); expect((await f.service.ledger()).reduce((sum, entry) => sum + entry.costCents, 0)).toBe(10);

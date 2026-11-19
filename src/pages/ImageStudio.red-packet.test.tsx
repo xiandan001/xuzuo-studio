@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageStudio } from './ImageStudio';
+import { HomeProductionResult } from '../components/HomeProductionResult';
 import type { PageProps, Project } from '../types';
 import type { ArtifactMetadata } from '../live-types';
 import type { WorkflowRun } from '../configuration-types';
@@ -72,6 +73,21 @@ async function setTheme(value: string) {
 }
 
 describe('微信红包封面工作台', () => {
+  it('聊天结果卡可以直接另存红包 JPEG，打开项目的原图 ID 保持一致', async () => {
+    const f = fixture(true), run = f.runner.runs[0]; run.snapshot.imagePreset = coverLabel;
+    await act(async () => { root = createRoot(host); root.render(<HomeProductionResult props={f.props} run={run} kind="image" />); });
+    await click('导出红包封面 JPEG');
+    expect(f.exportRedPacketCover).toHaveBeenCalledExactlyOnceWith({ projectId: project.id, sourceArtifactId: image.id });
+    expect(f.runner.saveArtifact).not.toHaveBeenCalled();
+    expect(f.onGenerate).not.toHaveBeenCalled();
+  });
+  it('打开聊天制作的封面时沿用该图片的用途；再次打开时优先使用已保存的草稿', async () => {
+    const f = fixture(true); f.runner.runs[0].snapshot.imagePreset = coverLabel;
+    await render(f.props); expect(button(generateLabel)).toBeDefined();
+    await click('图片'); expect(host.querySelector('.red-packet-form')).toBeNull();
+    await act(async () => root!.unmount()); root = undefined;
+    await render(f.props); expect(host.querySelector('.red-packet-form')).toBeNull();
+  });
   it('只要求主题，沿用保存的草稿时不沿用旧图像参数', async () => {
     localStorage.setItem(imageDraftKey(project.id), JSON.stringify({ preset: coverLabel, mode: 'refine', prompt: '', quantity: 4, size: '1536x1024',
       background: 'transparent', wallpaperEnabled: true, wallpaperTarget: { width: 2160, height: 3840, fit: 'cover' },

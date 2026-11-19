@@ -27,7 +27,7 @@ export function useNaturalAutomationCreation(props: PageProps, store: Store, onE
       const project = props.projects.find(item => item.id === draft.projectId && item.workspaceId === props.workspaceId); if (!project) throw Error('项目已变化，请回到原项目继续。');
       const selected = naturalModelSelection(props.configuration, 'text', draft.planner), bindings = naturalEffectiveBindings(props.configuration, draft.bindings, selected.model && selected.credentialId ? { modelConfigId: selected.model.id, credentialId: selected.credentialId } : draft.planner);
       const plan = { ...normalizedNaturalDraftPlan(draft.plan), unsupported: [...new Set([...draft.plan.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || draft.input)])] };
-      const compiled = compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved });
+      const compiled = compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset });
       await bridge.syncContext({ workspaceId: props.workspaceId, workspaces: props.workspaces, projects: props.projects, workflows: props.configuration.workflows, models: props.configuration.models, connections: props.configuration.connections });
       if (!valid(flight)) return;
       const answers = draft.preparationAnswers || {}, preparation = draft.plan.questions.length ? { questions: draft.plan.questions, answers: Object.fromEntries(draft.plan.questions.map(question => [question, naturalQuestionAnswer(answers, question)])) } : undefined;
@@ -55,7 +55,7 @@ export function useNaturalAutomationCreation(props: PageProps, store: Store, onE
         }
         const selected = naturalModelSelection(props.configuration, 'text', draft.planner), bindings = naturalEffectiveBindings(props.configuration, draft.bindings, selected.model && selected.credentialId ? { modelConfigId: selected.model.id, credentialId: selected.credentialId } : draft.planner);
         const plan = { ...normalizedNaturalDraftPlan(draft.plan!), unsupported: [...new Set([...draft.plan!.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || draft.input)])] };
-        const compiled = compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved });
+        const compiled = compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset });
         const next = { ...draft, workflowId, creationKey: draft.creationKey || crypto.randomUUID() }; store.persist(next);
         const existing = props.configuration.workflows.find(item => item.id === workflowId);
         if (draft.workflowSaved && !existing) throw Error('已保存的流程暂时找不到，请先恢复原流程，当前方案保留。');

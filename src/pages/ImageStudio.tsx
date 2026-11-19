@@ -123,6 +123,7 @@ function ImageProject({ props, project, onOpenAnimation }: { props: PageProps; p
     let raw: string | null = null;
     try { raw = localStorage.getItem(imageDraftKey(project.id)); } catch { /* The form remains usable without browser storage. */ }
     const restored = readImageDraft(raw, project.description);
+    if (!raw && initialImage?.runId && props.workflowRunner.runs.find(run => run.id === initialImage.runId && run.projectId === project.id)?.snapshot.imagePreset === RED_PACKET_COVER) restored.preset = RED_PACKET_COVER;
     const saved = initialImage ? followGalleryImage(restored, initialImage) : restored;
     const purpose = useTemplates.find(item => item.id === saved.preset);
     return { ...saved, ...(saved.presetSnapshot || !purpose ? {} : { presetSnapshot: imageUseTemplateSnapshot(purpose) }) };

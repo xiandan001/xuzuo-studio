@@ -8,6 +8,7 @@ import { CREATION_PROFILES } from './creation-profiles';
 import { documentIllustrationSteps, DOCUMENT_IMAGE_LIMIT, DOCUMENT_REFERENCE_IMAGE_LIMIT } from './document-illustrations';
 import { extractVariables } from './prompt-variables';
 import { parseWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
+import { redPacketCoverGenerationSize, redPacketCoverPrompt, WECHAT_RED_PACKET_COVER } from './wechat-red-packet-cover';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 import { animationRequestMode, animationStyleForRequest, makeAnimationWorkflow } from './animation-workflow';
 import { animationGenerationPrompt, animationStyle, checkedAnimationDocument, newAnimationDocument } from './animation-document';
@@ -18,7 +19,7 @@ export { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 type Capability = NaturalAutomationPlan['steps'][number]['kind'];
 type ModelBinding = { modelConfigId?: string; credentialId?: string; reasoningEffort?: ReasoningEffort };
 export type NaturalAutomationBindings = Partial<Record<Capability, ModelBinding>>;
-export interface NaturalAutomationCompileOptions { allowPreparationQuestions?: boolean; calendarResolved?: boolean; }
+export interface NaturalAutomationCompileOptions { allowPreparationQuestions?: boolean; calendarResolved?: boolean; imagePreset?: WorkflowDraft['imagePreset']; }
 type Configuration = Pick<StudioConfiguration, 'models' | 'connections' | 'credentials' | 'workflows'>;
 const capabilities: Capability[] = ['text', 'vision', 'image-generation', 'image-editing'];
 const labels: Record<Capability, string> = { text: '文字制作', vision: '图片检查', 'image-generation': '图片生成', 'image-editing': '图片精修' };
@@ -263,12 +264,13 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   if (!['word', 'ppt'].includes(project.kind) && plan.illustrations.mode !== 'none') throw Error('文档配图仅用于Word或PPT，请调整方案的配图设置。');
   const missing = new Set<string>(), select = bindingResolver(configuration, bindings, missing);
   const wallpaperText = [plan.objective, ...plan.steps.map(step => step.instruction), ...plan.constraints].join('\n');
-  const wallpaperRequested = project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
+  const redPacketCover = project.kind === 'image' && options.imagePreset === WECHAT_RED_PACKET_COVER;
+  const wallpaperRequested = !redPacketCover && project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
   const wallpaperParsed = wallpaperRequested ? parseWallpaperTarget(wallpaperText) : undefined;
   const wallpaperTarget = wallpaperParsed?.status === 'resolved' ? wallpaperParsed.target : undefined;
   if (wallpaperRequested && !wallpaperTarget) missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
   const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
-  const animationMode = project.kind === 'image' ? animationRequestMode(plan.objective) : undefined;
+  const animationMode = !redPacketCover && project.kind === 'image' ? animationRequestMode(plan.objective) : undefined;
   if (animationMode) {
     if (references.length > 12 || references.some(file => !['image/png','image/jpeg','image/webp'].includes(file.mimeType))) throw Error('角色动画参考图最多12张，且需要PNG、JPEG或WebP；SVG/GIF请先转换为静态参考图，未自动丢弃原文件。');
     const style = animationStyle(animationStyleForRequest(plan.objective)), referenceIds = references.map(file => file.id), capability = referenceIds.length ? 'image-editing' : 'image-generation', binding = select(capability);
@@ -299,7 +301,9 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
     if (kind === 'image-editing' && latestImage && steps.at(-1)?.kind !== 'vision') opinion();
     if (kind === 'image-editing' && !latestImage && !references.length) missing.add('图片精修：请为项目添加实际参考图片');
     const selection = select(kind), modelId = configuration.models.find(model => model.id === selection.modelConfigId)?.modelId;
-    const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${wallpaperPrompt(wallpaperTarget)}` : ''}`, inputSource: 'previous', enabled: true, count: 1, imageSize: wallpaperTarget ? wallpaperGenerationSize(wallpaperTarget, modelId) : 'auto', imageBackground: wallpaperRequested ? 'opaque' : 'auto', ...(wallpaperRequested ? { imageOutputFormat: 'png' as const } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
+    const instructions = `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${wallpaperPrompt(wallpaperTarget)}` : ''}`;
+    const imageSize = redPacketCover ? redPacketCoverGenerationSize(modelId) : wallpaperTarget ? wallpaperGenerationSize(wallpaperTarget, modelId) : 'auto';
+    const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: redPacketCover ? redPacketCoverPrompt(instructions) : instructions, inputSource: 'previous', enabled: true, count: 1, imageSize, imageBackground: redPacketCover || wallpaperRequested ? 'opaque' : 'auto', ...(redPacketCover || wallpaperRequested ? { imageOutputFormat: 'png' as const } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
     if (kind === 'image-editing') { edits++; if (latestImage) imageOutputs[imageOutputs.lastIndexOf(latestImage)] = step.id; else imageOutputs.push(step.id); }
     else imageOutputs.push(step.id);
     latestImage = step.id; return step;
@@ -352,7 +356,7 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   for (const name of unfilledVariables) missing.add(`方案仍有未填变量“${name}”，请在目标或步骤要求里改成真实内容`);
   const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮，最终检查不再自动增加精修，等待人工确认。`) : workflow.description;
   const calendarNote = calendarResolved ? `执行时机已确认改为${plan.trigger.type === 'manual' ? '手动运行' : `应用运行期间每隔${plan.trigger.intervalMinutes}分钟运行`}；原描述的固定日历时间不再作为执行要求。` : '';
-  const draft: WorkflowDraft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
+  const draft: WorkflowDraft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, ...(redPacketCover ? { imagePreset: WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
   const { type, ...triggerDetails } = plan.trigger;
   return { workflow: draft, missing: [...missing], preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, ...(calendarNote ? [calendarNote] : []), `验收要求：${plan.acceptance.join('；')}`, ...(plan.constraints.length ? [`约束：${plan.constraints.join('；')}`] : [])].join('\n'), variables: {} }, stepsSummary: workflow.steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'image-editing' ? '（使用实际原图）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
 }

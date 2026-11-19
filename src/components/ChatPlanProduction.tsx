@@ -20,7 +20,7 @@ export function ChatPlanProduction({ props, turn, conversationId, planner }: { p
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (session.draft.plan || !turn.plan || session.store.issue) return;
-    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner, bindings: { text: planner } }); }
+    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, imagePreset: turn.imagePreset, input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner, bindings: { text: planner } }); }
     catch (cause) { session.setError(cause instanceof Error ? cause.message : '方案草稿未保存，请重试。'); }
   }, [turn.id, session.draft.plan, session.store.issue]);
   useEffect(() => {

@@ -17,6 +17,12 @@ function fixture() {
 }
 
 describe('真实启动回执与冻结请求', () => {
+  it('红包用途穿过启动请求的筛选，真实任务快照可以按封面格式导出', async () => {
+    const f = fixture(), input = request();
+    input.workflow.imagePreset = '微信红包封面';
+    await f.coordinator().start(input);
+    expect(f.payloads[0].workflow.imagePreset).toBe('微信红包封面');
+  });
   it('keeps selected version, exact references, reasoning and local sizing through the real admission boundary', async () => {
     const f = fixture(), input = request();
     input.workflow.sourceArtifactTarget = { id: 'source', sha256: 'a'.repeat(64) };

@@ -12,6 +12,7 @@ export interface NaturalAutomationDraft {
   requestId?: string; plan?: NaturalAutomationPlan; bindings: NaturalAutomationBindings;
   workflowId?: string; creationKey?: string; workflowSaved?: boolean; ruleId?: string;
   chatExecution?: { workflowId: string; runId?: string };
+  imagePreset?: '微信红包封面';
   planningProjectId?: string; preparationAnswers?: Record<string, string>; calendarResolved?: boolean; needsSetup?: boolean;
   acceptedRequestId?: string; acceptedInput?: string; acceptedPlanningProjectId?: string; requestedCalendarResolved?: boolean; cancelledRequestId?: string;
 }

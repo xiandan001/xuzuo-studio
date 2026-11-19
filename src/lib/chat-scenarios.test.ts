@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import type { ImageUseTemplate } from '../configuration-types';
-import { availableChatScenarios, chatScenarioAttachmentIssue, chatScenarioInput, filterChatScenarios, findChatScenario } from './chat-scenarios';
+import { availableChatScenarios, chatScenarioAttachmentIssue, chatScenarioInput, filterChatScenarios, findChatScenario, replyProductionScenario } from './chat-scenarios';
+import type { ChatTurn } from '../chat-types';
 
 const scenarios = availableChatScenarios('workspace');
 describe('聊天使用场景', () => {
+  it('优先识别所选轮次的需求，再使用回复和该轮之前的补充上下文', () => {
+    const turn = (id: string, userText: string, text: string) => ({ id, userText, text }) as ChatTurn;
+    const first = turn('one', '帮我制作微信红包封面，不要海报', '也可以尝试表情包');
+    const second = turn('two', '改成橘猫', '保留红金色的设计');
+    const third = turn('three', '做一个 PPT', '演示这个系列');
+    const turns = [first, second, third];
+    expect(replyProductionScenario(scenarios, first, turns)?.imagePreset).toBe('微信红包封面');
+    expect(replyProductionScenario(scenarios, second, turns)?.imagePreset).toBe('微信红包封面');
+    expect(replyProductionScenario(scenarios, third, turns)?.id).toBe('document-ppt');
+    expect(replyProductionScenario(scenarios, turn('four', '可以做什么？', '可以设计一款红包封面。'), [])?.imagePreset).toBe('微信红包封面');
+    expect(replyProductionScenario(scenarios, turn('choices', '头像和壁纸哪个好', '都可以'), [])).toBeUndefined();
+  });
   it('升级后保留 macOS 已选的内置、自定义和文档场景，失效用途不会跨工作区恢复', () => {
     const own: ImageUseTemplate = { id: 'brand-custom', workspaceId: 'workspace', name: '品牌横幅', prompt: '保留商品', minReferences: 1, size: '1536x1024', background: 'auto', enabled: true };
     const all = availableChatScenarios('workspace', [own]);

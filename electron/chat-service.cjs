@@ -43,6 +43,8 @@ function recordValid(value, input) {
     if (!turn || !idValid(turn.id) || ids.has(turn.id) || typeof turn.userText !== 'string' || turn.userText.length > 10000 || typeof turn.text !== 'string' || turn.text.length > 2 * 1024 * 1024 || !['running', 'complete', 'cancelled', 'failed', 'interrupted'].includes(turn.status) || !dateValid(turn.createdAt) || !dateValid(turn.updatedAt) || !Number.isSafeInteger(turn.costCents) || turn.costCents < 0 || !COST_STATES.has(turn.costState) || typeof turn.modelName !== 'string' || typeof turn.modelId !== 'string' || !turn._billing || turn._billing.modelId !== turn.modelId || !turn._billing.connection || !/^[a-f0-9]{64}$/.test(turn._fingerprint || '')) return false;
     if (turn.target !== undefined && !targetValid(turn.target) || turn._streamSequence !== undefined && (!Number.isSafeInteger(turn._streamSequence) || turn._streamSequence < 0)) return false;
     if (turn.requestText !== undefined && (typeof turn.requestText !== 'string' || !turn.requestText.trim() || turn.requestText.length > 20000)) return false;
+    if (!validPlanPreset(turn)) return false;
+    if (turn.planFromTurnId !== undefined && (turn.mode !== 'plan' || !idValid(turn.planFromTurnId))) return false;
     if (turn.plan !== undefined) { try { if (turn.mode !== 'plan' || turn.status !== 'complete') return false; parseNaturalAutomationPlan(JSON.stringify(turn.plan)); } catch { return false; } }
     if (turn._attachments !== undefined && !legacyTurnValid(turn)) return false;
     if ([...(turn._attachments === undefined ? [turn.attachments] : []), turn.contextAttachments].some(items => items !== undefined && (!Array.isArray(items) || items.length > MAX_COUNT || items.some(item => !validPublicMetadata(item)) || new Set(items.map(item => item.id)).size !== items.length || items.reduce((sum, item) => sum + item.bytes, 0) > MAX_TOTAL))) return false;
@@ -94,12 +96,17 @@ function checkedScope(input) {
   if (!input || !idValid(input.workspaceId) || !idValid(input.conversationId)) throw Error('对话或工作区编号无效。');
   return input;
 }
+function validPlanPreset(input) {
+  return input.imagePreset === undefined || input.imagePreset === '微信红包封面' && input.mode === 'plan' && input.outputKind === 'image';
+}
 function checkedStart(input) {
   checkedScope(input);
   if (!idValid(input.id) || !idValid(input.credentialId) || typeof input.text !== 'string' || !input.text.trim() && !input.attachmentIds?.length || input.text.length > 10000 || input.sourceTurnId !== undefined && !idValid(input.sourceTurnId)) throw Error('请输入不超过10000字的消息或添加附件，并选择可用账户。');
   if (input.attachmentIds !== undefined && (!Array.isArray(input.attachmentIds) || input.attachmentIds.length > MAX_COUNT || input.attachmentIds.some(id => !idValid(id)) || new Set(input.attachmentIds).size !== input.attachmentIds.length)) throw Error('一次最多发送8份有效且不重复的本对话附件。');
   if (input.requestText !== undefined && (typeof input.requestText !== 'string' || !input.requestText.trim() || input.requestText.length > 20000)) throw Error('场景要求需为不超过20000字的有效文字。');
   if (input.mode !== undefined && !['chat', 'plan'].includes(input.mode) || input.outputKind !== undefined && !['image', 'word', 'ppt', 'excel'].includes(input.outputKind)) throw Error('对话模式或制作类型无效。');
+  if (!validPlanPreset(input)) throw Error('请为红包封面选择图片制作方案。');
+  if (input.planFromTurnId !== undefined && (input.mode !== 'plan' || !idValid(input.planFromTurnId))) throw Error('制作草稿来源无效，请重新选择对话回复。');
   if (input.target !== undefined && !targetValid(input.target)) throw Error('修改目标或版本信息无效，请重新选择成品。');
   const { connection, model } = input;
   if (!connection || !model || connection.demo || model.demo || connection.enabled !== true || model.enabled !== true || model.connectionId !== connection.id || !idValid(connection.id) || !idValid(model.id) || !['openai-chat', 'openai-responses', 'anthropic', 'gemini'].includes(connection.protocol) || !Array.isArray(model.capabilities) || !model.capabilities.includes('text')) throw Error('请选择已启用的文字模型与对应服务。');
@@ -108,11 +115,19 @@ function checkedStart(input) {
   const safeModel = { id: model.id, name: model.name, modelId: model.modelId, connectionId: model.connectionId, capabilities: [...model.capabilities], enabled: true, ...(model.pricing ? { pricing: clone(model.pricing) } : {}) };
   const result = { id: input.id, workspaceId: input.workspaceId, conversationId: input.conversationId, text: input.text.trim() || '请查看附件并说明其中的内容。', connection: safeConnection, model: safeModel, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort || 'auto', mode: input.mode || 'chat', ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}), ...(input.attachmentIds?.length ? { attachmentIds: [...input.attachmentIds] } : {}) };
   if (input.requestText !== undefined) result.requestText = input.requestText;
+  if (input.imagePreset) result.imagePreset = input.imagePreset;
+  if (input.planFromTurnId) result.planFromTurnId = input.planFromTurnId;
   if (input.target) result.target = clone(input.target);
   prepareChat(result, [{ role: 'user', content: result.requestText || result.text }]);
   return result;
 }
 function contextMessages(record, input) {
+  if (input.planFromTurnId) {
+    if (!record.turns.some(turn => turn.id === input.planFromTurnId && turn.status !== 'running')) throw Error('原回复已不可用，请重新选择制作描述。');
+    // The editable brief already contains the selected conversation. Replaying history
+    // would send deleted passages and unrelated turns back to the planner.
+    return { messages: [{ role: 'user', content: input.requestText || input.text }], truncated: false };
+  }
   const retryIndex = input.sourceTurnId ? record.turns.findIndex(turn => turn.id === input.sourceTurnId) : -1;
   const history = retryIndex >= 0 ? record.turns.slice(0, retryIndex) : record.turns;
   const turns = history.filter(turn => turn.status === 'complete' && (input.mode === 'plan' || (turn.mode || 'chat') === 'chat'));
@@ -387,7 +402,11 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       turn.status = terminal.result ? 'complete' : operation.controller.signal.aborted || value?.code === 'CANCELLED' ? 'cancelled' : 'failed';
       if (terminal.error) turn.error = terminal.error.name === 'ModelRuntimeError' ? terminal.error.message : '对话未能完成，请检查本地凭证或网络；原记录与费用保留。';
       if (turn.status === 'complete' && input.mode === 'plan') {
-        try { turn.plan = parseNaturalAutomationPlan(turn.text); } catch { turn.status = 'failed'; turn.error = '模型返回的制作方案不完整或格式不正确，尚未执行制作；已保留回答与费用，可调整需求后重试。'; }
+        try {
+          const plan = parseNaturalAutomationPlan(turn.text);
+          if (input.imagePreset && plan.outputKind !== 'image') throw Error('红包封面需要图片方案');
+          turn.plan = plan;
+        } catch { turn.status = 'failed'; turn.error = '模型返回的制作方案不完整或格式不正确，尚未执行制作；已保留回答与费用，可调整需求后重试。'; }
       }
       if (terminal.error?.code === 'QUEUED_BINDING_CHANGED' && terminal.error.requestStarted === false && operation.queuedEntry) queuedChat.rebind(record, operation.queuedEntry, input.id);
       if (turn.status !== 'complete') queuedChat.pause(record, '当前回复已停止或未完成，后续消息尚未发送；确认后可继续队列。');
@@ -425,6 +444,8 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       billing.ruleSnapshot = resolveOfficialBillingRule(billing, billing.pricing);
       const turn = { id: input.id, userText: input.text, text: '', status: 'running', createdAt, updatedAt: createdAt, modelName: input.model.name, modelId: input.model.modelId, modelConfigId: input.model.id, credentialId: input.credentialId, reasoningEffort: input.reasoningEffort, mode: input.mode, ...(input.outputKind ? { outputKind: input.outputKind } : {}), ...(input.sourceTurnId ? { sourceTurnId: input.sourceTurnId } : {}), ...(context.truncated ? { contextTruncated: true } : {}), costCents: 0, costState: 'unknown', _fingerprint: fingerprint, _requestStarted: true, _billing: billing };
       if (input.requestText) turn.requestText = input.requestText;
+      if (input.imagePreset) turn.imagePreset = input.imagePreset;
+      if (input.planFromTurnId) turn.planFromTurnId = input.planFromTurnId;
       if (material.current.length) turn.attachments = material.current;
       if (material.context.length) turn.contextAttachments = material.context;
       if (material.notice) { turn.attachmentNotice = material.notice; turn.contextTruncated = true; }

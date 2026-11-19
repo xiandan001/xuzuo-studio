@@ -23,6 +23,20 @@ function imagePlan(): NaturalAutomationPlan {
 function wordPlan(): NaturalAutomationPlan { return { ...imagePlan(), name: '完整说明文档', objective: '制作完整说明文档', outputKind: 'word', steps: [{ kind: 'text', name: '完整正文', instruction: '依据资料完成完整说明文档' }], maxRepairs: 2 }; }
 const compileImage = (plan = imagePlan(), config = configuration()) => compileNaturalAutomationPlan(plan, project(), config);
 
+it('保留已选红包用途，按实际模型准备原图，其他图片方案继续使用自己的参数', () => {
+  const config = configuration();
+  config.models.find(model => model.capabilities.includes('image-generation'))!.modelId = 'dall-e-3';
+  const input = { ...imagePlan(), objective: '把壁纸里的小猫做成微信红包封面' };
+  const compiled = compileNaturalAutomationPlan(input, project(), config, {}, { imagePreset: '微信红包封面' });
+  expect(compiled.missing).toEqual([]);
+  expect(compiled.workflow.imagePreset).toBe('微信红包封面');
+  const pictures = compiled.workflow.steps.filter(step => step.kind === 'image-generation' || step.kind === 'image-editing');
+  expect(pictures).toHaveLength(2);
+  for (const step of pictures) expect(step).toMatchObject({ count: 1, imageBackground: 'opaque', imageOutputFormat: 'png', prompt: expect.stringContaining('【微信红包封面构图】') });
+  expect(pictures[0].imageSize).toBe('1024x1792');
+  expect(compileImage().workflow).not.toHaveProperty('imagePreset');
+});
+
 it('文字与看图制作保存推理强度，切换至不支持的型号回退默认且native结果一致', () => {
   const config = configuration(); config.connections = config.connections.map(connection => ({ ...connection, providerId: 'openai' })); config.models = config.models.map(model => ({ ...model, modelId: model.capabilities.includes('text') || model.capabilities.includes('vision') ? 'gpt-6.1-terra' : model.modelId }));
   const bindings = { text: { modelConfigId: 'model-text', credentialId: 'key-text', reasoningEffort: 'high' as const }, vision: { modelConfigId: 'model-vision', credentialId: 'key-vision', reasoningEffort: 'low' as const } };

@@ -1,6 +1,8 @@
 import type { ImageUseTemplate } from '../configuration-types';
 import type { ProjectKind } from '../types';
+import type { ChatTurn } from '../chat-types';
 import { availableImageUseTemplates } from './image-use-templates';
+import { WECHAT_RED_PACKET_COVER } from './wechat-red-packet-cover';
 
 export type ChatScenarioGroup = 'chat' | 'images' | 'documents' | 'custom';
 export interface ChatScenario {
@@ -35,6 +37,7 @@ const documentScenarios: ChatScenario[] = [
 const imageIds: Record<string, string> = { 宣传图: 'poster', 人物图: 'portrait', 卡通图: 'cartoon', 试衣图: 'try-on', 头像: 'avatar', 表情包: 'stickers', '透明 PNG': 'transparent', 壁纸: 'wallpaper', 工程P图: 'engineering', 拼豆: 'beads', 角色图集: 'atlas', GIF动画工坊: 'gif' };
 const specialized = new Set(['壁纸', '工程P图', '拼豆', '角色图集', 'GIF动画工坊']);
 const imageDescriptions: Record<string, string> = {
+  [WECHAT_RED_PACKET_COVER]: '制作微信红包封面，导出 957 × 1278 像素的 JPEG。',
   宣传图: '突出真实产品与信息，制作宣传海报。', 人物图: '根据描述或参考图创作人物画面。', 卡通图: '设计卡通角色、插画与可爱形象。', 试衣图: '以人物和服装参考图制作穿搭效果。', 头像: '制作小尺寸也清晰的个人或品牌头像。', 表情包: '制作表情、动作与文字清楚的表情包。', '透明 PNG': '生成可继续排版使用的透明背景素材。', 壁纸: '打开专用尺寸选择，支持机型与 4K 导出。', 工程P图: '按工程原图精修，保留原尺寸与未修改区域。', 拼豆: '用真实网格、标准色卡和用量清单制作图纸。', 角色图集: '统一角色形象，制作不同表情与姿态。', GIF动画工坊: '先制作可播放样片，再调整动作与批量扩展。',
 };
 export function availableChatScenarios(workspaceId: string, useTemplates: ImageUseTemplate[] = []): ChatScenario[] {
@@ -59,6 +62,35 @@ export function findChatScenario(scenarios: ChatScenario[], id: string | undefin
   // Earlier macOS builds stored image:<preset> and format:<kind> IDs.
   const legacy = id?.startsWith('image:') ? scenarios.find(scenario => scenario.imagePreset === id.slice(6)) : id?.startsWith('format:') ? scenarios.find(scenario => scenario.id === `document-${id.slice(7)}`) : undefined;
   return scenarios.find(scenario => scenario.id === id) || legacy || scenarios.find(scenario => scenario.id === 'chat-default') || chats[0];
+}
+const productionAliases: Record<string, RegExp> = {
+  [WECHAT_RED_PACKET_COVER]: /红包(?:的)?封面|red (?:packet|envelope) cover/i,
+  宣传图: /海报|宣传画|\bposter\b/i, 壁纸: /墙纸|\bwallpaper\b/i,
+  试衣图: /试衣|虚拟试穿/, '透明 PNG': /透明(?:背景|底)?\s*png/i,
+  工程P图: /工程\s*p\s*图/i, 角色图集: /角色(?:动作|表情)图集/,
+  GIF动画工坊: /\bgif\b|动图/i,
+  'document-ppt': /\b(?:pptx?|powerpoint)\b|幻灯片|演示文稿/i,
+  'document-word': /\b(?:word|docx?)\b|文档|说明书/i,
+  'document-excel': /\b(?:excel|xlsx?)\b|工作簿|表格/i,
+};
+export function replyProductionScenario(scenarios: ChatScenario[], turn: ChatTurn, turns: ChatTurn[]) {
+  function matches(text: string) {
+    const positive = text.normalize('NFKC').toLowerCase().split(/[，,。；;！？!?\n]|而是|改为|改做/)
+      .map(part => part.split(/不要|不想|不需要|不做|别做|无需/, 1)[0]).join('\n');
+    return scenarios.filter(item => item.mode === 'plan' && (positive.includes(item.name.toLowerCase()) || productionAliases[item.imagePreset || item.id]?.test(positive)));
+  }
+  const requested = matches(turn.userText);
+  if (requested.length === 1) return requested[0];
+  const described = matches(turn.text.slice(0, 10000));
+  const agreed = requested.length ? described.filter(item => requested.includes(item)) : described;
+  if (agreed.length === 1) return agreed[0];
+  if (requested.length || described.length || !/^(?:好|可以|就|按|改|换|再|继续|用这|颜色|配色|风格)/.test(turn.userText.trim())) return;
+  // A follow-up such as “改成橘猫” can refer back, but never look past the clicked reply.
+  const index = turns.findIndex(item => item.id === turn.id);
+  for (let i = index - 1; i >= Math.max(0, index - 8); i--) {
+    const earlier = matches(turns[i].userText);
+    if (earlier.length) return earlier.length === 1 ? earlier[0] : undefined;
+  }
 }
 export function filterChatScenarios(scenarios: ChatScenario[], group: 'all' | ChatScenarioGroup, query: string): ChatScenario[] {
   const term = query.trim().toLocaleLowerCase();

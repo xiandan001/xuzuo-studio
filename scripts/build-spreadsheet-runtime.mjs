@@ -18,7 +18,7 @@ for (const name of modules) {
   fs.writeFileSync(path.join(root, `electron/${name}.cjs`), `// Generated from src/lib/${name}.ts; run scripts/build-spreadsheet-runtime.mjs.\n${output}`, 'utf8');
 }
 
-const naturalModules = ['natural-automation-plan', 'automation-recipes', 'creation-quality', 'creation-profiles', 'document-illustrations', 'studio-run', 'prompt-variables', 'wallpaper-target', 'image-output-options', '../data/wallpaper-devices', 'bead-intent', 'animation-workflow', 'animation-document', 'animation-validation', 'animation-styles', 'animation-hash', 'reasoning-options'];
+const naturalModules = ['natural-automation-plan', 'automation-recipes', 'creation-quality', 'creation-profiles', 'document-illustrations', 'studio-run', 'prompt-variables', 'wallpaper-target', 'wechat-red-packet-cover', 'image-output-options', '../data/wallpaper-devices', 'bead-intent', 'animation-workflow', 'animation-document', 'animation-validation', 'animation-styles', 'animation-hash', 'reasoning-options'];
 const naturalModuleId = name => name.startsWith('../') ? name : `./${name}`;
 const factories = naturalModules.map(name => {
   const filename = path.join(root, `src/lib/${name}.ts`);

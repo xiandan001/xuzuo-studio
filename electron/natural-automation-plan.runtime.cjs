@@ -17,6 +17,7 @@ const creation_profiles_1 = require("./creation-profiles");
 const document_illustrations_1 = require("./document-illustrations");
 const prompt_variables_1 = require("./prompt-variables");
 const wallpaper_target_1 = require("./wallpaper-target");
+const wechat_red_packet_cover_1 = require("./wechat-red-packet-cover");
 const bead_intent_1 = require("./bead-intent");
 const animation_workflow_1 = require("./animation-workflow");
 const animation_document_1 = require("./animation-document");
@@ -352,13 +353,14 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         throw Error('文档配图仅用于Word或PPT，请调整方案的配图设置。');
     const missing = new Set(), select = bindingResolver(configuration, bindings, missing);
     const wallpaperText = [plan.objective, ...plan.steps.map(step => step.instruction), ...plan.constraints].join('\n');
-    const wallpaperRequested = project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
+    const redPacketCover = project.kind === 'image' && options.imagePreset === wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER;
+    const wallpaperRequested = !redPacketCover && project.kind === 'image' && /壁纸|wallpaper/i.test(wallpaperText) && !/(?:不要|不做|无需|不是).{0,5}壁纸/.test(plan.objective);
     const wallpaperParsed = wallpaperRequested ? (0, wallpaper_target_1.parseWallpaperTarget)(wallpaperText) : undefined;
     const wallpaperTarget = wallpaperParsed?.status === 'resolved' ? wallpaperParsed.target : undefined;
     if (wallpaperRequested && !wallpaperTarget)
         missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
     const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
-    const animationMode = project.kind === 'image' ? (0, animation_workflow_1.animationRequestMode)(plan.objective) : undefined;
+    const animationMode = !redPacketCover && project.kind === 'image' ? (0, animation_workflow_1.animationRequestMode)(plan.objective) : undefined;
     if (animationMode) {
         if (references.length > 12 || references.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType)))
             throw Error('角色动画参考图最多12张，且需要PNG、JPEG或WebP；SVG/GIF请先转换为静态参考图，未自动丢弃原文件。');
@@ -395,7 +397,9 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         if (kind === 'image-editing' && !latestImage && !references.length)
             missing.add('图片精修：请为项目添加实际参考图片');
         const selection = select(kind), modelId = configuration.models.find(model => model.id === selection.modelConfigId)?.modelId;
-        const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${(0, wallpaper_target_1.wallpaperPrompt)(wallpaperTarget)}` : ''}`, inputSource: 'previous', enabled: true, count: 1, imageSize: wallpaperTarget ? (0, wallpaper_target_1.wallpaperGenerationSize)(wallpaperTarget, modelId) : 'auto', imageBackground: wallpaperRequested ? 'opaque' : 'auto', ...(wallpaperRequested ? { imageOutputFormat: 'png' } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
+        const instructions = `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${(0, wallpaper_target_1.wallpaperPrompt)(wallpaperTarget)}` : ''}`;
+        const imageSize = redPacketCover ? (0, wechat_red_packet_cover_1.redPacketCoverGenerationSize)(modelId) : wallpaperTarget ? (0, wallpaper_target_1.wallpaperGenerationSize)(wallpaperTarget, modelId) : 'auto';
+        const step = add({ id: crypto.randomUUID(), name, role: 'producer', kind, prompt: redPacketCover ? (0, wechat_red_packet_cover_1.redPacketCoverPrompt)(instructions) : instructions, inputSource: 'previous', enabled: true, count: 1, imageSize, imageBackground: redPacketCover || wallpaperRequested ? 'opaque' : 'auto', ...(redPacketCover || wallpaperRequested ? { imageOutputFormat: 'png' } : {}), ...selection, ...(kind === 'image-editing' && latestImage ? { imageSourceStepId: latestImage } : {}) });
         if (kind === 'image-editing') {
             edits++;
             if (latestImage)
@@ -485,7 +489,7 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         missing.add(`方案仍有未填变量“${name}”，请在目标或步骤要求里改成真实内容`);
     const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮，最终检查不再自动增加精修，等待人工确认。`) : workflow.description;
     const calendarNote = calendarResolved ? `执行时机已确认改为${plan.trigger.type === 'manual' ? '手动运行' : `应用运行期间每隔${plan.trigger.intervalMinutes}分钟运行`}；原描述的固定日历时间不再作为执行要求。` : '';
-    const draft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
+    const draft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, ...(redPacketCover ? { imagePreset: wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
     const { type, ...triggerDetails } = plan.trigger;
     return { workflow: draft, missing: [...missing], preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, ...(calendarNote ? [calendarNote] : []), `验收要求：${plan.acceptance.join('；')}`, ...(plan.constraints.length ? [`约束：${plan.constraints.join('；')}`] : [])].join('\n'), variables: {} }, stepsSummary: workflow.steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'image-editing' ? '（使用实际原图）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
 }
@@ -880,6 +884,35 @@ function wallpaperGenerationSize(target, modelId) {
     if (modelId && !/^gpt-image-1(?:\.5)?(?:-mini)?$/.test(modelId))
         return '1024x1024';
     return target.width === target.height ? '1024x1024' : target.width > target.height ? '1536x1024' : '1024x1536';
+}
+
+},
+"./wechat-red-packet-cover": function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.WECHAT_RED_PACKET_COVER_HEIGHT = exports.WECHAT_RED_PACKET_COVER_WIDTH = exports.WECHAT_RED_PACKET_COVER = void 0;
+exports.redPacketCoverGenerationSize = redPacketCoverGenerationSize;
+exports.redPacketCoverPrompt = redPacketCoverPrompt;
+const wallpaper_target_1 = require("./wallpaper-target");
+exports.WECHAT_RED_PACKET_COVER = '微信红包封面';
+exports.WECHAT_RED_PACKET_COVER_WIDTH = 957;
+exports.WECHAT_RED_PACKET_COVER_HEIGHT = 1278;
+const target = { width: exports.WECHAT_RED_PACKET_COVER_WIDTH, height: exports.WECHAT_RED_PACKET_COVER_HEIGHT, fit: 'cover' };
+function redPacketCoverGenerationSize(modelId) {
+    if (modelId === 'dall-e-3')
+        return '1024x1792';
+    return (0, wallpaper_target_1.wallpaperGenerationSize)(target, modelId);
+}
+function redPacketCoverPrompt(description) {
+    return [
+        '【微信红包封面构图】',
+        '生成单张接近 3:4 的竖向原创封面画面，画面延伸到边缘，保留居中裁切余量。关键主体和脸部集中在中部安全区域，顶部适当留白，底部避免放置重要细节。',
+        '只制作可上传的独立画面，不绘制微信界面、头像、昵称、红包外框、按钮、金额、品牌标志、水印或样机。只有用户明确给出要绘制的文字时，才照原文排入画面。',
+        '如提供参考图，保留指定人物、宠物或角色的可辨识特征，按本次要求调整风格与构图。',
+        '',
+        '【用户本次要求】',
+        description.trim(),
+    ].join('\n');
 }
 
 },
