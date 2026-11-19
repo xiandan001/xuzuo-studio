@@ -179,14 +179,49 @@ async function checkStreamingScroll(anchor) {
   }, 'stream follows the new bottom');
   const following = await composerPosition('long-stream-following', anchor);
   assert(Math.abs(following.composer.top - anchor.composer.top) <= 1, 'Streaming text must not change composer height');
+  // Scrolling is native compositor input. The DOM can already report the new
+  // scroll range while a hidden CI window still has the previous hit-test map.
+  window.webContents.focus();
+  window.webContents.invalidate();
+  const frame = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true });
+  assert(!frame.isEmpty(), 'A committed compositor frame is required for the wheel gesture');
+  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   const point = await evaluate(`(()=>{const e=${scroll},r=e.getBoundingClientRect();
-    e.addEventListener('wheel',event=>{window.chatHistoryWheel=event.isTrusted&&event.deltaY<0},{once:true,passive:true});
+    window.chatHistoryWheels=[];
+    e.addEventListener('wheel',event=>window.chatHistoryWheels.push({trusted:event.isTrusted,deltaY:event.deltaY,target:event.target.tagName}),{capture:true,passive:true,signal:(window.chatWheelListener=new AbortController()).signal});
     const x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);
     return {x,y,reachable:e.contains(document.elementFromPoint(x,y))};})()`);
   assert(point.reachable, 'Message area must receive a real wheel gesture');
+  const wheelSample = () => evaluate(`(()=>{const e=${scroll};return {events:window.chatHistoryWheels,pageUp:window.chatHistoryPageUp===true,top:e.scrollTop,max:e.scrollHeight-e.clientHeight}})()`);
+  report.historyWheel = { point, before: following.scrollTop, samples: [] };
   window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
-  window.webContents.sendInputEvent({ type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY: 450, canScroll: true });
-  await dom(`window.chatHistoryWheel && ${scroll}.scrollTop<${following.scrollTop - 9}`, 'trusted wheel moves away from the latest response');
+  for (let i = 0; i < 3; i++) {
+    window.webContents.sendInputEvent({ type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY: 450, canScroll: true });
+    await delay(100);
+    const sample = await wheelSample(); report.historyWheel.samples.push(sample);
+    if (sample.events.some(event => event.trusted && event.deltaY < 0) && sample.top < following.scrollTop - 9) break;
+  }
+  const keyboardAfter = Date.now() + 1200;
+  await until(async () => {
+    const sample = await wheelSample(); report.historyWheel.last = sample;
+    const wheeled = sample.events.some(event => event.trusted && event.deltaY < 0);
+    if ((wheeled || sample.pageUp) && sample.top < following.scrollTop - 9) {
+      report.historyWheel.readGesture = sample.pageUp ? 'page-up' : 'wheel';
+      return true;
+    }
+    // Some headless window servers do not deliver wheel events at all. In that
+    // case verify the user's other native reading path through the focusable region.
+    if (!sample.events.length && !report.historyWheel.requestedPageUp && Date.now() >= keyboardAfter) {
+      const focused = await evaluate(`(()=>{const e=${scroll};e.addEventListener('keydown',event=>{
+        window.chatHistoryPageUp=event.isTrusted&&event.key==='PageUp'&&event.target===e
+      },{once:true});e.focus({preventScroll:true});return document.activeElement===e})()`);
+      assert(focused, 'The actual message scroll region must be keyboard-focusable');
+      report.historyWheel.requestedPageUp = true;
+      for (const type of ['keyDown','keyUp']) window.webContents.sendInputEvent({ type, keyCode: 'PageUp' });
+    }
+    return false;
+  }, 'trusted reader input scrolls back from the latest response');
+  await evaluate('window.chatWheelListener.abort()');
   // End the Chromium wheel animation at a known reading position; its duration
   // differs between hidden and visible windows. Wait for the actual scroll event.
   await evaluate(`(()=>{const e=${scroll};window.chatReadingPosition=e.scrollTop<=1;const onScroll=()=>{if(e.scrollTop<=1){window.chatReadingPosition=true;e.removeEventListener('scroll',onScroll)}};e.addEventListener('scroll',onScroll);e.scrollTo({top:0,behavior:'instant'});})()`);
