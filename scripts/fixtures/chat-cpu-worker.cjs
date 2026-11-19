@@ -15,7 +15,7 @@ assert(!fs.lstatSync(ownerFile).isSymbolicLink());
 const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
 assert.equal(owner.kind, 'xuzuo-chat-studio'); assert.equal(owner.commit, process.env.GITHUB_SHA); assert.equal(owner.nonce, workerData.testOwnerNonce); assert.equal(owner.temporary, temporary);
 assert.equal(typeof owner.localRuntime, 'boolean');
-const dependencyRoot = path.join(root, ...(owner.localRuntime ? ['work', 'ui-build'] : []), 'node_modules');
+const dependencyRoot = owner.localRuntime && fs.existsSync(path.join(root, 'work/ui-build/node_modules/vite/package.json')) ? path.join(root, 'work/ui-build/node_modules') : path.join(root, 'node_modules');
 assert.equal(owner.dependencyRoot, dependencyRoot); assert(!fs.lstatSync(dependencyRoot).isSymbolicLink()); assert.equal(fs.realpathSync(dependencyRoot).toLowerCase(), dependencyRoot.toLowerCase());
 const Module = require('node:module'); process.env.NODE_PATH = dependencyRoot; Module._initPaths();
 const dependencyRequire = Module.createRequire(path.join(path.dirname(dependencyRoot), 'package.json'));

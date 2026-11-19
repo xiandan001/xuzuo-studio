@@ -173,16 +173,27 @@ async function homeBounds(width, height, theme, state) {
   assert(value.sendReachable, 'Send action must remain reachable'); value.passed = true; report.homeBounds.push(value);
 }
 async function overviewBoundaries(state) {
-  const count = calls.length, [originalWidth, originalHeight] = window.getContentSize(), originalTheme = await evaluate('document.documentElement.dataset.appTheme');
+  const count = calls.length, [originalWidth, originalHeight] = window.getContentSize();
+  const originalViewport = await evaluate('({width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.appTheme})'), originalTheme = originalViewport.theme;
   await click('[aria-label="切换最近作品测试数据"]'); await chooseScenario('宣传图');
   await evaluate(`document.querySelector('[aria-label="聊天内容"]').style.height='220px'`);
   for (const [width, height] of [[1440, 900], [1120, 760], [1280, 720], [960, 640]]) for (const theme of ['light', 'dark']) await homeBounds(width, height, theme, state);
   await evaluate(`document.querySelector('[aria-label="聊天内容"]').style.height=''`);
   await click('[aria-label="切换最近作品测试数据"]'); await dom(`!document.querySelector('.conversation-recent')`, 'return to no-project fixture');
   await chooseScenario('自由聊天'); assert.equal(calls.length, count, 'Layout checks must not send model requests');
-  window.setContentSize(originalWidth, originalHeight); nativeTheme.themeSource = originalTheme;
+  nativeTheme.themeSource = originalTheme;
   if (await evaluate('document.documentElement.dataset.appTheme') !== originalTheme) await click('button', originalTheme === 'dark' ? '切到黑夜' : '切到白天');
-  await dom(`innerWidth===${originalWidth}&&document.documentElement.dataset.appTheme===${JSON.stringify(originalTheme)}`, 'restore viewport and appearance after Overview boundaries');
+  await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(originalTheme)}`, 'restore appearance after Overview boundaries');
+  const restoration = { before: originalViewport, nativeOriginal: { width: originalWidth, height: originalHeight }, attempts: [] };
+  (report.homeBoundsRestorations ||= []).push(restoration);
+  let nativeWidth = originalWidth, nativeHeight = originalHeight;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    window.setContentSize(nativeWidth, nativeHeight); await delay(30);
+    const actual = await evaluate('({width:innerWidth,height:innerHeight})'); restoration.attempts.push({ requested: { width: nativeWidth, height: nativeHeight }, actual });
+    if (actual.width === originalViewport.width && actual.height === originalViewport.height) { restoration.passed = true; break; }
+    nativeWidth += originalViewport.width - actual.width; nativeHeight += originalViewport.height - actual.height;
+  }
+  assert.equal(restoration.passed, true, 'Restore the exact original renderer viewport: ' + JSON.stringify(restoration));
 }
 async function scenario() {
   await dom(`document.querySelector('[aria-label="聊天内容"]')&&!document.querySelector('.workspace-chat-working')`, 'empty usable chat');
