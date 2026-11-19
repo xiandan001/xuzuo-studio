@@ -1,5 +1,13 @@
 # macOS 开发与验收
 
+## 2.12.12 同步聊天与制作流程（2026-11-19）
+
+聊天输入区固定在底部，消息区可独立滚动和用键盘聚焦。将回复转为制作时会推荐场景并填入可编辑描述，工作区记住上次使用的制作模型和账户。
+
+微信红包封面增加聊天气泡与拆红包页预览。预览和导出使用同一份 957 × 1278 JPEG。方案可按本次授权自动精修未通过质检的样稿并复检。
+
+macOS 修复原生菜单在焦点切换时的撤销和重做，统一备份中的系统目录别名。回归覆盖取消退出后继续保存、中文路径以及 Apple Silicon 和 Intel 的独立构建。
+
 ## 2.12.8 新增微信红包封面与复核续跑简化（2026-11-19）
 
 图片工作台可切换到「微信红包封面」。输入主题即可生成一张竖版原图，风格和参考图可选。原图生成后任务直接完成，可在工作台查看位置模拟并导出。导出时居中适配为 957 × 1278 JPEG，体积至多 500,000 字节，原图保留。封面表单和生成确认均使用固定尺寸。参考 [微信红包封面制作指南](https://github.com/VaneAi888/vane-gpt-image-skills/blob/main/docs/wechat-red-packet-cover.md)。
@@ -196,7 +204,7 @@ node scripts/verify-macos-launch.mjs
 ```
 
 `package:mac` 构建 `.app`、拖入 Applications 的 `.dmg` 以及 `.zip`，目录为
-`outputs/release-v2.12.8/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
+`outputs/release-v2.12.12/`；仅需 `.app` 时使用 `npm run package:mac:dir`。
 `npm run package` 在当前系统自动选择 macOS 或原有 Windows 安装流程。
 Windows C# 磁盘助手和 WPF 维护程序不参与 macOS 构建。
 
@@ -217,7 +225,7 @@ npm run verify:mac
 ```
 
 最后一项核对实际 app.asar 与源代码、Mach-O 架构、图标、隐私描述、完整动画资源
-及独立工具离线启动；结果写入 `outputs/release-v2.12.8/macos-package-verification.json`。
+及独立工具离线启动；结果写入 `outputs/release-v2.12.12/macos-package-verification.json`。
 桌面验收使用隔离配置与中文空格路径，并禁止网络请求；结果及截图位于
 `work/macos-desktop-*/`。动画验收实际解码 GIF/PNG、核对帧时长和 ZIP，并检查取消
 及退出后的进程清理。测试不会调用付费模型。
