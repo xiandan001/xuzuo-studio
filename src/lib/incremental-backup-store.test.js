@@ -42,6 +42,12 @@ describe('流式不可变分卷与真实内容校验', () => {
     let opens = 0;
     const aliasFs = { ...fs, lstat: value => fs.lstat(translated(value)), realpath: value => fs.realpath(translated(value)), open: (...args) => { opens++; return fs.open(translated(args[0]), ...args.slice(1)); } };
     expect(await fileIdentity(aliasFs, path.join(alias, 'source.bin'))).toEqual({ bytes: data.length, sha256: digest(data) });
+    if (process.platform !== 'win32') {
+      const changedCase = { ...aliasFs, realpath: async value => value === path.join(alias, 'source.bin') ? path.join(canonical, 'SOURCE.bin') : aliasFs.realpath(value) };
+      const openedBefore = opens;
+      await expect(fileIdentity(changedCase, path.join(alias, 'source.bin'))).rejects.toThrow(/路径已变化/);
+      expect(opens).toBe(openedBefore);
+    }
     const before = opens, other = path.join(f.directory, 'other.bin'); await fs.writeFile(other, data);
     const redirected = { ...aliasFs, realpath: value => value === path.join(alias, 'source.bin') ? fs.realpath(other) : aliasFs.realpath(value) };
     await expect(fileIdentity(redirected, path.join(alias, 'source.bin'))).rejects.toThrow(/路径已变化/); expect(opens).toBe(before);

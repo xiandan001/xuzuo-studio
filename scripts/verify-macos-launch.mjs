@@ -41,7 +41,7 @@ async function connect(target) {
 }
 const targets = () => fetch(`http://127.0.0.1:${port}/json/list`).then(response => response.json()).catch(() => []);
 const report = { passed: false, commit: process.env.GITHUB_SHA || null, version: manifest.version, localDiagnostic: process.env.GITHUB_ACTIONS !== 'true', bundle, platform: process.platform, arch: process.arch, checks: [], errors: [] };
-const lazyPages = [["项目", "projects"], ["资源库", "assets"], ["自动化", "automation"]];
+const lazyPages = [["项目", "projects"], ["资源库", "assets"], ["自动化", "activity"]];
 try {
   const target = await until(async () => (await targets()).find(item => item.type === 'page' && item.url.endsWith('/index.html')), 'packaged renderer');
   assert(target.url.includes('/app.asar/'), 'Use the actual packaged application');

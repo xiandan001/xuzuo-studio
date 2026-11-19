@@ -21,7 +21,7 @@ function prepare() {
   temporary = fs.realpathSync(process.argv[2]); assert.equal(path.dirname(temporary).toLowerCase(), fs.realpathSync(process.env.RUNNER_TEMP).toLowerCase()); assert.match(path.basename(temporary), /^xuzuo-chat-studio-[A-Za-z0-9-]+$/);
   owner = JSON.parse(fs.readFileSync(path.join(temporary, 'owner.json'), 'utf8')); assert.equal(owner.kind, 'xuzuo-chat-studio'); assert.equal(owner.commit, report.commit); assert.match(owner.nonce, /^[a-f0-9-]{36}$/); report.nonce = owner.nonce;
   assert.equal(typeof owner.localRuntime, 'boolean');
-  const dependencyRoot = owner.localRuntime && !fs.existsSync(path.join(root, 'node_modules/vite/package.json')) ? path.join(root, 'work/ui-build/node_modules') : path.join(root, 'node_modules');
+  const dependencyRoot = owner.localRuntime && fs.existsSync(path.join(root, 'work/ui-build/node_modules/vite/package.json')) ? path.join(root, 'work/ui-build/node_modules') : path.join(root, 'node_modules');
   assert.equal(owner.dependencyRoot, dependencyRoot); ordinary(dependencyRoot, true);
   process.env.NODE_PATH = dependencyRoot; require('node:module').Module._initPaths();
   report.dependencyMode = dependencyRoot === path.join(root, 'node_modules') ? 'locked-root' : 'owned-local-build-runtime';
@@ -141,11 +141,18 @@ async function layout(width, theme, index) {
   const button = await evaluate(`(()=>{const e=document.querySelector('[aria-label="发送聊天消息"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {top:r.top,bottom:r.bottom,reachable:!!hit&&(hit===e||e.contains(hit)),footer:document.querySelector('.statusbar').getBoundingClientRect().top}})()`); assert(button.reachable && button.top >= 0 && button.bottom <= button.footer + 1, JSON.stringify(button)); value.sendButton = button;
   value.passed = true; report.layouts.push(value); await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))'); window.webContents.invalidate(); await delay(100); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); const filename = `${index}-chat-${theme}-${width}.png`; await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) });
 }
+async function settleOverviewBounds(width, theme) {
+  let previous;
+  await until(async () => {
+    const current = await evaluate(`(()=>{if(innerWidth!==${width}||document.documentElement.dataset.appTheme!==${JSON.stringify(theme)})return null;const nodes=['.workspace-chat','.workspace-chat-composer','.conversation-recent','.conversation-home','.app-content'].map(selector=>document.querySelector(selector));if(nodes.some(node=>!node))return null;return JSON.stringify(nodes.map(node=>{const r=node.getBoundingClientRect();return [r.left,r.top,r.right,r.bottom,r.width,r.height]}))})()`);
+    const stable = current !== null && current === previous; previous = current; return stable;
+  }, 'stable actual Overview geometry', 4000);
+}
 async function homeBounds(width, height, theme, state) {
   window.setContentSize(width, height); nativeTheme.themeSource = theme;
   if (await evaluate('document.documentElement.dataset.appTheme') !== theme) await click('button', theme === 'dark' ? '切到黑夜' : '切到白天');
   await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(theme)}&&document.querySelectorAll('.conversation-recent-work').length===3`, 'real Overview with recent works');
-  await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+  await settleOverviewBounds(width, theme);
   const value = await evaluate(`(()=>{const chat=document.querySelector('.workspace-chat'),composer=document.querySelector('.workspace-chat-composer'),recent=document.querySelector('.conversation-recent'),overview=document.querySelector('.conversation-home'),content=document.querySelector('.app-content');content.scrollTop=0;const r=e=>{const b=e.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};return {width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.appTheme,chat:r(chat),composer:r(composer),recent:r(recent),overview:r(overview),content:r(content),gap:parseFloat(getComputedStyle(overview).rowGap),documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth}})()`);
   value.state = state; const detail = JSON.stringify(value);
   assert(value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Overview horizontal overflow: ' + detail);
@@ -175,8 +182,7 @@ async function overviewBoundaries(state) {
   await chooseScenario('自由聊天'); assert.equal(calls.length, count, 'Layout checks must not send model requests');
   window.setContentSize(originalWidth, originalHeight); nativeTheme.themeSource = originalTheme;
   if (await evaluate('document.documentElement.dataset.appTheme') !== originalTheme) await click('button', originalTheme === 'dark' ? '切到黑夜' : '切到白天');
-  await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(originalTheme)}`, 'restore appearance after Overview boundaries');
-  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  await dom(`innerWidth===${originalWidth}&&document.documentElement.dataset.appTheme===${JSON.stringify(originalTheme)}`, 'restore viewport and appearance after Overview boundaries');
 }
 async function scenario() {
   await dom(`document.querySelector('[aria-label="聊天内容"]')&&!document.querySelector('.workspace-chat-working')`, 'empty usable chat');

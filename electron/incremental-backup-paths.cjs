@@ -1,7 +1,7 @@
 const fsDefault = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { checkedDirectory, inside } = require('./workspace-paths.cjs');
+const { checkedDirectory, inside, key } = require('./workspace-paths.cjs');
 
 const PART_BYTES = 16 * 1024 * 1024, READ_BYTES = 256 * 1024;
 const MAX_FILE = 100 * 1024 * 1024, MAX_TOTAL = 16 * 1024 * 1024 * 1024, MAX_FILES = 50000, MAX_METADATA = 32 * 1024 * 1024;
@@ -44,7 +44,7 @@ function sameFile(before, after) { return ['dev', 'ino', 'size', 'mtimeMs', 'cti
 async function ordinaryFile(fs, filename, maximum = MAX_FILE) {
   await checkedDirectory(fs, path.dirname(filename)); const stat = await fs.lstat(filename);
   const canonicalParent = await fs.realpath(path.dirname(filename));
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum || path.resolve(await fs.realpath(filename)).toLowerCase() !== path.resolve(canonicalParent, path.basename(filename)).toLowerCase()) throw Error('备份文件不是普通文件、路径已变化或超过大小限制。');
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum || key(await fs.realpath(filename)) !== key(path.join(canonicalParent, path.basename(filename)))) throw Error('备份文件不是普通文件、路径已变化或超过大小限制。');
   return stat;
 }
 async function readChunks(fs, filename, onChunk, { signal, yieldBackground, maximum = MAX_FILE } = {}) {

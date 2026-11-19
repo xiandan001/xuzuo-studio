@@ -73,13 +73,13 @@ async function verifyProjectTree(fs, source, destination) {
   }
 }
 const hash = value => createHash('sha256').update(value).digest('hex');
-async function atomicJson(fs, filename, value) {
+async function atomicJson(fs, filename, value, platform = process.platform) {
   await checkedDirectory(fs, path.dirname(filename), true);
   try { await checkedFile(fs, filename); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const temporary = `${filename}.${randomUUID()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
   try {
-    const delays = process.platform === 'win32' ? [25, 60, 120] : [];
+    const delays = platform === 'win32' ? [25, 60, 120] : [];
     for (let attempt = 0; ; attempt++) {
       try { await fs.rename(temporary, filename); break; }
       catch (error) {

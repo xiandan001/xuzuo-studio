@@ -35,9 +35,8 @@ describe('Windows atomic JSON transient sharing errors', () => {
     expect(rename).toHaveBeenCalledTimes(1); expect(await fs.readFile(f.filename, 'utf8')).toBe(f.original); expect(await fs.readdir(f.directory)).toEqual(['automation-center-v1.json']);
   });
   it('non-Windows EPERM remains a single attempt', async () => {
-    const f = await fixture(), descriptor = Object.getOwnPropertyDescriptor(process, 'platform'), rename = vi.fn(async () => { throw Object.assign(Error('owned other-platform error'), { code: 'EPERM' }); });
-    try { Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' }); await expect(atomicJson({ ...fs, rename }, f.filename, f.next)).rejects.toMatchObject({ code: 'EPERM' }); }
-    finally { Object.defineProperty(process, 'platform', descriptor); }
+    const f = await fixture(), rename = vi.fn(async () => { throw Object.assign(Error('owned other-platform error'), { code: 'EPERM' }); });
+    await expect(atomicJson({ ...fs, rename }, f.filename, f.next, 'linux')).rejects.toMatchObject({ code: 'EPERM' });
     expect(rename).toHaveBeenCalledTimes(1); expect(await fs.readFile(f.filename, 'utf8')).toBe(f.original); expect(await fs.readdir(f.directory)).toEqual(['automation-center-v1.json']);
   });
 });

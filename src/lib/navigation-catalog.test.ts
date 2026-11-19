@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { AppNavigation } from '../components/AppNavigation';
 import { APP_NAVIGATION, PRIMARY_NAVIGATION, TOOL_GROUPS, navigationTaskSummary, primaryNavigationView } from './navigation-catalog';
 import type { WorkflowRun } from '../configuration-types';
 import type { ViewId } from '../types';
@@ -10,7 +11,14 @@ describe('聚焦主导航与高级路由目录', () => {
     const literal = source.match(/^const lazyPages = (\[[^\n]+\]);$/m)?.[1];
     expect(literal).toBeDefined();
     const pages = JSON.parse(literal!);
-    expect(pages).toEqual(PRIMARY_NAVIGATION.filter(item => item.id !== 'overview').map(item => [item.label, item.id]));
+    expect(pages.map(([label]: [string, string]) => label)).toEqual(PRIMARY_NAVIGATION.filter(item => item.id !== 'overview').map(item => item.label));
+    const visited: ViewId[] = [];
+    const navigation = AppNavigation({ view: 'overview', onNavigate: id => visited.push(id) });
+    for (const [label, route] of pages) {
+      const button = navigation.props.children.find((item: { props: { 'aria-label': string } }) => item.props['aria-label'] === label);
+      button.props.onClick();
+      expect(visited.at(-1)).toBe(route);
+    }
     expect(source).toContain('for (const [label, content] of lazyPages)');
   });
   it('只有四个主入口，保留全部旧路由和工作台搜索入口', () => {

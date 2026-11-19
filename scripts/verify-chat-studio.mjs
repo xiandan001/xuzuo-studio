@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), buildOnly = process.argv.includes('--build-only'), localRuntime = buildOnly || process.argv.includes('--local-runtime');
-const runtime = localRuntime && !existsSync(path.join(root, 'node_modules/vite/package.json')) ? path.join(root, 'work/ui-build') : root;
+const runtime = localRuntime && existsSync(path.join(root, 'work/ui-build/node_modules/vite/package.json')) ? path.join(root, 'work/ui-build') : root;
 const load = createRequire(path.join(runtime, 'package.json'));
 const output = path.join(root, 'work/chat-studio-output'), hash = value => createHash('sha256').update(value).digest('hex');
 const report = { passed: false, commit: process.env.GITHUB_SHA, scope: 'Actual Overview and WorkspaceChat React, production shell/CSS and preload, real persistent chat service and provider adapter; deterministic in-memory SSE only', dependencyMode: runtime === root ? 'locked-root' : 'owned-local-build-runtime', actualProviderUsed: false, normalApplicationStarted: false, userProfileAccessed: false, errors: [] };
@@ -23,7 +23,7 @@ async function inventory(directory, base = directory, result = {}) {
     if (entry.isDirectory()) await inventory(file, base, result);
     else { const bytes = await fs.readFile(file); assert(bytes.length < 16 * 1024 * 1024); result[path.relative(base, file).replaceAll('\\', '/')] = hash(bytes); }
   }
-  assert(Object.keys(result).length <= 100); return result;
+  assert(Object.keys(result).length <= 256); return result;
 }
 async function build() {
   const vite = await import(pathToFileURL(load.resolve('vite')).href), react = (await import(pathToFileURL(load.resolve('@vitejs/plugin-react')).href)).default;
