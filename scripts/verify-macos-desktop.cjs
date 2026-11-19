@@ -25,7 +25,7 @@ function finish(error) {
   if (error) report.errors.push(String(error.stack || error));
   report.passed = report.errors.length === 0;
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
-  console.log(JSON.stringify({ passed: report.passed, checks: report.checks.length, report: path.join(output, 'report.json') }));
+  console.log(JSON.stringify({ passed: report.passed, checks: report.checks.length, phase: report.phase, errors: report.errors, report: path.join(output, 'report.json') }));
   app.exit(report.passed ? 0 : 1);
 }
 setTimeout(() => finish(Error('macOS desktop acceptance exceeded 90 seconds')), 90000).unref();
@@ -33,6 +33,15 @@ app.whenReady().then(() => {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => callback({ cancel: true }));
 });
 require('../electron/main.cjs');
+async function respondToClosingDialog(popup, expression) {
+  try { await popup.webContents.executeJavaScript(expression); }
+  catch (error) {
+    // A successful IPC response closes this popup before Electron can return
+    // its evaluate ACK. Never suppress an error from the main window.
+    if (!String(error).includes('Render frame was disposed before the request completed')) throw error;
+  }
+  await until(() => popup.isDestroyed(), 'responded popup closes');
+}
 async function run() {
   await app.whenReady();
   const window = await until(() => BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/index.html')), 'main window');
@@ -66,23 +75,38 @@ async function run() {
   await until(() => picker.webContents.executeJavaScript('Boolean(window.studioDialog && document.querySelector(".file-dialog-layout"))').catch(() => false), 'file picker React');
   const config = await picker.webContents.executeJavaScript('studioDialog.request()'); assert.equal(config.kind, 'save');
   await picker.webContents.executeJavaScript(`studioDialog.list({path:${JSON.stringify(destination)}})`);
-  await picker.webContents.executeJavaScript(`void studioDialog.accept({directory:${JSON.stringify(destination)},filename:'验收.txt'}).catch(()=>{}); void 0`);
+  await respondToClosingDialog(picker, `void studioDialog.accept({directory:${JSON.stringify(destination)},filename:'验收.txt'}).catch(()=>{}); void 0`);
   const saved = await contents.executeJavaScript('window.qaSave'); assert.equal(saved.saved, true);
   const savedFile = fs.readdirSync(destination).find(name => name.endsWith('.txt')); assert(savedFile);
   assert.equal(fs.readFileSync(path.join(destination, savedFile), 'utf8'), 'macOS 中文保存 ✓');
   report.checks.push('Custom file picker saves actual UTF-8 bytes to a Chinese directory with spaces');
   // Closing with an unsaved editor must retain the app when the user chooses Return.
+  report.phase = 'unsaved-close-confirmation';
   await contents.executeJavaScript('desktop.onCloseStateRequested(() => ({blocked:true})); void 0');
   window.close();
   const confirmation = await until(() => BrowserWindow.getAllWindows().find(item => item !== window), 'unsaved-close confirmation');
   await until(() => confirmation.webContents.executeJavaScript('Boolean(window.studioDialog && document.querySelector(".sd-message"))').catch(() => false), 'confirmation UI');
   const warning = await confirmation.webContents.executeJavaScript('studioDialog.request()'); assert.equal(warning.kind, 'message');
-  await confirmation.webContents.executeJavaScript('void studioDialog.respondMessage(0).catch(()=>{}); void 0');
+  report.phase = 'unsaved-close-response';
+  await respondToClosingDialog(confirmation, 'void studioDialog.respondMessage(0).catch(()=>{}); void 0');
   await until(() => BrowserWindow.getAllWindows().length === 1, 'cancel close');
   assert.equal(window.isDestroyed(), false);
   await until(() => contents.executeJavaScript('!document.querySelector("[data-application-closing]")'), 'editor usable after cancelled close');
+  report.phase = 'write-after-cancelled-close';
+  await contents.executeJavaScript('window.qaAfterCancel=desktop.fileDialogs.saveText({filename:"取消退出后.txt",text:"取消退出后仍可保存 ✓"}); void 0');
+  const resumedPicker = await until(() => BrowserWindow.getAllWindows().find(item => item !== window), 'file picker after cancelled close');
+  await until(() => resumedPicker.webContents.executeJavaScript('Boolean(window.studioDialog && document.querySelector(".file-dialog-layout"))').catch(() => false), 'resumed picker UI');
+  await respondToClosingDialog(resumedPicker, `void studioDialog.accept({directory:${JSON.stringify(destination)},filename:'取消退出后.txt'}).catch(()=>{}); void 0`);
+  assert.equal((await contents.executeJavaScript('window.qaAfterCancel')).saved, true);
+  const afterCancelText = fs.readFileSync(path.join(destination, '取消退出后.txt'), 'utf8');
+  assert.equal(afterCancelText, '取消退出后仍可保存 ✓');
+  await until(() => BrowserWindow.getAllWindows().length === 1, 'resumed picker closes');
+  assert.equal(window.isDestroyed(), false);
+  assert.equal(await contents.executeJavaScript('Boolean(document.querySelector("[data-application-closing]"))'), false);
+  report.closeCancellation = { mainWindowRetained: true, closingStateCleared: true, subsequentSaveVerified: true, bytes: Buffer.byteLength(afterCancelText, 'utf8') };
   await contents.executeJavaScript('desktop.onCloseStateRequested(() => ({blocked:false})); void 0');
-  report.checks.push('Native window close protects unsaved editing and cancel keeps the app usable');
+  report.checks.push('Native window close protects unsaved editing; cancel retains the window and permits another actual UTF-8 save');
+  report.phase = 'capture';
   const screenshot = await contents.capturePage(); fs.writeFileSync(path.join(output, 'desktop.png'), screenshot.toPNG());
   await finish();
 }
