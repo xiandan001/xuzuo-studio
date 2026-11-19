@@ -189,9 +189,12 @@ describe('无需项目的普通聊天持久化与计费', () => {
   });
   it('制作模式也不需要项目，只有通过完整结构验证的方案才可执行', async () => {
     let valid = true;
-    const f = await setup({ execute: async () => ({ ...receipt, text: valid ? JSON.stringify(plan) : '{"partial":true}' }) });
+    const rawPlan = { ...plan, acceptance: ['必须有金色“开”按钮', '保留3D小熊和开门红题字'], constraints: ['导出1080×1920'] };
+    const f = await setup({ execute: async () => ({ ...receipt, text: valid ? JSON.stringify(rawPlan) : '{"partial":true}' }) });
     const request = { ...base, mode: 'plan', outputKind: 'image', imagePreset: '微信红包封面' }; await f.service.start(request);
     const value = await settled(f.service); expect(value.turns[0]).toMatchObject({ mode: 'plan', status: 'complete', imagePreset: '微信红包封面', plan: { name: plan.name, outputKind: 'image' } });
+    expect(value.turns[0].text).toBe(JSON.stringify(rawPlan));
+    expect(value.turns[0].plan.acceptance).toContain('保留3D小熊和开门红题字'); expect(JSON.stringify(value.turns[0].plan)).not.toMatch(/1080|必须有金色/);
     const reopened = createChatService({ directory: f.directory, credentialStore: credentials }); services.push(reopened);
     expect(await reopened.read(base)).toMatchObject({ turns: [{ imagePreset: '微信红包封面' }] });
     expect(await fs.readdir(f.directory)).toEqual(['chat-v1']);

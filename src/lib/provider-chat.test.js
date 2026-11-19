@@ -32,6 +32,18 @@ function macCredentials(decryptStringAsync) {
   });
 }
 describe('普通聊天的真实供应商传输', () => {
+  it('自由聊天和显式红包规划获得系统级规范，海报及 UI 原型继续普通对话', () => {
+    const text = '当前想要做一个3D可爱风微信红包页面的图，有什么规划';
+    const make = options => prepareChat({ ...input, text, ...options }, [{ role: 'user', content: '画粉色小熊，中央必须有金色“开”按钮，尺寸1080×1920。' }]).body;
+    expect(make({}).instructions).toContain('957 × 1278');
+    const planning = make({ mode: 'plan', imagePreset: '微信红包封面' });
+    expect(planning.instructions).toContain('JSON'); expect(planning.instructions).toContain('500,000');
+    expect(planning.input[0].content).toContain('画粉色小熊'); expect(planning.input[0].content).not.toMatch(/1080|按钮/);
+    expect(make({ mode: 'plan' }).instructions).not.toContain('500,000');
+    expect(make({ text: '开发微信红包页面的 UI 原型' }).instructions).not.toContain('957 × 1278');
+    const follow = question => prepareChat({ ...input, text: question }, [{ role: 'user', content: text }, { role: 'assistant', content: '继续说说。' }, { role: 'user', content: question }]).body;
+    expect(follow('换成小熊').instructions).toContain('957 × 1278'); expect(follow('改成手机壁纸').instructions).not.toContain('957 × 1278');
+  });
   it('identifies an HTTP-200 quota stream error without exposing provider messages or retrying', async () => {
     let calls = 0, failure;
     try { await executeChat(input, messages, { credentialStore: credentials, fetchImpl: async () => { calls++; return sse([{ type: 'response.output_text.delta', delta: '已返回片段' }, { type: 'error', error: { code: 'credit_balance_exhausted', type: 'insufficient_quota', message: 'fixture-secret-123 untrusted details' } }]); } }); }

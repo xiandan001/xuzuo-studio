@@ -1,5 +1,5 @@
 import { useAutoSizeTextarea } from '../hooks/useAutoSizeTextarea';
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, Check, Copy, FileDown, History, LoaderCircle, MessageCircle, Paperclip, Plus, RotateCcw, Sparkles, Square, UserRound, WandSparkles } from 'lucide-react';
 import type { PageProps, Project, ProjectKind } from '../types';
 import type { ChatAttachment, ChatQueueEntry, ChatTarget, ChatTargetInspection, ChatTurn, ChatStartRequest } from '../chat-types';
@@ -81,16 +81,16 @@ export const ChatMessagePair = memo(function ChatMessagePair({ turn, workspaceId
   </div>;
 });
 
-export function WorkspaceChat({ props, onLegacy }: { props: PageProps; onLegacy: () => void }) {
+export function WorkspaceChat({ props, onLegacy, children }: { props: PageProps; onLegacy: () => void; children?: ReactNode }) {
   const [freshId] = useState(() => crypto.randomUUID());
   const [conversationId, setConversationId] = useRememberedString(`workspace:${props.workspaceId}:chat-conversation`, freshId);
   useEffect(() => { setConversationId(conversationId); }, [conversationId, setConversationId]);
   const searched = props.searchTarget?.kind === 'chat' && props.searchTarget.workspaceId === props.workspaceId ? props.searchTarget.conversationId || props.searchTarget.id : undefined;
   const shownId = searched || (props.chatIntent?.workspaceId === props.workspaceId ? props.chatIntent.conversationId : conversationId);
   useEffect(() => { if (shownId !== conversationId) setConversationId(shownId); }, [shownId, conversationId, setConversationId]);
-  return <WorkspaceChatSession key={`${props.workspaceId}/${shownId}`} props={props} conversationId={shownId} onSelect={setConversationId} onLegacy={onLegacy} />;
+  return <WorkspaceChatSession key={`${props.workspaceId}/${shownId}`} props={props} conversationId={shownId} onSelect={setConversationId} onLegacy={onLegacy}>{children}</WorkspaceChatSession>;
 }
-function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { props: PageProps; conversationId: string; onSelect: (id: string) => void; onLegacy: () => void }) {
+function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy, children }: { props: PageProps; conversationId: string; onSelect: (id: string) => void; onLegacy: () => void; children?: ReactNode }) {
   const chat = useWorkspaceChat(props.workspaceId, conversationId), input = useInputDraft(props.workspaceId, conversationId);
   const attachments = useChatAttachments(props.workspaceId, conversationId);
   const [binding, setBinding] = useState(() => readBinding(props.workspaceId));
@@ -118,6 +118,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const [historyOpen, setHistoryOpen] = useState(false), [windowStart, setWindowStart] = useState<number>(), [activePlan, setActivePlan] = useState(''), [searchMatch, setSearchMatch] = useState('');
   const consumedSearch = useRef(''), preparedSearch = useRef(''), windowScroll = useRef<'start' | 'end' | undefined>(undefined);
   const textarea = useRef<HTMLTextAreaElement>(null), thread = useRef<HTMLDivElement>(null), pinned = useRef(true), sending = useRef(false), attachmentPopup = useRef<HTMLDivElement>(null), attachmentTrigger = useRef<HTMLButtonElement>(null);
+  const lastScrollTop = useRef(0);
   useAutoSizeTextarea(textarea, input.text);
   const selected = naturalModelSelection(props.configuration, 'text', binding);
   const turns = chat.conversation?.turns || [], latest = turns.at(-1), latestPlan = [...turns].reverse().find(turn => turn.plan);
@@ -127,7 +128,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const separateQuote = !!planReference.reference && !planReference.reference.inDraft;
   const isTool = scenario.entry === 'image-workbench' && !planReference.reference;
   const visibleTimeline = timeline.slice(range.start, range.end);
-  const visibleKeys = visibleTimeline.map(item => item.key).join('\u0000');
+  const hasConversation = turns.length > 0 || productionLinks.length > 0;
   const queued = chat.conversation?.queue || [], willQueue = chat.queue.supported && (chat.running || queued.length > 0);
   const editingTarget = !!targetData && targetAction === 'edit', continuingTool = isTool && !targetData;
   const targetBusy = targetPreparing || discussionPreparing;
@@ -143,23 +144,25 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   const costSignature = turns.map(turn => [turn.id, turn.costCents, turn.costState, turn.calculation?.nativeCurrency, turn.calculation?.nativeAmount, turn.calculation?.cnyAmount, turn.calculation?.completeness].join(':')).join('|');
   const summary = useMemo(() => summarizeCosts(turns.map(turn => ({ ...turn, billingMode: 'live' as const }))), [costSignature]);
   useEffect(() => { if (latestPlan) setActivePlan(latestPlan.id); }, [latestPlan?.id]);
-  useEffect(() => {
+  const followTail = useCallback(() => {
     const element = thread.current;
-    if (!pinned.current || !element) return;
-    const frame = requestAnimationFrame(() => { if (pinned.current && thread.current === element) element.scrollTop = element.scrollHeight; });
+    if (!element || !pinned.current) return;
+    element.scrollTop = element.scrollHeight;
+    lastScrollTop.current = element.scrollTop;
+  }, []);
+  useEffect(() => {
+    if (!hasConversation || !pinned.current) return;
+    const frame = requestAnimationFrame(followTail);
     return () => cancelAnimationFrame(frame);
-  }, [latest?.updatedAt, latest?.text, turns.length]);
+  }, [followTail, hasConversation, latest?.updatedAt, latest?.text, turns.length]);
   useEffect(() => {
     const element = thread.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (pinned.current && thread.current === element) element.scrollTop = element.scrollHeight;
-    });
+    if (!hasConversation || !element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(followTail);
     observer.observe(element);
-    // The viewport stops growing before its visible turns do.
-    for (const child of element.children) observer.observe(child);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
     return () => observer.disconnect();
-  }, [visibleKeys]);
+  }, [hasConversation, followTail]);
   useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.kind !== 'chat' || target.workspaceId !== props.workspaceId || (target.conversationId || target.id) !== conversationId || consumedSearch.current === target.token || chat.loading) return;
@@ -176,10 +179,31 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
     });
     return () => cancelAnimationFrame(frame);
   }, [props.searchTarget?.token, chat.loading, chat.error, chat.conversation?.id, timeline, range.start, range.end]);
+  function handleScroll() {
+    const element = thread.current;
+    if (!element) return;
+    const top = element.scrollTop, movedUp = top < lastScrollTop.current - 1;
+    lastScrollTop.current = top;
+    if (windowStart === undefined && element.scrollHeight - top - element.clientHeight <= 8) pinned.current = true;
+    else if (movedUp) {
+      // Content can grow between an automatic scroll and its delayed event.
+      // A larger distance from the bottom alone does not mean the reader scrolled up.
+      pinned.current = false;
+      if (windowStart === undefined && timeline.length > CHAT_WINDOW_SIZE) setWindowStart(range.start);
+    }
+  }
   function moveWindow(start?: number) { pinned.current = start === undefined; windowScroll.current = start === undefined ? 'end' : 'start'; setSearchMatch(''); setWindowStart(start); }
   useEffect(() => {
     const position = windowScroll.current, element = thread.current; if (!position || !element) return;
-    const frame = requestAnimationFrame(() => { if (windowScroll.current !== position) return; windowScroll.current = undefined; if (thread.current === element && (position !== 'end' || pinned.current)) element.scrollTop = position === 'end' ? element.scrollHeight : 0; });
+    const frame = requestAnimationFrame(() => {
+      if (windowScroll.current !== position || thread.current !== element) return;
+      windowScroll.current = undefined;
+      if (position === 'end') { if (pinned.current) element.scrollTop = element.scrollHeight; }
+      else {
+        const list = element.querySelector('.workspace-chat-thread');
+        if (list) element.scrollTop += list.getBoundingClientRect().top - element.getBoundingClientRect().top;
+      }
+    });
     return () => cancelAnimationFrame(frame);
   }, [range.start, range.end, windowStart]);
   function chooseBinding(value: NaturalBinding) {
@@ -311,35 +335,42 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy }: { p
   return <section className="workspace-chat" aria-label="首页聊天与制作">
     <header className="workspace-chat-header"><div><small>序作 · 你的创作伙伴</small><h2>{turns.length || productionLinks.length ? chat.conversation?.title : mode === 'plan' ? '说出想法，一起做成作品' : '先聊聊你的想法'}</h2></div><nav><button className="btn-icon" type="button" aria-label="聊天历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={18} /></button><Select aria-label="更多聊天操作" value="" options={[{ value: '', label: '更多' }, { value: 'export', label: '导出当前对话', disabled: !turns.length && !productionLinks.length }, { value: 'legacy', label: '以往创作对话' }]} onValueChange={value => { if (value === 'legacy') onLegacy(); if (value === 'export' && chat.conversation) void downloadFile(`序作-对话-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, JSON.stringify(chat.conversation, null, 2)); }} /><button className="btn btn-secondary" type="button" disabled={chat.pending} onClick={() => onSelect(crypto.randomUUID())}><Plus size={15} />新对话</button></nav></header>
     {historyOpen && <ModalPortal onClose={() => setHistoryOpen(false)} variant="drawer"><div className="workspace-chat-history-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setHistoryOpen(false); }}><section className="workspace-chat-history-panel" role="dialog" aria-modal="true" aria-label="聊天记录"><ChatHistorySidebar workspaceId={props.workspaceId} activeId={conversationId} onSelect={id => { onSelect(id); setHistoryOpen(false); }} onNew={() => { onSelect(crypto.randomUUID()); setHistoryOpen(false); }} onClose={() => setHistoryOpen(false)} /></section></div></ModalPortal>}
-    {chat.loading && <p className="workspace-chat-working" role="status"><LoaderCircle size={16} className="spin" />正在读取已保存的对话…</p>}
-    {!chat.loading && !turns.length && !productionLinks.length && <div className="workspace-chat-welcome"><div className="workspace-chat-welcome-icon"><MessageCircle size={26} /></div><p>问问题、讨论需求，或者把想法变成图片与文档。</p><span>聊天直接开始，只有制作作品时才需要选择保存项目。</span><div>{['帮我把一句产品介绍写得更吸引人', '帮我制作一张产品宣传图，自动检查并精修一轮'].map((text, index) => <button type="button" key={text} onClick={() => { input.setText(text); switchMode(index ? 'plan' : 'chat'); textarea.current?.focus(); }}>{text}</button>)}</div></div>}
-    {(!!turns.length || !!productionLinks.length) && <div ref={thread} className="workspace-chat-thread" role="log" aria-label="聊天消息" onScroll={() => { const element = thread.current; if (!element) return; const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 90; pinned.current = windowStart === undefined && atBottom; if (!atBottom && windowStart === undefined && timeline.length > CHAT_WINDOW_SIZE) setWindowStart(range.start); }}>
-      {timeline.length > CHAT_WINDOW_SIZE && <div className="chat-window-controls"><span>第 {range.start + 1}–{range.end} 条 · 共 {timeline.length} 条记录</span><nav>{range.before > 0 && <button type="button" className="text-button" onClick={() => moveWindow(Math.max(0, range.start - CHAT_WINDOW_SIZE))}>查看前 {Math.min(CHAT_WINDOW_SIZE, range.before)} 条</button>}{windowStart !== undefined && <button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button>}</nav></div>}
-      {visibleTimeline.map(item => item.kind === 'legacy' ? <ChatTimelineResults key={item.key} props={props} outputs={[item.output]} legacy /> : <div key={item.key} className={'chat-turn-container' + (searchMatch === item.turn.id ? ' is-search-match' : '')} data-chat-turn-id={item.turn.id} tabIndex={-1}><ChatMessagePair turn={item.turn} workspaceId={props.workspaceId} conversationId={conversationId} canRetry={!chat.running && !chat.pending && !queued.length && item.turn.id === latest?.id} onRetry={retryTurn} onMake={makeTurn} onCopy={copyTurn} onSaveFile={setSaveTurn} />{item.turn.plan && <div className="workspace-chat-plan-action">{activePlan === item.turn.id ? <Suspense fallback={<p role="status">正在打开已保存的制作方案…</p>}><ChatPlanProduction props={props} turn={item.turn} conversationId={conversationId} planner={{ modelConfigId: item.turn.modelConfigId, credentialId: item.turn.credentialId, reasoningEffort: item.turn.reasoningEffort }} /></Suspense> : <button type="button" className="btn btn-secondary" onClick={() => setActivePlan(item.turn.id)}>查看这份方案与作品</button>}</div>}{item.outputs.length > 0 && <ChatTimelineResults props={props} outputs={item.outputs} />}</div>)}
-      {range.after > 0 && <div className="chat-window-controls chat-window-after"><span>后面还有 {range.after} 条沟通与结果</span><nav><button type="button" className="text-button" onClick={() => moveWindow(range.start + CHAT_WINDOW_SIZE)}>查看后 {Math.min(CHAT_WINDOW_SIZE, range.after)} 条</button><button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button></nav></div>}
-    </div>}
-    {saveTurn && <Suspense fallback={<p role="status">正在准备保存文件…</p>}><ChatReplyExportDialog props={props} conversationId={conversationId} turn={saveTurn} onClose={() => setSaveTurn(undefined)} onSaved={chat.reload} /></Suspense>}
-    {refinement.error && <p className="workspace-chat-error" role="alert">{refinement.error}{refinement.unknown && <button type="button" className="text-button" onClick={() => { void refinement.readUnknown(); }}>读取任务状态 · 不重发</button>}</p>}
-    {(chat.error || input.error || attachments.error) && <div className="workspace-chat-error" role="alert">{chat.error || input.error || attachments.error}<button type="button" className="text-button" disabled={chat.pending} onClick={chat.reload}>重新读取 · 不调用 AI</button></div>}
-    {turns.some(turn => turn.saveIssue) && <button type="button" className="btn btn-secondary" disabled={chat.pending || chat.running} onClick={() => { void chat.flush(); }}>重试保存 · 不调用 AI</button>}
+    <div className="workspace-chat-scroll" ref={thread} onScroll={handleScroll}>
+      <div className="workspace-chat-scroll-content">
+        {chat.loading && <p className="workspace-chat-working" role="status"><LoaderCircle size={16} className="spin" />正在读取已保存的对话…</p>}
+        {!chat.loading && !turns.length && !productionLinks.length && <div className="workspace-chat-welcome"><div className="workspace-chat-welcome-icon"><MessageCircle size={26} /></div><p>问问题、讨论需求，或者把想法变成图片与文档。</p><span>聊天直接开始，只有制作作品时才需要选择保存项目。</span><div>{['帮我把一句产品介绍写得更吸引人', '帮我制作一张产品宣传图，自动检查并精修一轮'].map((text, index) => <button type="button" key={text} onClick={() => { input.setText(text); switchMode(index ? 'plan' : 'chat'); textarea.current?.focus(); }}>{text}</button>)}</div></div>}
+        {children}
+        {hasConversation && <div className="workspace-chat-thread" role="log" aria-label="聊天消息">
+          {timeline.length > CHAT_WINDOW_SIZE && <div className="chat-window-controls"><span>第 {range.start + 1}–{range.end} 条 · 共 {timeline.length} 条记录</span><nav>{range.before > 0 && <button type="button" className="text-button" onClick={() => moveWindow(Math.max(0, range.start - CHAT_WINDOW_SIZE))}>查看前 {Math.min(CHAT_WINDOW_SIZE, range.before)} 条</button>}{windowStart !== undefined && <button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button>}</nav></div>}
+          {visibleTimeline.map(item => item.kind === 'legacy' ? <ChatTimelineResults key={item.key} props={props} outputs={[item.output]} legacy /> : <div key={item.key} className={'chat-turn-container' + (searchMatch === item.turn.id ? ' is-search-match' : '')} data-chat-turn-id={item.turn.id} tabIndex={-1}><ChatMessagePair turn={item.turn} workspaceId={props.workspaceId} conversationId={conversationId} canRetry={!chat.running && !chat.pending && !queued.length && item.turn.id === latest?.id} onRetry={retryTurn} onMake={makeTurn} onCopy={copyTurn} onSaveFile={setSaveTurn} />{item.turn.plan && <div className="workspace-chat-plan-action">{activePlan === item.turn.id ? <Suspense fallback={<p role="status">正在打开已保存的制作方案…</p>}><ChatPlanProduction props={props} turn={item.turn} conversationId={conversationId} planner={{ modelConfigId: item.turn.modelConfigId, credentialId: item.turn.credentialId, reasoningEffort: item.turn.reasoningEffort }} /></Suspense> : <button type="button" className="btn btn-secondary" onClick={() => setActivePlan(item.turn.id)}>查看这份方案与作品</button>}</div>}{item.outputs.length > 0 && <ChatTimelineResults props={props} outputs={item.outputs} />}</div>)}
+          {range.after > 0 && <div className="chat-window-controls chat-window-after"><span>后面还有 {range.after} 条沟通与结果</span><nav><button type="button" className="text-button" onClick={() => moveWindow(range.start + CHAT_WINDOW_SIZE)}>查看后 {Math.min(CHAT_WINDOW_SIZE, range.after)} 条</button><button type="button" className="text-button" onClick={() => moveWindow()}>回到最新回复</button></nav></div>}
+        </div>}
+        {saveTurn && <Suspense fallback={<p role="status">正在准备保存文件…</p>}><ChatReplyExportDialog props={props} conversationId={conversationId} turn={saveTurn} onClose={() => setSaveTurn(undefined)} onSaved={chat.reload} /></Suspense>}
+        {refinement.error && <p className="workspace-chat-error" role="alert">{refinement.error}{refinement.unknown && <button type="button" className="text-button" onClick={() => { void refinement.readUnknown(); }}>读取任务状态 · 不重发</button>}</p>}
+        {(chat.error || input.error || attachments.error) && <div className="workspace-chat-error" role="alert">{chat.error || input.error || attachments.error}<button type="button" className="text-button" disabled={chat.pending} onClick={chat.reload}>重新读取 · 不调用 AI</button></div>}
+        {turns.some(turn => turn.saveIssue) && <button type="button" className="btn btn-secondary" disabled={chat.pending || chat.running} onClick={() => { void chat.flush(); }}>重试保存 · 不调用 AI</button>}
+        {activePlanTurn && <p className="workspace-chat-bottom-note">制作任务会在后台排队运行；你可以切回“聊天”继续沟通。</p>}
+      </div>
+    </div>
     <form className={`workspace-chat-composer${dragging ? ' is-dragging' : ''}`} aria-label="聊天输入" onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragging(true); } }} onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false); }} onDrop={event => { if (!event.dataTransfer.files.length) return; event.preventDefault(); setDragging(false); addIncomingFiles([...event.dataTransfer.files]); }} onSubmit={event => { event.preventDefault(); void send(); }}>
-      <ChatPlanReference value={planReference} />
-      {chat.queue.unknown && !chat.queue.busy && <div className="chat-queue-pending" role="status"><span>上次排队结果尚未确认，未重复发送。</span><button type="button" className="text-button" onClick={() => { void readQueuedSubmission(); }}>读取排队状态</button></div>}
-      {queued.length > 0 && <ChatQueuePanel scope={props.workspaceId + '/' + conversationId} entries={queued} busy={chat.queue.busy || !!chat.queue.unknown} onManage={chat.queue.manage} onRestore={restoreQueuedDraft} onReturnFocus={() => textarea.current?.focus()} />}
-      <div className="workspace-chat-composer-toolbar">{targetData ? <div className="chat-target-heading"><strong>修改：{targetData.inspection.artifact.name}</strong><small>{targetData.target.editorRevision ? '保存版本 v' + targetData.target.editorRevision : '选定成品 · 原稿保留'}</small><button type="button" className="text-button" disabled={refinement.busy || targetBusy} onClick={() => { void toggleTargetAction(); }}>{targetAction === 'edit' ? '先讨论' : '改为直接精修'}</button><button type="button" className="text-button" disabled={refinement.busy || targetBusy} onClick={() => setTargetData(undefined)}>退出成品修改</button></div> : <ChatScenarioPicker workspaceId={props.workspaceId} scenarios={scenarios} value={scenario.id} disabled={toolBusy} onSelect={chooseScenario} />}{targetData?.target.kind === 'image' && targetAction === 'edit' ? <NaturalAutomationModels configuration={props.configuration} capability="image-editing" label="精修图片" value={imageBinding} disabled={refinement.busy || targetBusy} onChange={setImageBinding} /> : (!isTool || !!targetData) && <ConversationModelPicker configuration={props.configuration} value={binding} disabled={chat.pending || chat.queue.busy || chat.running && !chat.queue.supported || refinement.busy} onChange={chooseBinding} onManage={() => props.navigate('models')} />}</div>
-      {!targetData && <p className="workspace-chat-note">{isTool ? "专用工具 · 进入后设置并制作" : scenario.mode === "plan" ? "先出方案，确认后才制作" : "直接沟通，无需创建项目"}</p>}
+      <div className="workspace-chat-composer-body">
+        <ChatPlanReference value={planReference} />
+        {chat.queue.unknown && !chat.queue.busy && <div className="chat-queue-pending" role="status"><span>上次排队结果尚未确认，未重复发送。</span><button type="button" className="text-button" onClick={() => { void readQueuedSubmission(); }}>读取排队状态</button></div>}
+        {queued.length > 0 && <ChatQueuePanel scope={props.workspaceId + '/' + conversationId} entries={queued} busy={chat.queue.busy || !!chat.queue.unknown} onManage={chat.queue.manage} onRestore={restoreQueuedDraft} onReturnFocus={() => textarea.current?.focus()} />}
+        <div className="workspace-chat-composer-toolbar">{targetData ? <div className="chat-target-heading"><strong>修改：{targetData.inspection.artifact.name}</strong><small>{targetData.target.editorRevision ? '保存版本 v' + targetData.target.editorRevision : '选定成品 · 原稿保留'}</small><button type="button" className="text-button" disabled={refinement.busy || targetBusy} onClick={() => { void toggleTargetAction(); }}>{targetAction === 'edit' ? '先讨论' : '改为直接精修'}</button><button type="button" className="text-button" disabled={refinement.busy || targetBusy} onClick={() => setTargetData(undefined)}>退出成品修改</button></div> : <ChatScenarioPicker workspaceId={props.workspaceId} scenarios={scenarios} value={scenario.id} disabled={toolBusy} onSelect={chooseScenario} />}{targetData?.target.kind === 'image' && targetAction === 'edit' ? <NaturalAutomationModels configuration={props.configuration} capability="image-editing" label="精修图片" value={imageBinding} disabled={refinement.busy || targetBusy} onChange={setImageBinding} /> : (!isTool || !!targetData) && <ConversationModelPicker configuration={props.configuration} value={binding} disabled={chat.pending || chat.queue.busy || chat.running && !chat.queue.supported || refinement.busy} onChange={chooseBinding} onManage={() => props.navigate('models')} />}</div>
+        {!targetData && <p className="workspace-chat-note">{isTool ? "专用工具 · 进入后设置并制作" : scenario.mode === "plan" ? "先出方案，确认后才制作" : "直接沟通，无需创建项目"}</p>}
+        {resourceSource && <Suspense fallback={<p>正在打开资料库…</p>}><ChatResourcePicker props={props} source={resourceSource} busy={attachments.busy} onClose={() => setResourceSource(undefined)} onAsset={attachments.addAsset} onFile={attachments.addProjectArtifact} /></Suspense>}
+        {continuingTool && <Select aria-label="工具保存项目" value={toolProjectId} disabled={toolBusy} onValueChange={setToolProjectId} options={[{ value: 'new', label: '新建作品' }, ...props.projects.filter(project => project.kind === 'image' && project.workspaceId === props.workspaceId && !project.trashedAt && !project.purgedAt).map(project => ({ value: project.id, label: '继续：' + project.name }))]} />}
+        <ChatAttachments files={attachments.files} workspaceId={props.workspaceId} conversationId={conversationId} onRemove={attachments.remove} disabled={attachments.busy} />
+        {continuingTool && <p className="workspace-chat-note">{scenario.description} 先打开工具，再调整并生成。</p>}
+        {targetData?.note && <p className="workspace-chat-note">{targetData.note}</p>}
+        {targetDiscussionIssue && targetData?.inspection.artifact.mimeType === 'image/gif' && <p className="workspace-chat-note">这份动画尚未作为参考发送。<button type="button" className="text-button" onClick={openGifWorkshop}>打开 GIF 工坊修改</button></p>}
+        <textarea ref={textarea} rows={3} maxLength={10000} aria-label="聊天内容" placeholder={targetData ? targetAction === 'edit' ? '说出这份成品要改哪里…直接生成独立修订，原稿与未保存草稿保留' : '先讨论这份成品，你想了解什么？' : scenario.placeholder} value={input.text} onChange={event => input.setText(event.target.value)} onPaste={event => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); addIncomingFiles(files); } }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} />
+      </div>
       {attachmentMenu && <div ref={attachmentPopup} className="chat-attachment-menu" role="group" aria-label="附件来源"><button type="button" onClick={() => { setAttachmentMenu(false); void attachments.add(); }}>本机文件</button><button type="button" onClick={() => { setAttachmentMenu(false); setResourceSource('assets'); }}>素材库</button><button type="button" onClick={() => { setAttachmentMenu(false); setResourceSource('project'); }}>项目成品／资料</button><small>也可粘贴截图或拖入文件，选入不收费。</small></div>}
-      {resourceSource && <Suspense fallback={<p>正在打开资料库…</p>}><ChatResourcePicker props={props} source={resourceSource} busy={attachments.busy} onClose={() => setResourceSource(undefined)} onAsset={attachments.addAsset} onFile={attachments.addProjectArtifact} /></Suspense>}
-      {continuingTool && <Select aria-label="工具保存项目" value={toolProjectId} disabled={toolBusy} onValueChange={setToolProjectId} options={[{ value: 'new', label: '新建作品' }, ...props.projects.filter(project => project.kind === 'image' && project.workspaceId === props.workspaceId && !project.trashedAt && !project.purgedAt).map(project => ({ value: project.id, label: '继续：' + project.name }))]} />}
-      <ChatAttachments files={attachments.files} workspaceId={props.workspaceId} conversationId={conversationId} onRemove={attachments.remove} disabled={attachments.busy} />
-      {continuingTool && <p className="workspace-chat-note">{scenario.description} 先打开工具，再调整并生成。</p>}
       {dragging && <p className="chat-drop-hint">放开即可添加到本对话 · 不调用模型</p>}
-      {targetData?.note && <p className="workspace-chat-note">{targetData.note}</p>}
-      {targetDiscussionIssue && targetData?.inspection.artifact.mimeType === 'image/gif' && <p className="workspace-chat-note">这份动画尚未作为参考发送。<button type="button" className="text-button" onClick={openGifWorkshop}>打开 GIF 工坊修改</button></p>}
-      <textarea ref={textarea} rows={3} maxLength={10000} aria-label="聊天内容" placeholder={targetData ? targetAction === 'edit' ? '说出这份成品要改哪里…直接生成独立修订，原稿与未保存草稿保留' : '先讨论这份成品，你想了解什么？' : scenario.placeholder} value={input.text} onChange={event => input.setText(event.target.value)} onPaste={event => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); addIncomingFiles(files); } }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} />
       <div className="workspace-chat-composer-footer"><span><button ref={attachmentTrigger} type="button" className="workspace-chat-attachment-add" aria-label="添加聊天附件" aria-expanded={attachmentMenu} disabled={attachments.busy || toolBusy || !chat.available} onClick={() => setAttachmentMenu(value => !value)}>{attachments.busy ? <LoaderCircle size={16} className="spin" /> : <Paperclip size={16} />}附件{attachments.files.length ? ` · ${attachments.files.length}` : ''}</button>{continuingTool ? '直接打开工具，不影响当前回复' : refinement.unknown ? '上次提交尚未确认，请先读取任务状态' : editingTarget ? '输入修改要求，生成独立修订' : !selected.model || !selected.credentialId ? <button type="button" className="text-button" onClick={() => props.navigate('models')}>接入模型</button> : chat.running ? chat.queue.supported ? '可继续写，点击排队后按当前设置发送' : '正在回复，可停止后补充；也可新建对话' : 'Enter 发送 · Shift+Enter 换行'}{turns.length > 0 && <span className="workspace-chat-total">本对话 <CostTotal summary={summary} /></span>}</span>{stopInComposer ? <div className="chat-queue-send-group">{chat.queue.supported && <button className="chat-queue-submit" type="submit" aria-label="排队发送消息" disabled={(!input.text.trim() && !attachments.files.length && !separateQuote) || chat.pending || chat.queue.busy || !!chat.queue.unknown || attachments.busy || targetBusy}>{chat.queue.busy ? <LoaderCircle size={15} className="spin" /> : <ArrowUp size={15} />}排队发送</button>}<button className="workspace-chat-send is-stop" type="button" disabled={chat.pending} aria-label="停止回复" onClick={() => { void chat.stop(); }}><Square size={17} /></button></div> : <button className={`workspace-chat-send${continuingTool || editingTarget ? ' is-tool' : ''}`} type="submit" disabled={(editingTarget ? !input.text.trim() : !continuingTool && !input.text.trim() && !attachments.files.length && !separateQuote) || (!continuingTool && (chat.pending || chat.loading)) || attachments.busy || toolBusy || targetBusy || refinement.busy || !!refinement.unknown || chat.queue.busy || !!chat.queue.unknown || !chat.available} aria-label={editingTarget ? '开始精修选定成品' : continuingTool ? `进入${scenario.name}` : willQueue ? '排队发送消息' : '发送聊天消息'}>{chat.pending && !continuingTool || toolBusy || refinement.busy || chat.queue.busy ? <LoaderCircle size={19} className="spin" /> : editingTarget ? <><WandSparkles size={18} /><span>开始精修</span></> : continuingTool ? <><WandSparkles size={18} /><span>进入{scenario.name}</span></> : <ArrowUp size={21} />}</button>}</div>
       {!chat.available && <p className="workspace-chat-note">真实聊天请使用最新版桌面应用，Key 保存在本机。</p>}
     </form>
-    {activePlanTurn && <p className="workspace-chat-bottom-note">制作任务会在后台排队运行；你可以切回“聊天”继续沟通。</p>}
   </section>;
 }

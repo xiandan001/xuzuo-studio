@@ -11,7 +11,7 @@ import { useNaturalAutomationCreation } from './useNaturalAutomationCreation';
 import type { AutomationActionResult } from '../lib/automation-dispatch';
 import { naturalEffectiveBindings, naturalPreparationMissing } from '../lib/natural-automation-composer-state';
 import { naturalModelSelection } from '../components/NaturalAutomationModels';
-import { normalizeNaturalBinding, normalizeNaturalBindings, replaceNaturalProductionBinding, type NaturalModelBinding, type NaturalProductionCapability } from '../lib/natural-model-bindings';
+import { normalizeNaturalBinding, normalizeNaturalBindings, rememberProductionBinding, replaceNaturalProductionBinding, type NaturalModelBinding, type NaturalProductionCapability } from '../lib/natural-model-bindings';
 import { automationProjectAvailability } from '../lib/automation-project-availability';
 
 export interface NaturalAutomationSessionOptions { onClose?: () => void; onSaved?: () => void; draftOptions?: NaturalAutomationDraftOptions; }
@@ -125,6 +125,7 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
       const binding = normalizeNaturalBinding(value);
       store.persist({ ...source, bindings: replaceNaturalProductionBinding(source.bindings, capability, binding) });
       if (source.ruleId) readiness.setCapability(capability, binding);
+      if (!rememberProductionBinding(props.workspaceId, capability, binding)) props.notify('本方案已保存，本工作区的制作偏好暂未记住。', 'info');
       setError(''); return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : '制作模型设置未能保存，原设置保留。'); return false; }
   }

@@ -7,12 +7,13 @@ import type { ArtifactMetadata, ArtifactPreview } from '../live-types';
 import { homeCreationArtifacts, homeCreationDocumentSource, homeCreationPreviewUrl, homeCreationProgress } from '../lib/home-creation';
 import { runCostRecords, summarizeCosts } from '../lib/cost-display';
 import { workflowPublicError } from '../lib/studio-run';
-import { workflowReviewState } from '../lib/workflow-review';
+import { hasLegacyCoverAspectReview, recoverableQualityAttempt, workflowReviewState } from '../lib/workflow-review';
 import { usePreparedRedPacketCover } from '../hooks/usePreparedRedPacketCover';
 import { RedPacketCoverPreview, coverFileSize } from './RedPacketCoverPreview';
-import { WECHAT_RED_PACKET_COVER } from '../lib/wechat-red-packet-cover';
+import { isRedPacketCoverWorkflow } from '../lib/wechat-red-packet-cover';
 import { CostTotal } from './CostAmount';
 import { HomeResultFilePicker } from './HomeResultFilePicker';
+import { HomeQualityRecovery } from './HomeQualityRecovery';
 import { HomeProductionRecovery } from './HomeProductionRecovery';
 import { ProjectTemplateActions } from './ProjectTemplateActions';
 import { CustomerOrderLink } from './CustomerOrderLink';
@@ -94,7 +95,7 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const files = homeCreationArtifacts(actual, kind).filter(file => !trashed.has(file.id));
   const documentSource = !files.length ? homeCreationDocumentSource(actual, kind, trashed) : undefined;
   const file = files.find(item => item.id === selectedId) || files[0] || documentSource;
-  const cover = kind === 'image' && actual.snapshot.imagePreset === WECHAT_RED_PACKET_COVER;
+  const cover = kind === 'image' && isRedPacketCoverWorkflow(actual.snapshot, actual.projectId);
   const project = props.projects.find(item => item.id === run.projectId && item.workspaceId === props.workspaceId && !item.trashedAt && !item.purgedAt);
   const reviewState = workflowReviewState(actual);
   const finished = actual.status === 'complete' || reviewState === 'manual';
@@ -103,6 +104,7 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const Icon = icons[kind], progress = homeCreationProgress(actual);
   const originalId = preparation.file?.originalArtifactId;
   const coverOriginal = originalId ? actual.attempts.flatMap(attempt => attempt.artifacts || []).find(item => item.id === originalId && !item.unavailable && !item.trashedAt && !trashed.has(item.id)) : file;
+  const recoveryAttempt = recoverableQualityAttempt(actual);
   const blocked = reviewState === 'quality-failed' || reviewState === 'blocked';
   const needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
   const openSteps = () => props.onOpenTask ? props.onOpenTask(actual.id, project.id) : props.navigate('activity', project.id);
@@ -125,12 +127,13 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
         <div className="creation-production-stage">制作进度</div>
         <h3>{reviewState === 'quality-failed' ? '质检未通过' : blocked ? '制作需要检查' : finished && documentSource ? '文稿已生成 · 尚未导出' : finished && file ? '作品已生成' : finished ? '制作已结束' : actual.status === 'cancelled' ? '本次制作已取消' : needsHelp ? '制作需要你处理' : '正在按方案制作'}</h3>
         {actual.status === 'failed' && actual.snapshot.steps[actual.stepIndex] && <p className="creation-production-failed-step">失败步骤 · {progress.label}</p>}
-        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${reviewState === 'manual' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : needsHelp || blocked ? actual.error || '已完成的步骤和费用保留。' : `正在处理：${progress.label}`}</p>
+        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${reviewState === 'manual' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : hasLegacyCoverAspectReview(actual) ? '上次按旧画幅检查。样稿与原检查记录已保留，可按当前红包封面标准重新质检。' : needsHelp || blocked ? actual.error || '已完成的步骤和费用保留。' : `正在处理：${progress.label}`}</p>
       </div>
       <div className="creation-production-cost"><span>本次制作</span><CostTotal summary={summarizeCosts(runCostRecords(actual, props.ledger))} /></div>
     </header>
-    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div><button type="button" className={blocked ? 'btn btn-primary' : 'text-button'} onClick={openSteps}>{reviewState === 'quality-failed' ? '查看质检原因' : needsHelp ? '查看步骤与恢复操作' : '查看步骤'}<ArrowRight size={13} /></button></div>}
-    {needsHelp && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
+    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div><button type="button" className={blocked && reviewState !== 'quality-failed' ? 'btn btn-primary' : 'text-button'} onClick={openSteps}>{reviewState === 'quality-failed' ? '查看质检原因' : needsHelp ? '查看步骤与恢复操作' : '查看步骤'}<ArrowRight size={13} /></button></div>}
+    {recoveryAttempt && <HomeQualityRecovery key={scope + '/' + recoveryAttempt.id} run={actual} project={project} props={props} onRead={setDetail} />}
+    {(needsHelp || blocked && actual.referenceIssue) && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
     {reviewState === 'manual' && <div className="creation-production-progress"><button type="button" className="btn btn-primary" onClick={openSteps}>检查并交付<ArrowRight size={14} /></button></div>}
     {file && blocked && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
     {file && finished && <>{cover ? <RedPacketCoverPreview key={file.id} preparation={preparation} original={coverOriginal && <HomeArtifactPreview file={coverOriginal} kind={kind} props={props} />} /> : <HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />}{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving || cover && !preparation.file} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出微信封面 JPG' : `导出${names[kind]}`}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}

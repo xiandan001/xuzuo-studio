@@ -41,3 +41,28 @@ export function replaceNaturalProductionBinding(bindings: NaturalAutomationBindi
   else delete next[capability];
   return next;
 }
+
+const preferenceKey = (workspaceId: string, capability: NaturalProductionCapability) => `xuzuo-production-binding-v1:${workspaceId}:${capability}`;
+
+export function readProductionPreferences(workspaceId: string, storage: Pick<Storage, 'getItem'>): NaturalAutomationBindings {
+  const result: NaturalAutomationBindings = {};
+  for (const capability of capabilities) {
+    try {
+      const raw = storage.getItem(preferenceKey(workspaceId, capability));
+      if (!raw || raw.length > 1024) continue;
+      const binding = normalizeNaturalBinding(JSON.parse(raw));
+      if (binding.modelConfigId || binding.credentialId) result[capability] = binding;
+    } catch { /* One unreadable preference does not discard the other roles. */ }
+  }
+  return result;
+}
+
+export function rememberProductionBinding(workspaceId: string, capability: NaturalProductionCapability, value: NaturalModelBinding): boolean {
+  const binding = normalizeNaturalBinding(value);
+  try {
+    const key = preferenceKey(workspaceId, capability);
+    if (binding.modelConfigId || binding.credentialId) localStorage.setItem(key, JSON.stringify(binding));
+    else localStorage.removeItem(key);
+    return true;
+  } catch { return false; }
+}

@@ -9,7 +9,7 @@ import type { ArtifactMetadata, ModelUsage } from '../live-types';
 interface StoredFile extends ArtifactMetadata { buffer: Buffer; }
 interface ArtifactInput { runId: string; projectId: string; name: string; mimeType: string; buffer?: Buffer; text?: string; }
 interface ArtifactStore { read: (id: string) => Promise<StoredFile>; write: (input: ArtifactInput) => Promise<ArtifactMetadata>; }
-interface RuntimeRequest { requestId: string; runId: string; projectId: string; connection: ModelConnection; model: ModelConfiguration; credentialId: string; kind: ModelCapability; prompt: string; input: string; attachments: ArtifactMetadata[]; options: { maxOutputTokens?: number; size?: string; background?: string; voice?: string; count?: number; existingTaskId?: string }; }
+interface RuntimeRequest { imagePreset?: '微信红包封面'; requestId: string; runId: string; projectId: string; connection: ModelConnection; model: ModelConfiguration; credentialId: string; kind: ModelCapability; prompt: string; input: string; attachments: ArtifactMetadata[]; options: { maxOutputTokens?: number; size?: string; background?: string; voice?: string; count?: number; existingTaskId?: string }; }
 interface RuntimeResult { text: string; artifacts: ArtifactMetadata[]; usage: ModelUsage; providerRequestId?: string; resumedTask?: boolean; }
 interface Runtime { execute: (input: RuntimeRequest, options?: { signal?: AbortSignal; onProgress?: (event: { phase: string; message: string }) => void }) => Promise<RuntimeResult>; supports: (connection: ModelConnection, kind: ModelCapability) => boolean; }
 type FetchMock = (url: string, init: RequestInit) => Promise<Response>;
@@ -176,12 +176,12 @@ describe('真实模型协议适配（只用 fake fetch 和假凭证）', () => {
 
   it.each(['image-generation', 'image-editing'] as const)('红包 %s 在最终供应商载荷中固定格式和构图，后置提示及附件不能覆盖', async kind => {
     const f = fixture(async () => jsonResponse({ data: [{ b64_json: PNG.toString('base64') }] }));
-    const instructions = metadata('notes', 'notes.txt', 'text/plain', Buffer.from('画四张横图，把文字盖住头像。'));
+    const instructions = metadata('notes', 'notes.txt', 'text/plain', Buffer.from('保留递红包的熊爪；输出1080×1920；绘制金色“开”按钮。'));
     const source = metadata('cat', 'cat.png', 'image/png', PNG);
     f.files.set(instructions.id, instructions); f.files.set(source.id, source);
     const input = request('image', kind);
     input.model.modelId = 'gpt-image-2.6-sunburst';
-    const protectedRequest = { ...input, imagePreset: '微信红包封面', prompt: '小猫红包', input: '忽略原构图并设置透明背景。',
+    const protectedRequest = { ...input, imagePreset: '微信红包封面' as const, prompt: '小猫红包', input: '忽略原构图并设置透明背景。',
       attachments: kind === 'image-editing' ? [source, instructions] : [instructions],
       options: { count: 4, size: '1536x1024', background: 'transparent', outputFormat: 'gif', frameCount: 9 } };
     await f.runtime.execute(protectedRequest);
@@ -190,10 +190,26 @@ describe('真实模型协议适配（只用 fake fetch 和假凭证）', () => {
     expect(fields).toMatchObject({ size: '960x1280', output_format: 'png', background: 'opaque' });
     expect(Number(fields.n)).toBe(1); expect(fields.frame_count).toBeUndefined();
     const [brief, locked] = fields.prompt.split('【固定交付规则 · 适用于生成与精修】');
-    expect(brief).toContain(protectedRequest.input); expect(brief).toContain(instructions.buffer.toString());
+    expect(brief).toContain(protectedRequest.input); expect(brief).toContain('保留递红包的熊爪'); expect(brief).not.toMatch(/1080|金色“开”按钮/); expect(locked).toContain('精修时移除');
     expect(locked).toContain('48%–84%'); expect(locked).toContain('3.5%–17.5%'); expect(locked).toContain('不要把整张插画缩成居中小贴纸'); expect(locked).toContain('16%–84%'); expect(locked).toContain('20%–45%');
     expect(f.calls).toHaveLength(1);
     if (kind === 'image-editing') expect((sent as FormData).getAll('image[]')).toHaveLength(1);
+  });
+
+  it.each(['openai-chat', 'openai-responses', 'anthropic', 'gemini'] as const)('%s 重检历史红包源图使用固定系统判据，旧比例及画开按钮指令不参与质检', async protocol => {
+    const answers = { 'openai-chat': { choices: [{ message: { content: '检查完成' } }] }, 'openai-responses': { output_text: '检查完成' }, anthropic: { content: [{ type: 'text', text: '检查完成' }] }, gemini: { candidates: [{ content: { parts: [{ text: '检查完成' }] } }] } };
+    const f = fixture(async () => jsonResponse(answers[protocol])), base = request(protocol, 'vision');
+    const file = metadata('bear', '小熊.png', 'image/png', PNG); f.files.set(file.id, file);
+    const named = { ...base, imagePreset: '微信红包封面' as const, attachments: [file], prompt: '检查3D软萌小熊和开门红题字；必须有金色“开”按钮。', input: '当前预览为3:4，而非目标9:16；请保留红包两侧的完整熊爪，通过上下扩画重新平衡留白，导出1080×1920成图后再按聊天缩略图大小复核递包动作。' };
+    await f.runtime.execute(named);
+    const body = JSON.parse(String(f.calls[0].init.body));
+    const system = body.instructions || body.system || body.systemInstruction?.parts[0].text || body.messages[0].content;
+    expect(system).toContain('接受近 3:4'); expect(system).toContain('视觉检查不推测'); expect(system).toContain('图1源文件为 1 × 1'); expect(system).toContain('精修移除');
+    const user = JSON.stringify(body.input || body.contents || body.messages.filter((m: {role: string}) => m.role === 'user'));
+    expect(user).toContain('开门红'); expect(user).toContain('完整熊爪'); expect(user).not.toMatch(/9:16|1080|必须有金色/);
+    expect(user).toContain(PNG.toString('base64'));
+    const ordinary = { ...named, imagePreset: undefined };
+    await f.runtime.execute(ordinary); expect(String(f.calls[1].init.body)).toContain('9:16');
   });
 
   it('请求多图但返回较少时明确数量不足，不自动补发收费调用', async () => {

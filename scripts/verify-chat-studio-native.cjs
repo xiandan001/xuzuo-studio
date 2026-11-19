@@ -12,6 +12,7 @@ const queueTransport = { conversationId: '', text: '', loseAck: false, blockRead
 const report = { passed: false, commit: process.env.GITHUB_SHA, syntheticProvider: true, actualProviderUsed: false, actualAccountCharges: 0, realRuntimeAndRenderer: true, normalApplicationStarted: false, userProfileAccessed: false, externalRequests: 0, errors: [], steps: [], screenshots: [], layouts: [], homeBounds: [], processIds: [process.pid], windows: { created: 0, shown: 0, remaining: 0 }, attachmentChecks: {} };
 let owner, temporary, window, service, cpuTasks, inputFiles, production, finishing = false, slowCount = 0, importCount = 0;
 const workerTasks = [];
+let extendStream;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deadline = setTimeout(() => { void finish(Error('Chat studio native acceptance exceeded 120 seconds')); }, 120000);
 app.on('window-all-closed', () => {});
@@ -72,7 +73,7 @@ function syntheticStream(body, signal) {
   const isSlow = last.startsWith('队列验收首条流式') || last.startsWith('慢慢说明') && ++slowCount === 1;
   const full = plan ? JSON.stringify({ version: 1, name: imagePlan ? '橘猫参考图宣传方案' : '橘猫产品合作说明书', objective: imagePlan ? '依据本轮已提供的参考图规划完整宣传图片。' : '根据沟通制作两页完整Word说明，包含目标、工作范围和可操作安排。', outputKind: imagePlan ? 'image' : 'word', trigger: { type: 'manual' }, steps: [{ kind: imagePlan ? 'image-generation' : 'text', name: imagePlan ? '按原图制作宣传图' : '撰写完整说明正文', instruction: imagePlan ? '以本轮原图为依据，保留产品主体和可见细节，不添加未经确认的价格。' : '以橘猫角色产品为主题，整理目标、工作范围、安排和结论。' }], illustrations: { mode: 'none', count: 0 }, acceptance: ['内容完整', '结构清楚'], constraints: ['不编造客户数据'], maxRepairs: 0, questions: [], unsupported: [] }) : last.startsWith('记住') ? '好的，这次讨论的主角是橘猫。你可以继续补充用途。' : last.startsWith('它是谁') ? '你刚才确定的主角是橘猫。' : last.startsWith('长内容') ? require('./fixtures/chat-markdown-sample.cjs').text : calls.length > 6 ? '已收到本轮实际附图或资料，附件内容已进入这次请求。' : '第一部分已经返回，第二部分也已完成。这是一份完整答复。';
   let controller, stopped = false, timer, release; const encoder = new TextEncoder();
-  const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (release) held.delete(release); };
+  const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (release) held.delete(release); if (isSlow) extendStream = undefined; };
   const push = value => { if (!stopped) controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`)); };
   const abort = () => { if (stopped) return; stopped = true; clean(); controller.error(Error('Synthetic response stopped by the real cancellation signal')); };
   const usage = { prompt_tokens: 100, completion_tokens: 50, completion_tokens_details: { reasoning_tokens: 20 } };
@@ -81,7 +82,7 @@ function syntheticStream(body, signal) {
     controller = value; signal?.addEventListener('abort', abort, { once: true });
     const split = plan ? Math.floor(full.length / 2) : isSlow ? 10 : Math.max(1, Math.floor(full.length / 2));
     push({ choices: [{ delta: { content: isSlow ? '第一部分已经返回，仍在生成第二部分……' : full.slice(0, split) }, finish_reason: null }] });
-    if (isSlow) { push({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 10 } }); release = done; held.add(release); }
+    if (isSlow) { extendStream = text => push({ choices: [{ delta: { content: text }, finish_reason: null }] }); push({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 10 } }); release = done; held.add(release); }
     else {
       const rest = () => { push({ choices: [{ delta: { content: full.slice(split) }, finish_reason: null }] }); done(); };
       if (plan) { release = rest; held.add(release); } else timer = setTimeout(rest, 140);
@@ -132,7 +133,7 @@ async function layout(width, theme, index) {
   window.setContentSize(width, 1000); nativeTheme.themeSource = theme;
   if (await evaluate('document.documentElement.dataset.appTheme') !== theme) await click('button', theme === 'dark' ? '切到黑夜' : '切到白天');
   await dom(`document.documentElement.dataset.appTheme===${JSON.stringify(theme)}`, 'appearance paint'); await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
-  const value = await evaluate(`(()=>{const root=document.querySelector('.workspace-chat'),composer=document.querySelector('.workspace-chat-composer'),thread=document.querySelector('.workspace-chat-thread'),content=document.querySelector('.app-content');content.scrollTop=content.scrollHeight;thread.scrollTop=thread.scrollHeight;const r=n=>{const b=n.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};return {width:innerWidth,theme:document.documentElement.dataset.appTheme,documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth,root:r(root),composer:r(composer),content:r(content),thread:r(thread),threadScroll:thread.scrollTop,threadMaximum:thread.scrollHeight-thread.clientHeight,threadOverflow:getComputedStyle(thread).overflowY,foreground:getComputedStyle(composer).color,background:getComputedStyle(composer).backgroundColor,userBackground:getComputedStyle(document.querySelector('.workspace-chat-message.is-user .workspace-chat-bubble')).backgroundColor,assistantBackground:getComputedStyle(document.querySelector('.workspace-chat-message.is-assistant .workspace-chat-bubble')).backgroundColor,fields:[...composer.querySelectorAll('[role="combobox"],textarea')].map(e=>({name:e.getAttribute('aria-label'),...r(e)}))}})()`);
+  const value = await evaluate(`(()=>{const root=document.querySelector('.workspace-chat'),composer=document.querySelector('.workspace-chat-composer'),thread=document.querySelector('.workspace-chat-scroll'),content=document.querySelector('.app-content');thread.scrollTop=thread.scrollHeight;const r=n=>{const b=n.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};return {width:innerWidth,theme:document.documentElement.dataset.appTheme,documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth,root:r(root),composer:r(composer),content:r(content),thread:r(thread),threadScroll:thread.scrollTop,threadMaximum:thread.scrollHeight-thread.clientHeight,threadOverflow:getComputedStyle(thread).overflowY,foreground:getComputedStyle(composer).color,background:getComputedStyle(composer).backgroundColor,userBackground:getComputedStyle(document.querySelector('.workspace-chat-message.is-user .workspace-chat-bubble')).backgroundColor,assistantBackground:getComputedStyle(document.querySelector('.workspace-chat-message.is-assistant .workspace-chat-bubble')).backgroundColor,fields:[...composer.querySelectorAll('[role="combobox"],textarea')].map(e=>({name:e.getAttribute('aria-label'),...r(e)}))}})()`);
   const detail = JSON.stringify(value); assert.equal(value.width, width, detail); assert.equal(value.theme, theme, detail); assert(value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Page horizontal overflow: ' + detail); assert(value.root.left >= value.content.left - 1 && value.root.right <= value.content.right + 1, detail);
   assert(value.fields.every(field => field.width > 30 && field.left >= value.composer.left - 1 && field.right <= value.composer.right + 1), 'Composer field overflow: ' + detail); assert.notEqual(value.userBackground, value.assistantBackground, 'Sender bubbles must be visually distinct'); assert(['auto', 'scroll'].includes(value.threadOverflow)); assert(value.threadMaximum > 20 && value.threadScroll >= value.threadMaximum - 1, 'Long conversation must remain scrollable');
   const luminance = css => { const rgb = css.match(/[\d.]+/g).slice(0, 3).map(Number).map(number => number / 255).map(number => number <= .04045 ? number / 12.92 : ((number + .055) / 1.055) ** 2.4); return rgb.reduce((sum, number, position) => sum + number * [.2126, .7152, .0722][position], 0); };
@@ -140,6 +141,61 @@ async function layout(width, theme, index) {
   await evaluate(`document.querySelector('[aria-label="发送聊天消息"]').scrollIntoView({block:'nearest'})`);
   const button = await evaluate(`(()=>{const e=document.querySelector('[aria-label="发送聊天消息"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {top:r.top,bottom:r.bottom,reachable:!!hit&&(hit===e||e.contains(hit)),footer:document.querySelector('.statusbar').getBoundingClientRect().top}})()`); assert(button.reachable && button.top >= 0 && button.bottom <= button.footer + 1, JSON.stringify(button)); value.sendButton = button;
   value.passed = true; report.layouts.push(value); await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))'); window.webContents.invalidate(); await delay(100); const image = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), bytes = image.toPNG(); assert(bytes.length > 5000); const filename = `${index}-chat-${theme}-${width}.png`; await fsp.writeFile(path.join(owner.output, filename), bytes, { flag: 'wx' }); report.screenshots.push({ filename, bytes: bytes.length, ...image.getSize(), sha256: sha(bytes) });
+}
+async function composerPosition(label, baseline) {
+  const value = await evaluate(`(()=>{const composer=document.querySelector('.workspace-chat-composer'),scroller=document.querySelector('.workspace-chat-scroll'),content=document.querySelector('.app-content');
+    const bounds=e=>{const {left,top,right,bottom}=e.getBoundingClientRect();return {left,top,right,bottom}};
+    return {viewport:[innerWidth,innerHeight],composer:bounds(composer),scroller:bounds(scroller),content:bounds(content),outerScroll:content.scrollTop,
+      outerMaximum:content.scrollHeight-content.clientHeight,scrollTop:scroller.scrollTop,scrollMaximum:scroller.scrollHeight-scroller.clientHeight};})()`);
+  const detail = label + ' ' + JSON.stringify(value);
+  (report.composerPositions ||= []).push({ label, ...value });
+  assert(value.composer.bottom <= value.content.bottom + 1 && value.composer.bottom >= value.content.bottom - 40, 'Composer must dock at the workspace bottom: ' + detail);
+  assert(value.scroller.bottom <= value.composer.top + 1 && value.scroller.top >= value.content.top - 1, 'Messages must scroll above the composer: ' + detail);
+  assert(value.outerScroll <= 1 && value.outerMaximum <= 1, 'The workspace must not scroll during a conversation: ' + detail);
+  if (baseline) for (const edge of ['left','right','bottom']) assert(Math.abs(value.composer[edge] - baseline.composer[edge]) <= 1, 'Composer moved at ' + edge + ': ' + detail);
+  return value;
+}
+async function sendFromDock() {
+  await dom(`document.querySelector('[aria-label="发送聊天消息"]:not(:disabled)')`, 'conversation is ready to send');
+  const point = await evaluate(`(()=>{
+    const button = document.querySelector('[aria-label="发送聊天消息"]'), r = button.getBoundingClientRect();
+    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+    return { x, y, reachable: !button.disabled && button.contains(document.elementFromPoint(x, y)) };
+  })()`);
+  assert(point.reachable, 'Send must already be reachable without scrolling the composer');
+  for (const type of ['mouseDown', 'mouseUp']) window.webContents.sendInputEvent({ type, x: point.x, y: point.y, button: 'left', clickCount: 1 });
+}
+async function checkStreamingScroll(anchor) {
+  const append = async (text, marker) => {
+    await delay(150); // Allow the production 100 ms stream notification interval to elapse.
+    extendStream(text);
+    await dom(`document.querySelector('.workspace-chat-thread').textContent.includes(${JSON.stringify(marker)})`, marker);
+  };
+  const scroll = "document.querySelector('.workspace-chat-scroll')";
+  await append('\n\n' + '自然增长的回复段落。\n\n'.repeat(36) + '滚动样本甲', '滚动样本甲');
+  await dom(`(()=>{const e=${scroll},max=e.scrollHeight-e.clientHeight;return max>200&&Math.abs(max-e.scrollTop)<=2})()`, 'stream follows the new bottom');
+  const following = await composerPosition('long-stream-following', anchor);
+  assert(Math.abs(following.composer.top - anchor.composer.top) <= 1, 'Streaming text must not change composer height');
+  const point = await evaluate(`(()=>{const e=${scroll},r=e.getBoundingClientRect();
+    e.addEventListener('wheel',event=>{window.chatHistoryWheel=event.isTrusted&&event.deltaY<0},{once:true,passive:true});
+    const x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);
+    return {x,y,reachable:e.contains(document.elementFromPoint(x,y))};})()`);
+  assert(point.reachable, 'Message area must receive a real wheel gesture');
+  window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+  window.webContents.sendInputEvent({ type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY: 450, canScroll: true });
+  await dom(`window.chatHistoryWheel && ${scroll}.scrollTop<${following.scrollTop - 9}`, 'trusted wheel moves away from the latest response');
+  // End the Chromium wheel animation at a known reading position; its duration
+  // differs between hidden and visible windows. Wait for the actual scroll event.
+  await evaluate(`(()=>{const e=${scroll};window.chatReadingPosition=e.scrollTop<=1;const onScroll=()=>{if(e.scrollTop<=1){window.chatReadingPosition=true;e.removeEventListener('scroll',onScroll)}};e.addEventListener('scroll',onScroll);e.scrollTo({top:0,behavior:'instant'});})()`);
+  await dom('window.chatReadingPosition', 'actual scroller settled on the older messages');
+  const reading = await composerPosition('reading-history', anchor);
+  await evaluate(`(()=>{const body=${scroll}.querySelector('.workspace-chat-scroll-content'),height=body.getBoundingClientRect().height;
+    window.chatHistoryResized=false;const observer=new ResizeObserver(()=>{if(body.getBoundingClientRect().height>height){window.chatHistoryResized=true;observer.disconnect()}});observer.observe(body)})()`);
+  await append('\n\n' + '继续返回的新段落。\n\n'.repeat(15) + '滚动样本乙', '滚动样本乙');
+  await dom('window.chatHistoryResized', 'growth reached the renderer resize observers');
+  const after = await composerPosition('stream-while-reading', anchor);
+  assert(after.scrollMaximum > reading.scrollMaximum && Math.abs(after.scrollTop - reading.scrollTop) <= 1, 'New chunks must retain the manual history scroll position');
+  assert(Math.abs(after.composer.top - anchor.composer.top) <= 1, 'Reading older messages must not move the composer');
 }
 async function settleOverviewBounds(width, theme) {
   let previous;
@@ -155,20 +211,21 @@ async function homeBounds(width, height, theme, state) {
   await settleOverviewBounds(width, theme);
   const value = await evaluate(`(()=>{const chat=document.querySelector('.workspace-chat'),composer=document.querySelector('.workspace-chat-composer'),recent=document.querySelector('.conversation-recent'),overview=document.querySelector('.conversation-home'),content=document.querySelector('.app-content');content.scrollTop=0;const r=e=>{const b=e.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};return {width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.appTheme,chat:r(chat),composer:r(composer),recent:r(recent),overview:r(overview),content:r(content),gap:parseFloat(getComputedStyle(overview).rowGap),documentWidth:document.documentElement.scrollWidth,bodyWidth:document.body.scrollWidth}})()`);
   value.state = state; const detail = JSON.stringify(value);
+  const anchor = await composerPosition('matrix-' + state + '-' + width + '-' + height + '-' + theme);
   assert(value.documentWidth <= width + 1 && value.bodyWidth <= width + 1, 'Overview horizontal overflow: ' + detail);
   assert(value.composer.left >= value.chat.left - 1 && value.composer.right <= value.chat.right + 1, 'Composer exceeds chat width: ' + detail);
   assert(value.composer.bottom <= value.chat.bottom + 1, 'Composer spills below its chat section: ' + detail);
-  assert(value.recent.top >= value.chat.bottom + value.gap - 1, 'Composer/chat overlaps the recent works: ' + detail);
-  assert(value.recent.bottom <= value.overview.bottom + 1, 'Recent works spill below Overview: ' + detail);
+  assert(await evaluate("document.querySelector('.workspace-chat-scroll').contains(document.querySelector('.conversation-recent'))"), 'Recent works must share the independent conversation scroll area');
   value.recentHits = [];
   for (let index = 0; index < 3; index++) {
     await evaluate(`document.querySelectorAll('.conversation-recent-work')[${index}].scrollIntoView({block:'center'})`);
-    const hit = await evaluate(`(()=>{const e=document.querySelectorAll('.conversation-recent-work')[${index}],r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),content=document.querySelector('.app-content').getBoundingClientRect();return {reachable:!!hit&&(hit===e||e.contains(hit)),top:r.top,bottom:r.bottom,contentTop:content.top,contentBottom:content.bottom}})()`);
+    const hit = await evaluate(`(()=>{const e=document.querySelectorAll('.conversation-recent-work')[${index}],r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),scroll=document.querySelector('.workspace-chat-scroll').getBoundingClientRect();return {reachable:!!hit&&(hit===e||e.contains(hit)),top:r.top,bottom:r.bottom,contentTop:scroll.top,contentBottom:scroll.bottom}})()`);
     assert(hit.reachable && hit.top >= hit.contentTop - 1 && hit.bottom <= hit.contentBottom + 1, 'Recent work is covered or unreachable: ' + JSON.stringify(hit)); value.recentHits.push(hit);
   }
   await click('.conversation-recent-work');
   assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.lastNavigation`), 'project:fixture-recent-1', 'Recent card must invoke the real Overview navigation');
   await evaluate(`document.querySelector('[aria-label="发送聊天消息"]').scrollIntoView({block:'nearest'})`);
+  await composerPosition('after-recent-navigation', anchor);
   value.sendReachable = await evaluate(`(()=>{const e=document.querySelector('[aria-label="发送聊天消息"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return !!hit&&(hit===e||e.contains(hit))&&r.top>=document.querySelector('.app-content').getBoundingClientRect().top-1&&r.bottom<=document.querySelector('.statusbar').getBoundingClientRect().top+1})()`);
   assert(value.sendReachable, 'Send action must remain reachable'); value.passed = true; report.homeBounds.push(value);
 }
@@ -188,8 +245,14 @@ async function overviewBoundaries(state) {
   (report.homeBoundsRestorations ||= []).push(restoration);
   let nativeWidth = originalWidth, nativeHeight = originalHeight;
   for (let attempt = 0; attempt < 4; attempt++) {
-    window.setContentSize(nativeWidth, nativeHeight); await delay(30);
-    const actual = await evaluate('({width:innerWidth,height:innerHeight})'); restoration.attempts.push({ requested: { width: nativeWidth, height: nativeHeight }, actual });
+    window.setContentSize(nativeWidth, nativeHeight);
+    let actual;
+    await until(async () => {
+      actual = await evaluate('({width:innerWidth,height:innerHeight})');
+      // Ignore the previous window size while Chromium handles the native resize.
+      return Math.abs(actual.width - nativeWidth) <= 2 && Math.abs(actual.height - nativeHeight) <= 2;
+    }, 'renderer adopted requested native size', 4000);
+    restoration.attempts.push({ requested: { width: nativeWidth, height: nativeHeight }, actual });
     if (actual.width === originalViewport.width && actual.height === originalViewport.height) { restoration.passed = true; break; }
     nativeWidth += originalViewport.width - actual.width; nativeHeight += originalViewport.height - actual.height;
   }
@@ -209,23 +272,24 @@ async function scenario() {
     await click('[aria-label="关闭模型与账户详情"]'); await dom(`!document.querySelector('.conversation-model-dialog')`, 'account details closed before normal chat');
     assert.equal(await evaluate(`localStorage.getItem('xuzuo-chat-model-v1:${workspaceId}')`), bindingBefore); assert.equal(calls.length, 0); report.accountDetailsBeforeSendVerified = true;
     const textareaSize = () => evaluate(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]'),s=getComputedStyle(e);return {height:e.getBoundingClientRect().height,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflow:s.overflowY,fontSize:s.fontSize,valueLength:e.value.length,inlineHeight:e.style.height,minHeight:s.minHeight,boxSizing:s.boxSizing,padding:s.padding,lineHeight:s.lineHeight}})()`);
-    const emptySize = await textareaSize(); await fill('仅验证输入框自然增长，不发送消息。\n'.repeat(40));
+    const emptySize = await textareaSize(), emptyAnchor = await composerPosition('empty-input'); await fill('仅验证输入框自然增长，不发送消息。\n'.repeat(40));
     await dom(`(()=>{const e=document.querySelector('[aria-label="聊天内容"]');return e.getBoundingClientRect().height>${emptySize.height + 20}&&e.scrollHeight>e.clientHeight&&getComputedStyle(e).overflowY==='auto'})()`, 'long draft grows to a bounded scrollable input');
-    const longSize = await textareaSize(); assert(longSize.height <= 201 && longSize.height > emptySize.height + 20); assert.equal(longSize.fontSize, emptySize.fontSize); assert.equal(window.webContents.getZoomFactor(), 1);
+    const longSize = await textareaSize(); await composerPosition('multiline-draft', emptyAnchor); assert(longSize.height <= 201 && longSize.height > emptySize.height + 20); assert.equal(longSize.fontSize, emptySize.fontSize); assert.equal(window.webContents.getZoomFactor(), 1);
     report.composerClearMeasurement = { empty: emptySize, long: longSize };
     await fill(''); await until(async () => {
       const sample = await textareaSize(); report.composerClearMeasurement.afterClear = sample;
       return sample.valueLength === 0 && sample.height <= emptySize.height + 1 && sample.scrollTop === 0 && sample.overflow === 'hidden';
     }, 'clearing the draft restores the compact input');
     assert.equal(calls.length, 0); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0');
+    await composerPosition('cleared-draft', emptyAnchor);
     report.composerSizing = { boundedNaturalGrowth: true, clearsToCompact: true, noCallsOrProjects: true, pageZoomFactor: window.webContents.getZoomFactor(), empty: emptySize, long: longSize, cleared: await textareaSize() };
-    await select('推理强度', '轻度'); await fill('记住：这次讨论的主角是橘猫。'); await click('[aria-label="发送聊天消息"]'); await settled(1); assert.equal(calls.length, 1); assert.equal(calls[0].body.reasoning_effort, 'low'); assert.equal(calls[0].body.messages[0].role, 'system'); assert(calls[0].body.messages[0].content.includes('不把每条消息强行变成自动化方案'));
+    await select('推理强度', '轻度'); await fill('记住：这次讨论的主角是橘猫。'); const firstAnchor = await composerPosition('before-first-send'); await sendFromDock(); await settled(1); await composerPosition('first-completed', firstAnchor); assert.equal(calls.length, 1); assert.equal(calls[0].body.reasoning_effort, 'low'); assert.equal(calls[0].body.messages[0].role, 'system'); assert(calls[0].body.messages[0].content.includes('不把每条消息强行变成自动化方案'));
     await select('推理强度', '深入'); await fill('它是谁？请用一句话回答。'); await click('[aria-label="发送聊天消息"]'); await settled(2); assert.equal(calls[1].body.reasoning_effort, 'high'); assert(calls[1].body.messages.some(message => message.role === 'assistant' && message.content.includes('橘猫'))); assert.equal(calls[1].body.messages.filter(message => message.role === 'user').length, 2);
     const value = await currentConversation(); assert.equal(value.turns[1].reasoningEffort, 'high'); assert(value.turns.every(turn => turn.costState === 'calculated' && turn.costCents > 0)); assert(value.turns.every(turn => turn.modelConfigId === 'chat-model' && turn.credentialId === 'chat-metadata-key')); assert(calls.every(call => call.body.model === 'gpt-6.1-terra')); assert.equal(await evaluate(`document.querySelector('.chat-fixture').dataset.folderRequests`), '0'); report.noProjectChat = report.reasoningBodyVerified = report.multiTurnContextVerified = true;
   });
   await step('visible-partial-stream-stop-and-new-billed-retry', async () => {
     const before = await service.ledger(workspaceId); await fill('慢慢说明可爱微信红包封面的三个风格，先给我第一部分。'); await click('[aria-label="发送聊天消息"]'); await dom(`document.querySelector('.workspace-chat-thread>div:last-child .chat-reply-text')?.textContent.includes('第一部分已经返回')&&document.querySelector('[aria-label="停止回复"]')`, 'partial text rendered while stream remains active');
-    assert.equal((await currentConversation()).turns.at(-1).status, 'running'); report.partialStreamDisplayed = true; await click('[aria-label="停止回复"]'); await settled(3, 'cancelled'); const cancelled = await currentConversation(), priorId = cancelled.turns.at(-1).id;
+    assert.equal((await currentConversation()).turns.at(-1).status, 'running'); report.partialStreamDisplayed = true; const anchor = await composerPosition('short-stream'); await checkStreamingScroll(anchor); await click('[aria-label="停止回复"]'); await settled(3, 'cancelled'); await composerPosition('cancelled', anchor); const cancelled = await currentConversation(), priorId = cancelled.turns.at(-1).id;
     for (const row of before) assert.deepEqual((await service.ledger(workspaceId)).find(item => item.id === row.id), row); const cancelledLedger = await service.ledger(workspaceId); assert.equal(cancelledLedger.length, 3);
     await click('.workspace-chat-message-actions button', '重新回答'); await settled(4); const retried = await currentConversation(); assert.equal(retried.turns.at(-1).sourceTurnId, priorId); assert.equal(calls.length, 4); for (const row of cancelledLedger) assert.deepEqual((await service.ledger(workspaceId)).find(item => item.id === row.id), row); assert.equal((await service.ledger(workspaceId)).length, 4); report.stopAndRetryPreserveCosts = true;
   });
@@ -306,6 +370,7 @@ async function scenario() {
   await require('./fixtures/chat-markdown-acceptance.cjs').verifyMarkdownReply({ service, workspaceId, calls, report, evaluate, click, dom, step });
   assert.equal(calls.length, 9);
   await require('./fixtures/chat-studio-queue.cjs').verifyChatQueue({ service, workspaceId, calls, held, report, evaluate, dom, click, fill, select, chooseScenario, until, step, currentConversation, inputFiles, outputDirectory: owner.output,
+    composerPosition, sendFromDock,
     armLostQueueAck({ conversationId, text }) { Object.assign(queueTransport, { conversationId, text, loseAck: true, blockReads: true }); },
     restoreQueueReads() { queueTransport.blockReads = false; },
     reload: async () => { window.reload(); },

@@ -79,8 +79,8 @@ describe('普通聊天的真实组件交互', () => {
     await fixture();
     await input('保留对话底部');
     await click('发送聊天消息');
-    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!;
-    const turn = thread.querySelector('.chat-turn-container')!;
+    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-scroll')!;
+    const content = thread.querySelector('.workspace-chat-scroll-content')!;
     let height = 500, position = 200;
     Object.defineProperties(thread, {
       clientHeight: { value: 300 },
@@ -90,7 +90,7 @@ describe('普通聊天的真实组件交互', () => {
         set: (value: number) => { position = Math.min(value, height - thread.clientHeight); },
       },
     });
-    const resizeTurn = resizeCallbacks.get(turn);
+    const resizeTurn = resizeCallbacks.get(content);
     expect(resizeTurn).toBeDefined();
 
     height = 720;
@@ -209,13 +209,14 @@ describe('普通聊天的真实组件交互', () => {
     await f.update('清新一天', 'complete'); await input('再简短一点'); await click('发送聊天消息');
     expect(f.start).toHaveBeenCalledTimes(2); expect(f.createProject).not.toHaveBeenCalled();
   });
-  it('已排队的尾部跟随在用户上滚阅读后不能把消息和结果再次拉到底部', async () => {
+  it('无 ResizeObserver 时，已排队的尾部跟随仍尊重用户的上滚位置', async () => {
+    vi.stubGlobal('ResizeObserver', undefined);
     const frames = new Map<number, FrameRequestCallback>(); let nextFrame = 0;
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
     vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
     const flushFrames = async () => { const pending = [...frames.values()]; frames.clear(); await act(async () => { for (const callback of pending) callback(1); }); };
     const f = await fixture(); await input('保留当前阅读位置'); await click('发送聊天消息');
-    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!;
+    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-scroll')!;
     Object.defineProperties(thread, { scrollHeight: { configurable: true, value: 2400 }, clientHeight: { configurable: true, value: 400 } });
     thread.scrollTop = 2000; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
     await f.update('正在回答，尾部跟随已排进动画帧'); expect(frames.size).toBeGreaterThan(0);
@@ -322,7 +323,7 @@ describe('有界长聊天和保留草稿的制作引用', () => {
     await click('查看后 20 条'); await flush(); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-20');
     await click('查看前 20 条'); await flush(); expect(ids()[0]).toBe('turn-0');
     for (const index of [150, 299]) { f.props.searchTarget = { ...f.props.searchTarget!, token: 'search-' + index, turnId: 'turn-' + index }; await act(async () => root!.render(<WorkspaceChat props={f.props} onLegacy={vi.fn()} />)); await flush(); expect(ids()).toHaveLength(20); expect(ids()).toContain('turn-' + index); }
-    const readingThread = host.querySelector<HTMLDivElement>('.workspace-chat-thread')!; Object.defineProperty(readingThread, 'scrollHeight', { configurable: true, value: 5000 }); readingThread.scrollTop = 123;
+    const readingThread = host.querySelector<HTMLDivElement>('.workspace-chat-scroll')!; Object.defineProperty(readingThread, 'scrollHeight', { configurable: true, value: 5000 }); readingThread.scrollTop = 123;
     await click('回到最新回复'); await flush(); expect(readingThread.scrollTop).toBe(5000); expect(ids()).toHaveLength(20); expect(ids()[0]).toBe('turn-280'); expect(ids().at(-1)).toBe('turn-299');
     expect(host.querySelector('[aria-label="聊天内容"]')).toHaveProperty('value', selectedDraft);
     expect((await f.read({ conversationId: 'long-conversation' })).turns).toEqual(original); expect(f.start).not.toHaveBeenCalled(); expect(f.createProject).not.toHaveBeenCalled(); expect(f.props.ledger).toEqual([]);

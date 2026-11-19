@@ -2,6 +2,8 @@ const { endpoint, failure, jsonRequest, normalizedUsage } = require('./provider-
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
 const { PDF, pdfInputIssue } = require('./production-pdf.cjs');
+const { WECHAT_RED_PACKET_COVER, coverPlanningRules, coverReviewRules, coverCreativeText } = require('./wechat-red-packet-cover.cjs');
+const { rasterDimensions } = require('./image-output-formats.cjs');
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/csv', 'application/json', 'application/xml']);
@@ -52,7 +54,16 @@ function textRequest(request, files, context) {
     files = files.filter(file => file.mimeType === 'video/mp4' || TEXT_TYPES.has(file.mimeType) || file.mimeType.startsWith('text/'));
   }
   ensureFilesSupported(files, protocol, context, request.kind);
-  const text = combinedText(request, files);
+  let text = combinedText(request, files);
+  const cover = request.imagePreset === WECHAT_RED_PACKET_COVER && ['vision', 'text'].includes(request.kind);
+  let instructions = cover && (request.kind === 'vision' ? coverReviewRules : coverPlanningRules);
+  if (cover && request.kind === 'vision') {
+    const dimensions = files.filter(file => IMAGE_TYPES.has(file.mimeType)).map((file, index) => {
+      try { const size = rasterDimensions(file.buffer); return `图${index + 1}源文件为 ${size.width} × ${size.height} 像素。`; } catch { return ''; }
+    }).filter(Boolean);
+    if (dimensions.length) instructions += '\n' + dimensions.join('\n');
+  }
+  if (cover) text = coverCreativeText(text.replaceAll(request.kind === 'vision' ? coverReviewRules : coverPlanningRules, '')) || '请按本步骤检查微信红包封面。';
   if (!text) throw failure('EMPTY_INPUT', '请提供提示词、输入文字或可读取的参考文件。', context);
   if (text.length > 200_000) throw failure('INVALID_INPUT', '合并参考文件后的文字超过 200000 字符，请先缩小输入范围。', context);
   const content = contentFor(protocol, text, files);
@@ -64,23 +75,23 @@ function textRequest(request, files, context) {
     url = endpoint(request.connection.baseUrl, 'chat/completions');
     headers.authorization = `Bearer ${context.secret}`;
     const messageContent = content.length === 1 && content[0].type === 'text' ? text : content;
-    body = { model: request.model.modelId, messages: [{ role: 'user', content: messageContent }], stream: false, [request.connection.providerId === 'openai' ? 'max_completion_tokens' : 'max_tokens']: maxTokens };
+    body = { model: request.model.modelId, messages: [...(instructions ? [{ role: 'system', content: instructions }] : []), { role: 'user', content: messageContent }], stream: false, [request.connection.providerId === 'openai' ? 'max_completion_tokens' : 'max_tokens']: maxTokens };
     if (request.connection.providerId === 'openai') body.store = false;
     if (request.connection.providerId === 'minimax') body.reasoning_split = true;
   } else if (protocol === 'openai-responses') {
     url = endpoint(request.connection.baseUrl, 'responses');
     headers.authorization = `Bearer ${context.secret}`;
-    body = { model: request.model.modelId, input: [{ role: 'user', content }], max_output_tokens: maxTokens, store: false, stream: false };
+    body = { model: request.model.modelId, ...(instructions ? { instructions } : {}), input: [{ role: 'user', content }], max_output_tokens: maxTokens, store: false, stream: false };
   } else if (protocol === 'anthropic') {
     url = endpoint(request.connection.baseUrl, /\/v1\/?$/.test(request.connection.baseUrl) ? 'messages' : 'v1/messages');
     headers['x-api-key'] = context.secret;
     headers['anthropic-version'] = '2023-06-01';
-    body = { model: request.model.modelId, max_tokens: maxTokens, messages: [{ role: 'user', content }], stream: false };
+    body = { model: request.model.modelId, ...(instructions ? { system: instructions } : {}), max_tokens: maxTokens, messages: [{ role: 'user', content }], stream: false };
   } else if (protocol === 'gemini') {
     const modelId = request.model.modelId.replace(/^models\//, '');
     url = endpoint(request.connection.baseUrl, `models/${encodeURIComponent(modelId)}:generateContent`);
     headers['x-goog-api-key'] = context.secret;
-    body = { contents: [{ role: 'user', parts: content }], generationConfig: { maxOutputTokens: maxTokens } };
+    body = { ...(instructions ? { systemInstruction: { parts: [{ text: instructions }] } } : {}), contents: [{ role: 'user', parts: content }], generationConfig: { maxOutputTokens: maxTokens } };
   } else throw failure('UNSUPPORTED_PROTOCOL', '此协议没有可执行的文字适配器。', context);
   const effortFields = reasoningRequestFields(request.connection, request.model, request.options.reasoningEffort);
   body = { ...body, ...effortFields, ...(body.generationConfig ? { generationConfig: { ...body.generationConfig, ...(effortFields.generationConfig || {}) } } : {}) };

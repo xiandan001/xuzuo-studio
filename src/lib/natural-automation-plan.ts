@@ -8,7 +8,7 @@ import { CREATION_PROFILES } from './creation-profiles';
 import { documentIllustrationSteps, DOCUMENT_IMAGE_LIMIT, DOCUMENT_REFERENCE_IMAGE_LIMIT } from './document-illustrations';
 import { extractVariables } from './prompt-variables';
 import { parseWallpaperTarget, wallpaperGenerationSize, wallpaperPrompt } from './wallpaper-target';
-import { redPacketCoverGenerationSize, redPacketCoverPrompt, WECHAT_RED_PACKET_COVER } from './wechat-red-packet-cover';
+import { normalizeRedPacketCoverPlan, redPacketCoverGenerationSize, redPacketCoverPrompt, WECHAT_RED_PACKET_COVER } from './wechat-red-packet-cover';
 import { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 import { animationRequestMode, animationStyleForRequest, makeAnimationWorkflow } from './animation-workflow';
 import { animationGenerationPrompt, animationStyle, checkedAnimationDocument, newAnimationDocument } from './animation-document';
@@ -252,7 +252,8 @@ function reviewOutputLimit(kind: 'text' | 'vision', plan: NaturalAutomationPlan,
 export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, project: Project, configuration: Configuration, bindings: NaturalAutomationBindings = {}, options: NaturalAutomationCompileOptions = {}): {
   workflow: WorkflowDraft; missing: string[]; preparationNotes: string[]; rule: { trigger: NaturalAutomationPlan['trigger']['type']; intervalMinutes?: number; sourceWorkflowId?: string; name: string; input: string; variables: Record<string, string> }; stepsSummary: string[];
 } {
-  const plan = validate(input);
+  const validated = validate(input);
+  const plan = options.imagePreset === WECHAT_RED_PACKET_COVER ? normalizeRedPacketCoverPlan(validated) : validated;
   const calendarResolved = options.calendarResolved === true && ['manual', 'schedule'].includes(plan.trigger.type);
   const unsupported = plan.unsupported.filter(issue => !calendarResolved || !calendarOnlyIssue(issue));
   if ((!options.allowPreparationQuestions && plan.questions.length) || unsupported.length) throw Error(`请先处理方案中的待澄清问题或不支持事项：${[...(!options.allowPreparationQuestions ? plan.questions : []), ...unsupported].join('；')}`);

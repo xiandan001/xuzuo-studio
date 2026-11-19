@@ -5,10 +5,33 @@ import type { Project } from '../types';
 import type { ModelCapability, StudioConfiguration } from '../configuration-types';
 import { adjustNaturalImageRefinements, appendNaturalPreparationNotes, compileNaturalAutomationPlan, naturalAutomationPreparationNotes, naturalAutomationRequestIssues, NATURAL_AUTOMATION_SCHEMA, parseNaturalAutomationPlan } from './natural-automation-plan';
 import { documentIllustrationSteps, illustratedDocumentSteps } from './document-illustrations';
+import { normalizeRedPacketCoverPlan } from './wechat-red-packet-cover';
 
 const require = createRequire(import.meta.url);
 type Configuration = Pick<StudioConfiguration, 'models' | 'connections' | 'credentials' | 'workflows'>;
 const kinds = ['text', 'vision', 'image-generation', 'image-editing'] as const;
+it('截图中的旧红包计划在编译和重新编辑后均保留创意，上传和质检标准由本地确定', () => {
+  const plan = imagePlan();
+  plan.name = '小熊给你留了个红包｜3D竖屏概念图';
+  plan.objective = '规划一张1080×1920的原创微信红包「待拆开」页面概念图：第一眼先看到有吸引力的金色「开」按钮，再被小熊的表情吸引。画面核心是「小熊给你留了个红包」，让人感觉它正在把红包递给你。';
+  plan.acceptance = ['保留小熊递红包动作和开门红题字', '验收标准：画幅为9:16；中央有金色“开”按钮', '小熊的表情是第二焦点，双爪保持完整，呈哑光软陶质感。', '按钮有轻微金属光泽和凸起感，高光不遮挡「开」字。'];
+  plan.constraints = ['粉色3D风格', '按1080×1920导出'];
+  plan.steps[1].instruction = '复核熊爪；3:4比例必须失败，要求9:16';
+  const normalized = normalizeRedPacketCoverPlan(plan), result = compileNaturalAutomationPlan(plan, project(), configuration(), {}, {imagePreset: '微信红包封面'});
+  expect(normalizeRedPacketCoverPlan(normalized)).toEqual(normalized);
+  const many = Array.from({ length: 20 }, (_, i) => `创意细节${i + 1}`);
+  const full = normalizeRedPacketCoverPlan({ ...plan, acceptance: many, constraints: many });
+  expect(full.acceptance).toHaveLength(20); expect(full.constraints).toHaveLength(20);
+  expect(full.acceptance.join('\n')).toContain('创意细节20'); expect(full.acceptance.join('\n')).toContain('上传画面保持干净');
+  expect(full.constraints.join('\n')).toContain('957 × 1278');
+  for (const value of [JSON.stringify(normalized), JSON.stringify(result.workflow), result.rule.input]) {
+    expect(value).toContain('小熊给你留了个红包'); expect(value).toContain('开门红'); expect(value).toContain('957 × 1278');
+    expect(value).not.toMatch(/9:16|1080×1920|必须失败|有金色“开”按钮|画幅为|第二焦点|按钮有轻微|高光不遮挡|待拆开」页面概念图/);
+    expect(value).toContain('双爪保持完整'); expect(value).toContain('哑光软陶');
+  }
+  expect(plan.acceptance[1]).toContain('9:16');
+  expect(compileNaturalAutomationPlan(plan, project(), configuration()).rule.input).toContain('9:16');
+});
 function configuration(): Configuration {
   return {
     connections: kinds.map(kind => ({ id: `connection-${kind}`, name: kind, providerId: 'custom', protocol: 'openai-chat', baseUrl: 'https://fixture.invalid/v1', enabled: true, status: 'configured' })),

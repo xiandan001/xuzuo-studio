@@ -34,8 +34,7 @@ const plan = { version: 1 as const, name: '产品合作说明书', objective: '�
 const turn: ChatTurn = { id: 'plan-turn', userText: '制作完整合作说明书', text: JSON.stringify(plan), mode: 'plan', plan, status: 'complete', modelName: '已选择的文字模型', modelId: 'gpt-6.1-terra', modelConfigId: 'text-model', credentialId: 'account-metadata', reasoningEffort: 'high', costCents: 3, costState: 'calculated', createdAt: timestamp, updatedAt: timestamp };
 const makeProject = (id = 'new-project'): Project => ({ id, workspaceId: 'workspace', name: plan.name, kind: 'word', description: plan.objective, costCents: 0, status: 'draft', version: 0, accent: 'blue', updatedAt: timestamp });
 
-async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false, cover = false }: { withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean; cover?: boolean } = {}) {
-  const conversationId = 'conversation', workspaceId = 'workspace';
+async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false, cover = false, imageChoices = false, conversationId = 'conversation', workspaceId = 'workspace', unavailableAccount = '' }: { imageChoices?: boolean; conversationId?: string; workspaceId?: string; unavailableAccount?: string; withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean; cover?: boolean } = {}) {
   const planner = { modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: 'high' as const };
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
   const model = { id: 'text-model', name: '已选择的文字模型', modelId: turn.modelId, connectionId: connection.id, capabilities: ['text', 'vision'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '5' } };
@@ -62,6 +61,9 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
     activeTurn.imagePreset = '微信红包封面';
     activeTurn.plan = { ...plan, objective: '制作小猫红包封面', outputKind: 'image', steps: [{ kind: 'image-generation', name: '制作封面', instruction: '画橘猫' }] };
   }
+  if (imageChoices) activeTurn.plan = { ...plan, outputKind: 'image', steps: [{ kind: 'image-generation', name: '生成图', instruction: '生成初稿' }, { kind: 'image-editing', name: '精修图', instruction: '精修初稿' }] };
+  const imageModels = imageChoices ? ['甲', '乙'].map((name, i) => ({ ...model, id: 'image-model-' + i, name: '图片模型' + name, capabilities: ['image-generation', 'image-editing'] })) : [];
+  const accounts = [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }, ...(imageChoices ? [{ id: 'image-account', name: '图片账户', connectionId: connection.id, enabled: true }] : [])].filter(item => item.id !== unavailableAccount);
   const copiedFile = { id: 'copied-reference', name: source.name, mimeType: source.mimeType, bytes: source.bytes, kind: source.kind, createdAt: timestamp, path: '', projectId: 'new-project' };
   let failCopy = copyFails;
   const attachToProject = vi.fn(async (input: { projectId: string; attachmentIds: string[] }) => { if (failCopy) { failCopy = false; throw Error('参考材料复制失败，原文件保留'); } return [{ ...copiedFile, projectId: input.projectId }]; });
@@ -94,7 +96,7 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
     const [visibleRuns, updateRuns] = useState(runs); setRuns = updateRuns;
     updateProjects = setProjects; updateWorkflows = setWorkflows; savedWorkflows = workflows;
     applyProjectChanges = (id, changes) => setProjects(current => current.map(project => project.id === id ? { ...project, ...changes } : project));
-    const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model], credentials: missing === 'key' ? [] : [{ id: 'account-metadata', name: '账户元数据', connectionId: connection.id, enabled: true }], workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests } as unknown as PageProps;
+    const props = { workspaceId, workspace: { id: workspaceId, name: '独立测试工作区' }, workspaces: [{ id: workspaceId, name: '独立测试工作区' }], projects, trashedProjects: [], purgedProjects: [], activeProject: projects[0] || { id: '' }, ledger, configuration: { connections: [connection], models: missing === 'model' ? [] : [model, ...imageModels], credentials: missing === 'key' ? [] : accounts, workflows, saveWorkflow }, workflowRunner: { runs: [], preflight }, preferences: {}, navigate: vi.fn(), notify: vi.fn(), onCreateProject: directoryRequests } as unknown as PageProps;
     props.onUpdateProject = updateProject;
     Object.assign(props.workflowRunner, { runs: visibleRuns, startLive, readStartResult });
     return <ChatPlanProduction props={props} turn={activeTurn} conversationId={conversationId} planner={planner} />;
@@ -109,6 +111,40 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
+  it('新方案和重启分别记住生成及精修选择；旧方案、失效账户和其它工作区各自独立', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 30, 260, 40));
+    const field = (name: string) => host.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="' + name + '"]')!;
+    async function select(name: string, choice: string) {
+      await act(async () => field(name).click());
+      const option = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(node => node.textContent?.includes(choice));
+      expect(option, name + ' ' + choice).toBeTruthy();
+      await act(async () => option!.click());
+    }
+    async function reopen(conversationId: string, workspaceId = 'workspace', unavailableAccount = '') {
+      if (root) { await act(async () => root!.unmount()); root = undefined; }
+      const f = await fixture({ imageChoices: true, conversationId, workspaceId, unavailableAccount });
+      const panel = host.querySelector<HTMLDetailsElement>('details.chat-plan-models')!;
+      if (!panel.open) await act(async () => panel.querySelector('summary')!.click());
+      return f;
+    }
+    const first = await reopen('first-chat');
+    await select('生成图片模型', '图片模型甲'); await select('生成图片Key', '图片账户');
+    await select('精修图片模型', '图片模型乙'); await select('精修图片Key', '账户元数据');
+    const firstSnapshot = localStorage.getItem(first.key);
+    const next = await reopen('next-chat');
+    expect(field('生成图片模型').textContent).toContain('图片模型甲'); expect(field('生成图片Key').textContent).toContain('图片账户');
+    expect(field('精修图片模型').textContent).toContain('图片模型乙'); expect(field('精修图片Key').textContent).toContain('账户元数据');
+    await select('生成图片模型', '图片模型乙'); await select('生成图片Key', '图片账户');
+    expect(localStorage.getItem(first.key)).toBe(firstSnapshot);
+    await reopen('first-chat'); expect(field('生成图片模型').textContent).toContain('图片模型甲');
+    await reopen('new-after-restart', 'workspace', 'image-account');
+    expect(field('生成图片模型').textContent).toContain('图片模型乙'); expect(field('生成图片Key').textContent).toContain('请选择使用的 Key');
+    expect(field('精修图片模型').textContent).toContain('图片模型乙'); expect(field('精修图片Key').textContent).toContain('账户元数据');
+    await reopen('first-chat', 'other-workspace');
+    expect(field('生成图片模型').textContent).toContain('请选择一个模型'); expect(field('精修图片模型').textContent).toContain('请选择一个模型');
+    expect(next.startLive).not.toHaveBeenCalled(); expect(first.planningStart).not.toHaveBeenCalled(); first.verifyLedger();
+  });
   it('红包方案在明确执行前不派发，创建项目后用红包参数生产并保存场景', async () => {
     const f = await fixture({ cover: true });
     expect(JSON.parse(localStorage.getItem(f.key)!).imagePreset).toBe('微信红包封面');

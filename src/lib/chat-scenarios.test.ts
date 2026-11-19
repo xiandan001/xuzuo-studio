@@ -5,6 +5,12 @@ import type { ChatTurn } from '../chat-types';
 
 const scenarios = availableChatScenarios('workspace');
 describe('聊天使用场景', () => {
+  it('微信红包页面的图识别为封面，明确要求的 App 原型不会因为回复提及封面而改用途', () => {
+    const ask = (userText: string) => replyProductionScenario(scenarios, { id: 'cover', userText, text: '微信红包封面' } as ChatTurn, []);
+    expect(ask('当前想要做一个3D可爱风微信红包页面的图，有什么规划')?.imagePreset).toBe('微信红包封面');
+    expect(ask('做一张待拆开的红包图')?.imagePreset).toBe('微信红包封面');
+    expect(ask('开发一个微信红包页面的交互原型')?.imagePreset).not.toBe('微信红包封面');
+  });
   it('优先识别所选轮次的需求，再使用回复和该轮之前的补充上下文', () => {
     const turn = (id: string, userText: string, text: string) => ({ id, userText, text }) as ChatTurn;
     const first = turn('one', '帮我制作微信红包封面，不要海报', '也可以尝试表情包');

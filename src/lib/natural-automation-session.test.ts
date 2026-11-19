@@ -13,6 +13,19 @@ const record = (changes: Partial<AutomationPlanningRecord> = {}): AutomationPlan
 const start = (previous: NaturalAutomationDraft, input = '换成国风') => naturalPlanningStartDraft(previous, 'new-request', input, 'billing-owner', { modelConfigId: 'planner-two', credentialId: 'metadata-two' }, { input, priorPlanId: 'accepted-one', currentPlan: previous.plan, calendarResolved: true, billingProjectId: 'billing-owner' });
 
 describe('共享自动化会话与多轮方案归属', () => {
+  it('重新打开尚未执行的旧方案，只从本工作区补全未选用途', () => {
+    const pending = { ...draft(), workflowId: undefined, ruleId: undefined, workflowSaved: false };
+    const stored = new Map([
+      ['existing', JSON.stringify(pending)],
+      ['xuzuo-production-binding-v1:workspace:image-generation', JSON.stringify({ modelConfigId: 'another-generation' })],
+      ['xuzuo-production-binding-v1:workspace:image-editing', JSON.stringify({ modelConfigId: 'editor', credentialId: 'account-id' })],
+    ]);
+    const storage = { getItem: (key: string) => stored.get(key) ?? null };
+    const read = () => readNaturalAutomationDraft('existing', pending, {}, storage).draft.bindings;
+    expect(read()).toEqual({ ...pending.bindings, 'image-editing': { modelConfigId: 'editor', credentialId: 'account-id' } });
+    stored.set('existing', JSON.stringify({ ...pending, chatExecution: { workflowId: 'saved-workflow', runId: 'old-run' } }));
+    expect(read()).toEqual(pending.bindings);
+  });
   it('旧modal仍用原key与已创建后fresh策略，Home独立key并保留已创建草稿', () => {
     const source = { ...draft(), needsSetup: false }, before = JSON.stringify(source);
     expect(naturalAutomationDraftStorageKey('workspace')).toBe('xuzuo-natural-automation-v1:workspace');

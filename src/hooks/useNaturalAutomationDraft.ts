@@ -1,3 +1,4 @@
+import { normalizeRedPacketCoverPlan, WECHAT_RED_PACKET_COVER } from '../lib/wechat-red-packet-cover';
 import { useRef, useState } from 'react';
 import type { NaturalAutomationPlan } from '../natural-automation-types';
 import type { NaturalBinding } from '../components/NaturalAutomationModels';
@@ -5,7 +6,7 @@ import type { NaturalAutomationBindings } from '../lib/natural-automation-plan';
 import { useRecoveryDraft } from './useRecoveryDraft';
 import { writeRecoveryDraft } from '../lib/recovery-draft';
 import { downloadFile } from '../lib/files';
-import { normalizeNaturalBindings } from '../lib/natural-model-bindings';
+import { normalizeNaturalBindings, readProductionPreferences } from '../lib/natural-model-bindings';
 
 export interface NaturalAutomationDraft {
   version: 1; workspaceId: string; projectId: string; input: string; planner: NaturalBinding;
@@ -37,13 +38,20 @@ function editablePlan(value: NaturalAutomationPlan): boolean {
 }
 export function readNaturalAutomationDraft(key: string, fallback: NaturalAutomationDraft, options: NaturalAutomationDraftOptions = {}, storage?: Pick<Storage, 'getItem'>): { draft: NaturalAutomationDraft; issue: string } {
   try {
-    const raw = (storage || localStorage).getItem(key);
-    if (raw === null) return { draft: { ...fallback, projectId: options.initialProjectId || fallback.projectId, planner: options.initialPlanner ? { ...options.initialPlanner } : fallback.planner, bindings: options.initialBindings ? normalizeNaturalBindings(options.initialBindings) : fallback.bindings }, issue: '' };
+    const store = storage || localStorage, raw = store.getItem(key);
+    if (raw === null) {
+      const bindings = { ...readProductionPreferences(fallback.workspaceId, store), ...(options.initialBindings ? normalizeNaturalBindings(options.initialBindings) : fallback.bindings) };
+      return { draft: { ...fallback, projectId: options.initialProjectId || fallback.projectId, planner: options.initialPlanner ? { ...options.initialPlanner } : fallback.planner, bindings }, issue: '' };
+    }
     if (!raw) return { draft: fallback, issue: '' };
     const value = JSON.parse(raw);
     if (value?.version !== 1 || value.workspaceId !== fallback.workspaceId || typeof value.input !== 'string' || value.input.length > 10000 || typeof value.projectId !== 'string' || !value.planner || !value.bindings) throw Error('format');
     if (value.plan && !editablePlan(value.plan)) throw Error('plan format');
     if (value.chatExecution !== undefined && (!value.chatExecution || !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.workflowId || '') || value.chatExecution.runId !== undefined && !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.runId))) throw Error('execution format');
+    if (!value.chatExecution && !value.workflowId && !value.ruleId && !value.workflowSaved) {
+      value.bindings = { ...readProductionPreferences(fallback.workspaceId, store), ...value.bindings };
+    }
+    if (value.plan && value.imagePreset === WECHAT_RED_PACKET_COVER) value.plan = normalizeRedPacketCoverPlan(value.plan);
     return { draft: value, issue: '' };
   } catch { return { draft: fallback, issue: '这份自动化草稿暂时无法可靠读取，原记录未覆盖。请先导出或恢复原草稿。' }; }
 }

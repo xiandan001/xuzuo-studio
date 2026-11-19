@@ -9,6 +9,7 @@ const { completeBillingUsage } = require('./billing-request-shape.cjs');
 const { executeChat, prepareChat, prepareChatMessages, compactChatRequest } = require('./provider-chat.cjs');
 const { createChatAttachments, validPublicMetadata, backupBytes, MAX_COUNT, MAX_TOTAL, legacyTurnValid, upgradeLegacyRecord } = require('./chat-attachments.cjs');
 const { parseNaturalAutomationPlan } = require('./natural-automation-plan.runtime.cjs');
+const { WECHAT_RED_PACKET_COVER, normalizeRedPacketCoverPlan } = require('./wechat-red-packet-cover.cjs');
 const { imageType } = require('./image-output-formats.cjs');
 const { queueEntriesValid, publicQueue, createChatQueue } = require('./chat-queue.cjs');
 const { queuedBindingFingerprint } = require('./chat-queue-binding.cjs');
@@ -89,7 +90,7 @@ function normalizeLegacySnapshot(value) {
 function summary(record) {
   return { id: record.id, workspaceId: record.workspaceId, title: record.title, ...historyFields(record), createdAt: record.createdAt, updatedAt: record.updatedAt, turnCount: record.turns.length, ...(record.queue?.length ? { queuedCount: record.queue.length } : {}), ...(record.turns.some(isActive) ? { activeTurnId: record.turns.find(isActive).id } : {}) };
 }
-const publicTurn = turn => ({ ...Object.fromEntries(Object.entries(turn).filter(([key]) => !key.startsWith('_'))), streamSequence: turn._streamSequence || 0 });
+const publicTurn = turn => ({ ...Object.fromEntries(Object.entries(turn).filter(([key]) => !key.startsWith('_'))), ...(turn.plan && turn.imagePreset === WECHAT_RED_PACKET_COVER ? { plan: normalizeRedPacketCoverPlan(turn.plan) } : {}), streamSequence: turn._streamSequence || 0 });
 function publicConversation(record) { return { ...(record.exports?.length ? { exports: clone(record.exports) } : {}), version: 1, ...summary(record), turns: record.turns.map(publicTurn), ...(record.queue?.length ? { queue: publicQueue(record.queue) } : {}), ...(record.productions?.length ? { productions: clone(record.productions) } : {}) }; }
 function blank(input) { const time = now(); return { version: 1, id: input.conversationId, workspaceId: input.workspaceId, title: '新对话', createdAt: time, updatedAt: time, turns: [] }; }
 function checkedScope(input) {
@@ -405,7 +406,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
         try {
           const plan = parseNaturalAutomationPlan(turn.text);
           if (input.imagePreset && plan.outputKind !== 'image') throw Error('红包封面需要图片方案');
-          turn.plan = plan;
+          turn.plan = input.imagePreset === WECHAT_RED_PACKET_COVER ? normalizeRedPacketCoverPlan(plan) : plan;
         } catch { turn.status = 'failed'; turn.error = '模型返回的制作方案不完整或格式不正确，尚未执行制作；已保留回答与费用，可调整需求后重试。'; }
       }
       if (terminal.error?.code === 'QUEUED_BINDING_CHANGED' && terminal.error.requestStarted === false && operation.queuedEntry) queuedChat.rebind(record, operation.queuedEntry, input.id);

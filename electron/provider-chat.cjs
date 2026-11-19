@@ -3,10 +3,11 @@ const { CredentialStoreError, credentialErrorMessage } = require('./credential-e
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
 const { createBillingRequestSnapshot } = require('./billing-request-shape.cjs');
 const { prepareChatMessages, chatMessageContent } = require('./chat-message-content.cjs');
+const { WECHAT_RED_PACKET_COVER, isCoverTopicOnly, isRedPacketCoverDiscussion, coverPlanningRules, coverCreativeText } = require('./wechat-red-packet-cover.cjs');
 
 const LIMIT = 2 * 1024 * 1024;
 const preparedRequests = new WeakMap();
-const requestBinding = input => JSON.stringify([input.workspaceId || '', input.conversationId || '', input.id || '', input.connection.id, input.connection.providerId, input.connection.protocol, input.connection.baseUrl, input.model.modelId, input.credentialId, input.reasoningEffort || 'auto', input.mode || 'chat', input.outputKind || 'image', input.text || '', input.attachmentIds || []]);
+const requestBinding = input => JSON.stringify([input.workspaceId || '', input.conversationId || '', input.id || '', input.connection.id, input.connection.providerId, input.connection.protocol, input.connection.baseUrl, input.model.modelId, input.credentialId, input.reasoningEffort || 'auto', input.mode || 'chat', input.outputKind || 'image', input.imagePreset || '', input.text || '', input.attachmentIds || []]);
 function providerFailure(data, context, fallback) {
   const detail = data?.error || data, quota = new Set(['insufficient_quota', 'credit_balance_exhausted', 'billing_hard_limit_reached', 'quota_exceeded']);
   if (quota.has(detail?.code) || quota.has(detail?.type)) return failure('PROVIDER_QUOTA', '供应商提示所选账户余额或调用额度不足，请充值或切换账户后重试。已有内容和费用记录保留，未自动重发。', context);
@@ -14,11 +15,26 @@ function providerFailure(data, context, fallback) {
 }
 const INSTRUCTIONS = '你是序作工作台的对话助手。用清楚、自然的语言回答问题、讨论想法或帮助整理需求。根据上下文正常交流，不把每条消息强行变成自动化方案或JSON。你可以读取用户随消息提供的附件内容，但没有访问其他本机文件、联网搜索或执行制作的工具，不声称已经执行这些操作。Office附件如果标记为正文纯文字，不能声称已经检查原稿图片、排版或重算公式。需要制作文件或图片时，可以建议用户点击“转为制作方案”。';
 
+function discussingCover(input, messages) {
+  if (input.mode === 'plan') return input.imagePreset === WECHAT_RED_PACKET_COVER;
+  const continuation = /^(?:好|可以|继续|按照|就这|改成|换成|那|再把|配色|题字)/;
+  const recent = [input.text || '', ...messages.slice(-9, -1).reverse().filter(m => m.role === 'user').map(m => m.content)];
+  for (const text of recent) {
+    if (isRedPacketCoverDiscussion(text)) return true;
+    if (!continuation.test(text.trim()) || isCoverTopicOnly(text) || /海报|壁纸|演示|表格|文档/i.test(text)) break;
+  }
+  return false;
+}
 function prepareChat(input, messages) {
   const { connection, model, reasoningEffort } = input, protocol = connection.protocol;
-  const instructions = input.mode === 'plan' ? require('./automation-planning.cjs').plannerPrompt(input.outputKind || 'image') : INSTRUCTIONS;
+  let instructions = input.mode === 'plan' ? require('./automation-planning.cjs').plannerPrompt(input.outputKind || 'image') : INSTRUCTIONS;
+  if (discussingCover(input, messages)) {
+    instructions += '\n\n' + coverPlanningRules;
+  }
   const fields = reasoningRequestFields(connection, model, reasoningEffort), headers = { 'content-type': 'application/json' };
-  const content = chatMessageContent(input, messages);
+  const planMessages = input.mode === 'plan' && input.imagePreset === WECHAT_RED_PACKET_COVER
+    ? messages.map(message => ({ ...message, content: coverCreativeText(message.content) || '按微信红包封面原画规范规划。' })) : messages;
+  const content = chatMessageContent(input, planMessages);
   let body, url;
   if (protocol === 'openai-responses') {
     url = endpoint(connection.baseUrl, 'responses');

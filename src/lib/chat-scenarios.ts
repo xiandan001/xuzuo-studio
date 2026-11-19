@@ -2,7 +2,7 @@ import type { ImageUseTemplate } from '../configuration-types';
 import type { ProjectKind } from '../types';
 import type { ChatTurn } from '../chat-types';
 import { availableImageUseTemplates } from './image-use-templates';
-import { WECHAT_RED_PACKET_COVER } from './wechat-red-packet-cover';
+import { WECHAT_RED_PACKET_COVER, isCoverTopicOnly, isRedPacketCoverDiscussion } from './wechat-red-packet-cover';
 
 export type ChatScenarioGroup = 'chat' | 'images' | 'documents' | 'custom';
 export interface ChatScenario {
@@ -64,7 +64,6 @@ export function findChatScenario(scenarios: ChatScenario[], id: string | undefin
   return scenarios.find(scenario => scenario.id === id) || legacy || scenarios.find(scenario => scenario.id === 'chat-default') || chats[0];
 }
 const productionAliases: Record<string, RegExp> = {
-  [WECHAT_RED_PACKET_COVER]: /红包(?:的)?封面|red (?:packet|envelope) cover/i,
   宣传图: /海报|宣传画|\bposter\b/i, 壁纸: /墙纸|\bwallpaper\b/i,
   试衣图: /试衣|虚拟试穿/, '透明 PNG': /透明(?:背景|底)?\s*png/i,
   工程P图: /工程\s*p\s*图/i, 角色图集: /角色(?:动作|表情)图集/,
@@ -77,7 +76,9 @@ export function replyProductionScenario(scenarios: ChatScenario[], turn: ChatTur
   function matches(text: string) {
     const positive = text.normalize('NFKC').toLowerCase().split(/[，,。；;！？!?\n]|而是|改为|改做/)
       .map(part => part.split(/不要|不想|不需要|不做|别做|无需/, 1)[0]).join('\n');
-    return scenarios.filter(item => item.mode === 'plan' && (positive.includes(item.name.toLowerCase()) || productionAliases[item.imagePreset || item.id]?.test(positive)));
+    return scenarios.filter(item => item.mode === 'plan' && (item.imagePreset === WECHAT_RED_PACKET_COVER
+      ? !isCoverTopicOnly(turn.userText) && isRedPacketCoverDiscussion(text)
+      : positive.includes(item.name.toLowerCase()) || productionAliases[item.imagePreset || item.id]?.test(positive)));
   }
   const requested = matches(turn.userText);
   if (requested.length === 1) return requested[0];

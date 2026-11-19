@@ -18,7 +18,7 @@ import { canResumeLocalImageExport } from '../lib/local-image-export';
 import { workflowPublicError } from '../lib/studio-run';
 import { workflowOutputRetryLimit } from '../lib/workflow-output-retry';
 import { canOrganizeRun } from '../lib/task-visibility';
-import { workflowReviewState } from '../lib/workflow-review';
+import { qualityRepairSource, workflowReviewState } from '../lib/workflow-review';
 import { RUN_LABELS, isModelStep, kindLabel, StepIcon, WorkflowDialog } from './workflow-shared';
 
 function AttemptDetails({ attempts, props, live, projectId, stepRole }: { attempts: WorkflowAttempt[]; props: PageProps; live: boolean; projectId: string; stepRole?: WorkflowStep['role'] }) {
@@ -32,30 +32,6 @@ function AttemptDetails({ attempts, props, live, projectId, stepRole }: { attemp
   return <div className="wf-attempt-details">{attempt.recoveredFromReceiptAt && <p className="wf-run-safety-note"><ShieldCheck size={14} />此步骤已从确认回执恢复，未重新调用模型；原调用费用保留。</p>}{attempts.length > 1 && <label className="wf-attempt-picker">查看尝试<Select aria-label={`查看步骤 ${attempt.stepName} 的历史尝试`} value={attempt.id} onValueChange={setSelectedId} options={attempts.map((item, index) => ({ value: item.id, label: `第 ${index + 1} 次 · ${item.status === 'complete' ? '完成' : item.status === 'failed' ? '失败' : item.status === 'cancelled' ? '取消' : '处理中'} · ${costPrimary(attemptCostRecord(item, props.ledger, live))}` }))} /></label>}{attempt.error && <p className="wf-attempt-error" role="status"><AlertCircle size={13} />{attempt.error}</p>}{attempt.summary && (documentResult ? <p className="wf-attempt-summary">文档内容已生成，点击下方“查看文档”即可检查与编辑完整内容。</p> : <p className="wf-attempt-summary">{attempt.summary}</p>)}{attempt.costState === 'unknown' && <p className="wf-unknown-cost">本次费用尚未完整计算，不能按零元或免费处理。</p>}{attempt.usage && <p className="wf-usage">{typeof attempt.usage.inputTokens === 'number' ? `输入 ${attempt.usage.inputTokens} Token` : ''}{typeof attempt.usage.outputTokens === 'number' ? ` · 输出 ${attempt.usage.outputTokens} Token` : ''}{typeof attempt.usage.images === 'number' ? ` · ${attempt.usage.images} 张图` : ''}{typeof attempt.usage.seconds === 'number' ? ` · ${attempt.usage.seconds} 秒` : ''}</p>}<RememberedDetails rememberKey={`workflow-attempt:${attempt.id}:raw-log`}><summary>查看本次输入、提示词与{live ? '结果' : '模拟结果'}</summary><b>本次输入</b><pre>{attempt.input}</pre>{attempt.prompt && <><b>本次提示词</b><pre>{attempt.prompt}</pre></>}<b>结果正文或摘要</b><pre>{attempt.summary || '当前尝试尚未返回内容。'}</pre>{attempt.providerRequestId && <><b>供应商请求编号</b><pre>{attempt.providerRequestId}</pre></>}</RememberedDetails>{attempt.artifacts?.length ? <ArtifactResults key={attempt.id} fileScope="attempt" artifacts={attempt.artifacts} runner={props.workflowRunner} projectId={projectId} documentKind={documentKind === 'image' || ['planner', 'reviewer'].includes(stepRole || '') ? undefined : documentKind} onEditDocument={documentResult ? () => props.navigate('documents', projectId) : undefined} /> : null}</div>;
 }
 
-function canAdjustReviewPng(run: WorkflowRun) {
-  const steps = run.snapshot.steps;
-  const current = steps[run.stepIndex];
-  const remaining = steps.slice(run.stepIndex + 1).filter(step => step.enabled);
-  const [exportStep, finalReview] = remaining;
-  if (run.snapshot.outputKind !== 'image' || run.retryStepOnly || run.supersededByRunId || run.attempts.some(attempt => attempt.status === 'running')
-    || current?.kind !== 'vision' || current.role !== 'reviewer' || current.inputSource !== 'previous' || current.referenceArtifactIds !== undefined || remaining.length !== 2
-    || exportStep?.kind !== 'export' || finalReview?.kind !== 'manual-review' || exportStep.imageExportSize !== undefined
-    || exportStep.wallpaperTarget !== undefined || exportStep.engineeringReferenceId !== undefined) return false;
-  const sourceId = exportStep.contentSourceStepIds === undefined ? exportStep.contentSourceStepId
-    : exportStep.contentSourceStepId === undefined && exportStep.contentSourceStepIds.length === 1 ? exportStep.contentSourceStepIds[0] : undefined;
-  const priorSteps = steps.slice(0, run.stepIndex);
-  const producer = priorSteps.find(step => step.id === sourceId);
-  if (!producer?.enabled || !['image-generation', 'image-editing'].includes(producer.kind)
-    || producer.role === 'reviewer' || producer.role === 'planner' || (producer.count ?? 1) !== 1 || (producer.imageOutputFormat ?? 'png') !== 'png') return false;
-  const previous = priorSteps.filter(step => step.enabled && step.kind !== 'manual-review' && step.kind !== 'export'
-    && run.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete')).at(-1);
-  if (previous?.id !== producer.id) return false;
-  const attempt = run.attempts.filter(item => item.stepId === producer.id && item.status === 'complete').at(-1);
-  const files = (attempt?.artifacts || []).filter(file => file.kind === 'image');
-  const [file] = files;
-  return files.length === 1 && !!file?.id && file.mimeType === 'image/png'
-    && file.projectId === run.projectId && file.runId === run.id && !file.trashedAt && !file.unavailable;
-}
 
 export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0, embedded = false }: { props: PageProps; run: WorkflowRun; referenceFilesRequest?: number; embedded?: boolean }) {
   const standaloneDetails = useRememberedBoolean(`task:${summary.id}:workflow-details`, !summary.contentTruncated && summary.projectId === props.activeProject.id);
@@ -134,7 +110,7 @@ export function WorkflowRunCard({ props, run: summary, referenceFilesRequest = 0
   const project = props.projects.find(item => item.id === run.projectId);
   const editableReview = live && review === 'manual' && !!project && ['word', 'ppt', 'excel'].includes(project.kind);
   const resize = props.workflowRunner.resumeResizedImage;
-  const canResizeReview = live && review === 'quality-failed' && !!resize && !!project && canAdjustReviewPng(run);
+  const canResizeReview = live && review === 'quality-failed' && !!resize && !!project && !!qualityRepairSource(run);
   const qualitySource = review === 'quality-failed' ? run.snapshot.steps.slice(0, run.stepIndex).filter(step =>
     step.enabled && !['planner', 'reviewer'].includes(step.role || '') &&
     run.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && attempt.artifacts?.some(file => !file.trashedAt && !file.unavailable))).at(-1) : undefined;

@@ -40,15 +40,19 @@ async function verifyChatQueue(ctx) {
   }
   await step('queued-follow-up-unknown-ack-reload-and-free-lookup', async () => {
     await click('button', '新对话'); await chooseScenario('自由聊天'); await select('推理强度', '轻度');
-    await fill(initialText); await click('[aria-label="发送聊天消息"]');
+    await click('[aria-label="切换最近作品测试数据"]');
+    await dom("document.querySelectorAll('.conversation-recent-work').length===3", 'new conversation with three recent works');
+    await fill(initialText); const anchor = await ctx.composerPosition('recent-before-first-send'); await ctx.sendFromDock();
     await until(() => calls.length === baseline + 1 && held.size === 1, 'dedicated queued conversation holds one real synthetic SSE');
     identity = (await ctx.currentConversation()).id; assert.notEqual(identity, original.id);
     await dom("document.querySelector('[aria-label=\"停止回复\"]')&&document.querySelectorAll('.workspace-chat-turn').length===1", 'first queued scenario turn is visible');
+    await ctx.composerPosition('recent-first-stream', anchor);
     await select('推理强度', '深入'); await click('[aria-label="添加聊天附件"]'); await click('[aria-label="附件来源"] button', '本机文件');
     await dom("document.querySelector('[aria-label=\"本轮附件\"]')?.children.length===2", 'queued references are imported as actual files');
     armLostQueueAck({ conversationId: identity, text: beforeEdit });
     await fill(beforeEdit); await click('[aria-label="排队发送消息"]');
     await dom("document.querySelector('.chat-queue-pending')?.textContent.includes('上次排队结果尚未确认')", 'lost enqueue acknowledgement is visible without resend');
+    await ctx.composerPosition('recent-queued', anchor);
     const pending = await read(); assert.equal(pending.queue.length, 1); pendingId = pending.queue[0].id; attachmentSnapshots = pending.queue[0].attachments;
     assert.equal(pending.queue[0].text, beforeEdit); assert.equal(pending.queue[0].reasoningEffort, 'high'); assert.equal(pending.queue[0].modelConfigId, pending.turns[0].modelConfigId); assert.equal(pending.queue[0].credentialId, pending.turns[0].credentialId);
     assert.deepEqual(attachmentSnapshots.map(file => file.name).sort(), ['product-brief.docx', 'product-facts.txt']);

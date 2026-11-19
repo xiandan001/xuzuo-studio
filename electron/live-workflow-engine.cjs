@@ -8,14 +8,15 @@ const { extractReferenceText } = require('./reference-text.cjs');
 const { finishEditedReview } = require('./edited-delivery.cjs');
 const { illustrationAssets, composeDocumentImages } = require('./document-illustrations.cjs');
 const { createRunHistoryStore, validateRecords, runSummary } = require('./run-history-store.cjs');
-const { evaluateQuality, repairInput } = require('./automation-quality.cjs');
+const { evaluateQuality, repairInput, reviewVerdict } = require('./automation-quality.cjs');
+const { normalizeReasoningEffort } = require('./reasoning-options.cjs');
 const { imageExportAssets } = require('./image-export-sources.cjs');
 const { imageExportSizeError, singleProducedPng, readResizeSource } = require('./resized-image-export.cjs');
 const { startFingerprint } = require('./live-start.cjs');
 const { replacementReview, assertRefinementSource } = require('./refinement-fork.cjs');
 const { validateResumeImageSources } = require('./resume-image-sources.cjs');
 const { explicitStepReferences } = require('./workflow-references.cjs');
-const { WECHAT_RED_PACKET_COVER, isRedPacketCoverWorkflow, redPacketCoverGenerationSize } = require('./wechat-red-packet-cover.cjs');
+const { WECHAT_RED_PACKET_COVER, isRedPacketCoverWorkflow, redPacketCoverGenerationSize, coverReviewRules, coverCreativeText } = require('./wechat-red-packet-cover.cjs');
 const { coverProof, coverSources, sourceStepIds: coverSourceStepIds } = require('./red-packet-cover-delivery.cjs');
 const { assertArtifactRefinementTarget } = require('./artifact-refinement-target.cjs');
 const { isFinalManualReview } = require('./workflow-final-review.cjs');
@@ -71,6 +72,63 @@ function imageResizeAtReview(run) {
   const source = singleProducedPng(run, exporter, run.stepIndex);
   const previous = step.inputSource === 'previous' && step.referenceArtifactIds === undefined && latestBefore(run, run.stepIndex);
   if (source && previous?.artifacts?.some(file => file.id === source.id)) return { exportIndex, source };
+}
+
+async function prepareQualityRecovery(run, reviewAttemptId, reviewBinding, refinement, request, readArtifact) {
+  const reviewer = run.snapshot.steps[run.stepIndex];
+  const attempt = run.attempts.findLast(item => item.stepId === reviewer?.id);
+  const verdict = run.qualityReviews?.findLast(item => item.stepId === reviewer?.id);
+  if (run.mode !== 'live' || run.status !== 'waiting-review' || run.supersededByRunId || run.referenceIssue ||
+      !reviewer?.enabled || reviewer.role !== 'reviewer' || !reviewer.qualityGate ||
+      !['vision', 'text'].includes(reviewer.kind) || attempt?.status !== 'complete' ||
+      attempt.id !== reviewAttemptId) {
+    throw Error('当前质检记录已变化，请重新读取后操作。');
+  }
+  if (verdict?.attemptId !== reviewAttemptId || verdict.passed !== false) {
+    let malformed = false;
+    if (!refinement && verdict?.attemptId !== reviewAttemptId) {
+      try { reviewVerdict(attempt.summary); } catch { malformed = true; }
+    }
+    if (!malformed) throw Error('当前质检记录已变化，请重新读取后操作。');
+  }
+  // Each explicit recovery authorizes one check and, optionally, one edit.
+  // Keep the same reviewer and passing score, with no additional automatic repairs.
+  reviewer.qualityGate = { ...reviewer.qualityGate, maxRepairs: 0 };
+  if (reviewBinding) {
+    if (![reviewBinding.modelConfigId, reviewBinding.credentialId].every(id => typeof id === 'string' && id.trim() && id.length <= 160)) throw Error('请选择质检模型及对应账户。');
+    if (reviewer.modelConfigId !== reviewBinding.modelConfigId && reviewer.reasoningEffort !== undefined) {
+      const model = request.models.find(item => item.id === reviewBinding.modelConfigId);
+      reviewer.reasoningEffort = normalizeReasoningEffort(request.connections.find(item => item.id === model?.connectionId), model, reviewer.reasoningEffort);
+    }
+    reviewer.modelConfigId = reviewBinding.modelConfigId;
+    reviewer.credentialId = reviewBinding.credentialId;
+  }
+  const target = imageResizeAtReview(run);
+  if (!refinement) {
+    if (target) await readResizeSource(readArtifact, target.source.id, run.projectId, run.id);
+    else if (reviewer.kind === 'vision' && run.snapshot.outputKind === 'image' && reviewer.inputSource === 'previous' && reviewer.referenceArtifactIds === undefined) {
+      const images = latestBefore(run, run.stepIndex)?.artifacts?.filter(file => file.kind === 'image') || [];
+      if (!images.length) throw Error('当前质检没有可读取的样稿，请先恢复原项目文件。');
+      for (const file of images) {
+        const stored = await readArtifact(file.id);
+        if (stored.id !== file.id || stored.projectId !== run.projectId || stored.runId !== run.id || stored.kind !== 'image' || stored.trashedAt || stored.unavailable) throw Error('样稿来源已变化，请先恢复原项目文件。');
+      }
+    }
+    return;
+  }
+  if (!target || target.source.id !== refinement.sourceArtifactId) throw Error('精修样稿已变化，请重新选择当前图片。');
+  if (typeof refinement.instruction !== 'string' || !refinement.instruction.trim() || refinement.instruction.length > 10000 ||
+      ![refinement.modelConfigId, refinement.credentialId].every(id => typeof id === 'string' && id.trim() && id.length <= 160)) throw Error('请填写精修要求并选择模型与账户。');
+  if (run.snapshot.steps.length >= 40) throw Error('当前流程已达40步，请在图片工作台另存修订。');
+  await readResizeSource(readArtifact, target.source.id, run.projectId, run.id);
+  const exporter = run.snapshot.steps[target.exportIndex], sourceStep = latestBefore(run, run.stepIndex).stepId;
+  const edit = { id: randomUUID(), name: '按质检建议精修', role: 'producer', kind: 'image-editing', enabled: true,
+    inputSource: 'previous', imageSourceStepId: sourceStep, prompt: refinement.instruction.trim(),
+    modelConfigId: refinement.modelConfigId, credentialId: refinement.credentialId, count: 1, imageOutputFormat: 'png',
+    imageSize: run.snapshot.steps.find(step => step.id === sourceStep)?.imageSize || 'auto' };
+  if (exporter.contentSourceStepIds) exporter.contentSourceStepIds = [edit.id];
+  else exporter.contentSourceStepId = edit.id;
+  run.snapshot.steps.splice(run.stepIndex, 0, edit);
 }
 function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credentials, modelRuntime, artifactStore, fileSystem = fs, fxRates, readBeadDocument, readAnimationDocument, localAnimationStep, localAnimationStatus, recoverInterrupted = true, legacyBillingBindings = {}, assertProjectAdmission = async () => undefined, readReferenceText = extractReferenceText }) {
   const historyStore = createRunHistoryStore({ directory, fileSystem });
@@ -284,10 +342,15 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         try { if (previousAttempt) recovered = await modelRuntime.recoverReceipt({ requestId: previousAttempt.id, runId: run.id, projectId: run.projectId }); }
         catch (error) { update(record, { status: 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
         const attempt = recovered ? previousAttempt : { id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: '人工步骤', status: 'running', costCents: 0, costState: 'not-incurred', summary: '正在执行。', input: '', prompt: replaceVariables(step.prompt || '', run.variables).content, action: actionFor(step, run.retryStepOnly || run.repairContext?.stepId === step.id), artifacts: [], startedAt: now() };
+        const coverRun = isRedPacketCoverWorkflow(run.snapshot, run.projectId);
+        const coverReview = !recovered && coverRun && step.kind === 'vision';
+        if (coverReview) attempt.prompt = [coverCreativeText(attempt.prompt), coverReviewRules].filter(Boolean).join('\n\n');
         if (!recovered) run.attempts.push(attempt); else { attempt.recoveredFromReceiptAt = now(); attempt.recoveredError = attempt.error; attempt.status = 'running'; }
         update(record, { error: undefined }); await persist();
         try {
-          const context = await inputFor(record, step, run.stepIndex); if (!recovered) attempt.input = context.input;
+          const context = await inputFor(record, step, run.stepIndex);
+          if (coverReview) context.input = coverCreativeText(context.input);
+          if (!recovered) attempt.input = context.input;
           if (step.kind === 'manual-review') { attempt.status = 'waiting-review'; attempt.summary = '请检查上一步实际结果，确认后继续。'; update(record, { status: 'waiting-review' }); controllers.delete(id); await persist(); break; }
           if (step.kind === 'animation-compose') {
             if (typeof localAnimationStep !== 'function') throw Error('本地动画合成尚未接通，未调用模型。');
@@ -351,7 +414,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             const entry = recovered ? ledgerFor(record, attempt) : { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
             if (previousTask) { entry.queryOnly = true; entry.costState = 'not-incurred'; attempt.costState = 'not-incurred'; }
             if (!recovered) record.ledger.push(entry); mark(record); await persist();
-            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, imagePreset: run.snapshot.imagePreset, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { reasoningEffort: step.reasoningEffort, maxOutputTokens: step.maxOutputTokens || DEFAULT_STEP_OUTPUT_TOKENS, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, ...(engineeringReferenceId ? { engineeringReferenceId } : {}), onProgress: progress => {
+            const result = recovered || await modelRuntime.execute({ requestId: attempt.id, runId: run.id, projectId: run.projectId, connection, model, credentialId: step.credentialId, kind: step.kind, imagePreset: coverRun ? WECHAT_RED_PACKET_COVER : undefined, prompt: attempt.prompt, input: context.input, attachments: context.attachments, options: { reasoningEffort: step.reasoningEffort, maxOutputTokens: step.maxOutputTokens || DEFAULT_STEP_OUTPUT_TOKENS, size: step.imageSize || (step.kind === 'video-generation' ? '1280x720' : '1024x1024'), background: step.imageBackground || 'auto', outputFormat: step.imageOutputFormat, quality: step.imageQuality, complexity: step.imageComplexity, frameCount: step.imageFrameCount, frameDurationMs: step.imageFrameDurationMs, outputCompression: step.imageCompression, markupArtifactId: step.imageMarkupId, svgModel: step.imageSvgModel, svgReasoningEffort: step.imageSvgReasoningEffort, voice: step.voice || 'alloy', count: step.count || 1, existingTaskId: previousTask?.providerRequestId } }, { signal: controller.signal, ...(engineeringReferenceId ? { engineeringReferenceId } : {}), onProgress: progress => {
               if (attempt.status !== 'running') return;
               attempt.summary = progress.message || '模型正在处理。'; revision++; changedAt.set(run.id, revision);
               if (progress.providerRequestId && attempt.providerRequestId !== progress.providerRequestId) {
@@ -622,7 +685,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         return structuredClone(run);
       });
     },
-    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, imageExportSize, project, connections, models }) {
+    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, imageExportSize, project, connections, models, reviewAttemptId, reviewBinding, refinement }) {
       await ready;
       const target = records.get(id); if (!target) throw new Error('运行记录不存在。');
       return mutateProject(target.run.projectId, async () => {
@@ -663,7 +726,11 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
         if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
         if (project && project.workspaceId !== run.workspaceId) { nextRun.originWorkspaceId ||= run.workspaceId; nextRun.workspaceId = project.workspaceId; nextRun.snapshot.workspaceId = project.workspaceId; nextRequest.workflow = nextRun.snapshot; }
-        if (action === 'resume' && run.status === 'waiting-review') {
+        if (action === 'recheck-quality' || action === 'refine-quality') {
+          if (project?.workspaceId !== run.workspaceId || action === 'refine-quality' && !refinement ||
+              action === 'recheck-quality' && refinement) throw Error('请重新读取原项目与质检记录。');
+          await prepareQualityRecovery(nextRun, reviewAttemptId, reviewBinding, refinement, nextRequest, fileId => artifactStore.read(fileId));
+        } else if (action === 'resume' && run.status === 'waiting-review') {
           const attempt = nextRun.attempts.findLast(item => item.stepId === nextRun.snapshot.steps[nextRun.stepIndex]?.id && item.status === 'waiting-review');
           if (attempt) { attempt.status = 'complete'; attempt.summary = '人工检查已通过。'; }
           nextRun.stepIndex++;

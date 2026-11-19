@@ -8,7 +8,7 @@ import { HomePlanCard } from './HomePlanCard';
 import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 
 export function ChatPlanProduction({ props, turn, conversationId, planner }: { props: PageProps; turn: ChatTurn; conversationId: string; planner: NaturalBinding }) {
-  const session = useNaturalAutomationSession(props, { draftOptions: { keyPrefix: `xuzuo-chat-production-v1:${conversationId}:${turn.id}`, keepCreatedDraft: true, initialPlanner: planner, initialBindings: { text: planner } } });
+  const session = useNaturalAutomationSession(props, { draftOptions: { keyPrefix: `xuzuo-chat-production-v1:${conversationId}:${turn.id}`, keepCreatedDraft: true, initialPlanner: planner } });
   const execution = useChatPlanExecution(props, session);
   const direct = !!session.draft.chatExecution || !session.draft.ruleId && !session.draft.workflowSaved && !session.draft.workflowId;
   const [modelsOpen, setModelsOpen] = useRememberedBoolean(`workspace:${props.workspaceId}:chat-production-models`, false);
@@ -20,7 +20,7 @@ export function ChatPlanProduction({ props, turn, conversationId, planner }: { p
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (session.draft.plan || !turn.plan || session.store.issue) return;
-    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, imagePreset: turn.imagePreset, input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner, bindings: { text: planner } }); }
+    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, imagePreset: turn.imagePreset, input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner }); }
     catch (cause) { session.setError(cause instanceof Error ? cause.message : '方案草稿未保存，请重试。'); }
   }, [turn.id, session.draft.plan, session.store.issue]);
   useEffect(() => {

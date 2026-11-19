@@ -12,7 +12,7 @@ function fixture(kind: ProjectKind, changes: Partial<WorkflowRun> = {}) {
     attempts: [{ stepId: 'make', status: 'complete', artifacts: [file] }, { stepId: 'accept', status: 'waiting-review' }],
     ...changes,
   } as WorkflowRun;
-  const props = { workspaceId: 'workspace', projects: [{ id: 'project', workspaceId: 'workspace', name: '说明书' }], ledger: [], workflowRunner: { runs: [run], trashedArtifacts: [] } } as unknown as PageProps;
+  const props = { workspaceId: 'workspace', projects: [{ id: 'project', workspaceId: 'workspace', name: '说明书' }], ledger: [], configuration: { models: [], connections: [], credentials: [] }, workflowRunner: { runs: [run], trashedArtifacts: [] } } as unknown as PageProps;
   return { props, run };
 }
 
@@ -46,6 +46,7 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
     expect(html).toContain('质检未通过');
     expect(html).toContain('原稿未满足范围');
     expect(html).toContain('查看质检原因');
+    expect(html).toContain('按当前标准重新质检');
     expect(html).toContain('当前样稿');
     expect(html).not.toContain('检查并交付');
     expect(html).not.toContain('文稿已生成 · 尚未导出');
