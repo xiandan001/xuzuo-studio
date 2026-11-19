@@ -12,7 +12,7 @@ fs.writeFileSync(path.join(profile, '.xuzuo-validation-profile.json'), JSON.stri
 process.env.XUZUO_QA_PROFILE = profile;
 process.env.XUZUO_QA_USE_DIALOG_UI = '1';
 process.env.XUZUO_QA_VISIBLE = '1';
-const report = { passed: false, platform: process.platform, arch: process.arch, electron: process.versions.electron, checks: [], errors: [] };
+const report = { passed: false, commit: process.env.GITHUB_SHA || null, version: JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version, localDiagnostic: process.env.GITHUB_ACTIONS !== 'true', platform: process.platform, arch: process.arch, electron: process.versions.electron, checks: [], errors: [] };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, label) {
   const deadline = Date.now() + 20000;

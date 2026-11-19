@@ -14,7 +14,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'ut
 const release = path.resolve(root, manifest.build.directories.output);
 const bundle = path.resolve(process.argv[2] || path.join(release, process.arch === 'arm64' ? 'mac-arm64' : 'mac', manifest.build.productName + '.app'));
 const contents = path.join(bundle, 'Contents'), resources = path.join(contents, 'Resources');
-const report = { passed: false, platform: process.platform, arch: process.arch, bundle, sourceFiles: 0, runtimeFiles: 0 };
+const report = { passed: false, commit: process.env.GITHUB_SHA || null, version: manifest.version, localDiagnostic: process.env.GITHUB_ACTIONS !== 'true', platform: process.platform, arch: process.arch, bundle, sourceFiles: 0, runtimeFiles: 0 };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 try {
   assert(fs.lstatSync(bundle).isDirectory() && !fs.lstatSync(bundle).isSymbolicLink());

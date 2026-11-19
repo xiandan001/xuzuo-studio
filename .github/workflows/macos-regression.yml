@@ -2,7 +2,7 @@ name: macOS regression
 
 on:
   push:
-    branches: [develop-macos]
+    branches: [develop-macos, codex/studio-performance-ci]
   pull_request:
     branches: [main, develop-macos]
   workflow_dispatch:
@@ -20,7 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         # Both labels are native hosts: Python/PyInstaller is never cross-built.
-        os: [macos-15, macos-15-intel]
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -51,8 +55,10 @@ jobs:
           echo "ANIMATION_PYTHON=$PWD/work/animation-build-venv/bin/python" >> "$GITHUB_ENV"
       - name: Check backend dependencies
         run: node scripts/verify-runtime-dependencies.mjs
+      - name: Verify native runner and Python architecture
+        run: node scripts/verify-macos-runner.mjs ${{ matrix.arch }}
       - name: Run source regressions
-        run: npm test -- --config .github/vitest.config.mjs
+        run: npm test -- --config .github/vitest.config.mjs --reporter=default --reporter=json --outputFile=work/macos-source-results.json
       - name: Run Python regressions
         run: "$ANIMATION_PYTHON -B -m unittest discover -s tools/gif-factory/tests -v"
       - name: Package native macOS application
@@ -85,4 +91,7 @@ jobs:
             work/macos-desktop-*/*.png
             work/macos-package-launch-*/report.json
             work/macos-package-launch-*/*.png
+            work/macos-package-launch-*/launch.log
             work/animation-native-output/report.json
+            work/macos-runner-verification.json
+            work/macos-source-results.json

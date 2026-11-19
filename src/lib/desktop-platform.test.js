@@ -27,6 +27,8 @@ describe('macOS desktop integration', () => {
     expect(mainWindowPlatformOptions('win32')).toEqual({ frame: false });
     expect(mainWindowPlatformOptions('darwin').titleBarStyle).toBe('hidden');
     expect(animationToolOptions({ packaged: true, resourcesPath: '/App/Resources', platform: 'darwin' }).executablePath).toBe('/App/Resources/animation-tool/xuzuo-animation');
+    expect(animationToolOptions({ packaged: true, resourcesPath: '/App/Resources', platform: 'linux' }).executablePath).toBe('/App/Resources/animation-tool/xuzuo-animation');
+    expect(animationToolOptions({ packaged: true, resourcesPath: 'C:\\App\\Resources', platform: 'win32' }).executablePath).toBe('C:\\App\\Resources\\animation-tool\\xuzuo-animation.exe');
     expect(animationToolOptions({ packaged: false, platform: 'darwin', env: {} }).developmentPython).toBe('python3');
     expect(animationToolOptions({ packaged: false, platform: 'darwin', env: { XUZUO_ANIMATION_PYTHON: '/test/python' } }).developmentPython).toBe('/test/python');
   });

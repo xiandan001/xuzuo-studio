@@ -16,7 +16,14 @@ function sourceTests(directory) {
   }
 }
 sourceTests(path.join(root, 'src'));
+const nonWindowsFilesystemTests = [
+  "macos-runtime.test.js:uses the real /var and /tmp aliases for workspace persistence, reconnect and file dialogs",
+  "macos-runtime.test.js:round-trips a mixed /var workspace and canonical project, then imports its Windows-shaped backup on macOS",
+  "default-project-creation.test.js:macOS原目录移走后保留历史名称，且拒绝与待清理目录等价的新建位置",
+  "macos-runtime.test.js:enforces native POSIX execute permissions for a selected macOS LibreOffice application"
+];
 const allowedSkips = new Set([
+  ...(process.platform === 'win32' ? nonWindowsFilesystemTests : []),
   'artifact-trash.test.ts:产物可恢复回收 不跟随单文件符号链接，外部目标和保留副本均不变',
   'artifact-trash.test.ts:产物可恢复回收 不跟随trash目录junction，正常产物保持原位置',
 ]);

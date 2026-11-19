@@ -36,8 +36,9 @@ function applicationMenu({ app, getWindow, getFocusedWebContents = () => getWind
 }
 
 function animationToolOptions({ packaged, resourcesPath, platform = process.platform, env = process.env }) {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   return packaged
-    ? { executablePath: path.join(resourcesPath, 'animation-tool', platform === 'win32' ? 'xuzuo-animation.exe' : 'xuzuo-animation') }
+    ? { executablePath: paths.join(resourcesPath, 'animation-tool', platform === 'win32' ? 'xuzuo-animation.exe' : 'xuzuo-animation') }
     : { developmentPython: env.XUZUO_ANIMATION_PYTHON || (platform === 'win32' ? 'python' : 'python3') };
 }
 

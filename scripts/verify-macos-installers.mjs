@@ -13,14 +13,20 @@ const basename = `Xuzuo-Studio-${manifest.version}-mac-${process.arch}`;
 const reference = path.join(release, process.arch === 'arm64' ? 'mac-arm64' : 'mac', manifest.build.productName + '.app');
 const temporary = fs.mkdtempSync(path.join(root, 'work/macos-installer-verification-'));
 const mountpoint = path.join(temporary, 'mounted'); fs.mkdirSync(mountpoint);
-const report = { passed: false, platform: process.platform, arch: process.arch, checks: [], files: [] };
+const report = { passed: false, commit: process.env.GITHUB_SHA || null, version: manifest.version, localDiagnostic: process.env.GITHUB_ACTIONS !== 'true', platform: process.platform, arch: process.arch, checks: [], files: [] };
 const sha = filename => createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 const referenceAsar = sha(path.join(reference, 'Contents/Resources/app.asar'));
 let mounted = false;
 function verifyBundle(bundle) {
   execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], { stdio: 'pipe' });
+  const info = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist')], { encoding: 'utf8' }));
+  assert.equal(info.CFBundleIdentifier, manifest.build.appId);
+  assert.equal(info.CFBundleShortVersionString, manifest.version);
   assert.equal(sha(path.join(bundle, 'Contents/Resources/app.asar')), referenceAsar, 'Installer application differs from verified build');
-  assert(fs.statSync(path.join(bundle, 'Contents/MacOS', manifest.build.productName)).mode & 0o111);
+  const executable = path.join(bundle, 'Contents/MacOS', manifest.build.productName);
+  assert(fs.statSync(executable).mode & 0o111);
+  const architectures = execFileSync('/usr/bin/lipo', ['-archs', executable], { encoding: 'utf8' }).trim().split(/\s+/);
+  assert(architectures.includes(process.arch === 'x64' ? 'x86_64' : 'arm64'));
 }
 try {
   const dmg = path.join(release, basename + '.dmg'), zip = path.join(release, basename + '.zip');

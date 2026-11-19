@@ -16,8 +16,10 @@ fs.writeFileSync(path.join(profile, '.xuzuo-validation-profile.json'), JSON.stri
 const reservation = net.createServer(); await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
 const port = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
 const child = spawn(executable, ['--isolated-validation', `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1'], { env: { ...process.env, XUZUO_QA_PROFILE: profile, XUZUO_QA_VISIBLE: '1', XUZUO_QA_USE_DIALOG_UI: '1' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-let logs = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { logs += bytes.toString(); });
-child.on('error', error => { logs += String(error); });
+let logs = '';
+const appendLog = value => { logs = (logs + String(value)).slice(-65536); };
+for (const stream of [child.stdout, child.stderr]) stream.on('data', appendLog);
+child.on('error', appendLog);
 let childResult;
 child.once('exit', (code, signal) => { childResult = { code, signal }; });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -38,7 +40,8 @@ async function connect(target) {
   return { call, async evaluate(expression) { const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text); return result.result.value; } };
 }
 const targets = () => fetch(`http://127.0.0.1:${port}/json/list`).then(response => response.json()).catch(() => []);
-const report = { passed: false, bundle, platform: process.platform, arch: process.arch, checks: [], errors: [] };
+const report = { passed: false, commit: process.env.GITHUB_SHA || null, version: manifest.version, localDiagnostic: process.env.GITHUB_ACTIONS !== 'true', bundle, platform: process.platform, arch: process.arch, checks: [], errors: [] };
+const lazyPages = [["项目", "projects"], ["资源库", "assets"], ["自动化", "automation"]];
 try {
   const target = await until(async () => (await targets()).find(item => item.type === 'page' && item.url.endsWith('/index.html')), 'packaged renderer');
   assert(target.url.includes('/app.asar/'), 'Use the actual packaged application');
@@ -50,7 +53,7 @@ try {
   assert.equal(status[0].available, true); assert.equal(status[1].length, 0); assert.equal(status[3].enabled, false);
   report.checks.push('Packaged runtime, workspace, credentials and macOS update IPC respond');
   // Navigate lazy loaded pages in the actual release bundle.
-  for (const [label, content] of [['项目', 'projects'], ['资源库', 'assets'], ['自动化', 'workflows']]) {
+  for (const [label, content] of lazyPages) {
     await main.evaluate(`Array.from(document.querySelectorAll('.sidebar nav button,.sidebar button')).find(button=>button.textContent.trim()===${JSON.stringify(label)}).click()`);
     await until(() => main.evaluate(`Boolean(document.querySelector('.content-${content}') && document.querySelector('.content-${content}').innerText.trim().length>10)`), label + ' page');
     report.checks.push('Packaged lazy page: ' + label);

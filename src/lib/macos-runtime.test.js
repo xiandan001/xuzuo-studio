@@ -73,14 +73,22 @@ it('accepts an executable LibreOffice.app and persists its actual renderer, whil
   const directory = await fixture(), app = path.join(directory, 'LibreOffice.app'), executable = path.join(app, 'Contents/MacOS/soffice');
   await fs.mkdir(path.dirname(executable), { recursive: true }); await fs.writeFile(executable, 'renderer fixture', { mode: 0o755 });
   const probeRenderer = vi.fn(async () => ({ stdout: 'LibreOffice 25.8.0.1' }));
-  const options = { directory: path.join(directory, 'preview'), artifactStore: {}, platform: 'darwin', probeRenderer, rendererCandidates: [executable] };
+  // Windows cannot express POSIX execute bits; retain real files/hash/config and supply only the mode metadata seam.
+  const fileSystem = process.platform === 'win32' ? { ...fs, async lstat(filename) { const stat = await fs.lstat(filename); if (filename === executable) stat.mode |= 0o111; return stat; } } : fs;
+  const options = { directory: path.join(directory, 'preview'), artifactStore: {}, platform: 'darwin', fileSystem, probeRenderer, rendererCandidates: [executable] };
   const preview = createOfficePreview(options);
   expect((await preview.status()).available).toBe(true);
   expect((await preview.configure(app)).renderer.path).toBe(executable);
   expect(JSON.parse(await fs.readFile(path.join(options.directory, 'renderer-v1.json'), 'utf8')).path).toBe(executable);
   expect((await createOfficePreview(options).status()).available).toBe(true);
   await expect(preview.configure(path.join(directory, 'soffice.exe'))).rejects.toThrow('LibreOffice.app');
-  await fs.chmod(executable, 0o644); await expect(preview.configure(app)).rejects.toThrow('执行权限');
+});
+it.skipIf(process.platform === 'win32')('enforces native POSIX execute permissions for a selected macOS LibreOffice application', async () => {
+  const directory = await fixture(), app = path.join(directory, 'LibreOffice.app'), executable = path.join(app, 'Contents/MacOS/soffice');
+  await fs.mkdir(path.dirname(executable), { recursive: true }); await fs.writeFile(executable, 'renderer fixture', { mode: 0o755 });
+  const probeRenderer = vi.fn(async () => ({ stdout: 'LibreOffice 25.8.0.1' })), preview = createOfficePreview({ directory: path.join(directory, 'preview'), artifactStore: {}, platform: 'darwin', probeRenderer });
+  expect((await preview.configure(app)).available).toBe(true); await fs.chmod(executable, 0o644);
+  await expect(preview.configure(app)).rejects.toThrow('执行权限'); expect(probeRenderer).toHaveBeenCalledOnce();
 });
 it('selects a LibreOffice application bundle in the macOS file dialog', async () => {
   const directory = await fixture(), handlers = new Map(), showOpenDialog = vi.fn(async () => ({ canceled: true, filePaths: [] }));

@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { APP_NAVIGATION, PRIMARY_NAVIGATION, TOOL_GROUPS, navigationTaskSummary, primaryNavigationView } from './navigation-catalog';
 import type { WorkflowRun } from '../configuration-types';
 import type { ViewId } from '../types';
 
 describe('聚焦主导航与高级路由目录', () => {
+  it('macOS 真实打包验收点击主导航后等待其实际页面路由', () => {
+    const source = readFileSync(new URL('../../scripts/verify-macos-launch.mjs', import.meta.url), 'utf8');
+    const literal = source.match(/^const lazyPages = (\[[^\n]+\]);$/m)?.[1];
+    expect(literal).toBeDefined();
+    const pages = JSON.parse(literal!);
+    expect(pages).toEqual(PRIMARY_NAVIGATION.filter(item => item.id !== 'overview').map(item => [item.label, item.id]));
+    expect(source).toContain('for (const [label, content] of lazyPages)');
+  });
   it('只有四个主入口，保留全部旧路由和工作台搜索入口', () => {
     expect(PRIMARY_NAVIGATION.map(item => item.label)).toEqual(['创作', '项目', '资源库', '自动化']);
     const routes: ViewId[] = ['overview', 'project', 'documents', 'images', 'projects', 'assets', 'prompts', 'categories', 'workflows', 'automation', 'models', 'activity', 'finance', 'settings', 'tools', 'business'];

@@ -248,7 +248,6 @@ sourceNames.push('src/components/ChatAttachments.tsx', 'src/components/chat-atta
     "src/hooks/useDocumentSelectionHistory.tsx",
     "src/hooks/useEditHistory.ts",
     "src/hooks/useEditorShortcuts.ts",
-    "src/hooks/useHomeAutomationChat.ts",
     "src/hooks/useNaturalAutomationCreation.ts",
     "src/hooks/useNaturalAutomationDraft.ts",
     "src/hooks/useNaturalAutomationPlanning.ts",
