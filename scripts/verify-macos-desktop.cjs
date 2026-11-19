@@ -1,5 +1,5 @@
 // Real Electron application smoke test. Uses a new isolated profile, never a real API key.
-const { app, BrowserWindow, Menu, session } = require('electron');
+const { app, BrowserWindow, Menu, session, webContents } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
@@ -43,6 +43,13 @@ async function respondToClosingDialog(popup, expression) {
   }
   await until(() => popup.isDestroyed(), 'responded popup closes');
 }
+async function editFocusSnapshot(window, phase) {
+  const contents = window.webContents, focusedWindow = BrowserWindow.getFocusedWindow(), focusedContents = webContents.getFocusedWebContents();
+  let renderer;
+  try { renderer = await contents.executeJavaScript('({hasFocus:document.hasFocus(),activeId:document.activeElement?.id,activeTag:document.activeElement?.tagName,commands:window.qaEdits,events:window.qaEditEvents,value:document.getElementById("qa-edit-target")?.textContent})'); }
+  catch (error) { renderer = { error: String(error) }; }
+  return { phase, windowId: window.id, visible: window.isVisible(), windowFocused: window.isFocused(), contentsId: contents.id, contentsFocused: contents.isFocused(), focusedWindowId: focusedWindow?.id || null, focusedContentsId: focusedContents?.id || null, renderer };
+}
 async function run() {
   await app.whenReady();
   const window = await until(() => BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/index.html')), 'main window');
@@ -70,12 +77,25 @@ async function run() {
   assert.equal(state[2].enabled, false);
   assert.equal(state[3].available, false);
   report.checks.push('Runtime, workspaces, updates, maintenance, Office and empty credentials respond through IPC');
-  await contents.executeJavaScript(`document.body.insertAdjacentHTML('beforeend','<button id="qa-edit-target">编辑验收</button>'); document.getElementById('qa-edit-target').focus(); window.qaEdits=[]; document.getElementById('qa-edit-target').addEventListener('keydown', event => { if(event.metaKey && event.key==='z') { event.preventDefault(); window.qaEdits.push(event.shiftKey?'redo':'undo'); } });`);
   const edit = menu.items.find(item => item.label === '编辑').submenu;
-  window.focus(); contents.focus();
-  edit.items[0].click(); edit.items[1].click();
-  await until(async () => (await contents.executeJavaScript('window.qaEdits.length')) === 2, 'native menu editor commands');
-  assert.deepEqual(await contents.executeJavaScript('window.qaEdits'), ['undo', 'redo']);
+  report.phase = 'native-menu-activation'; report.menuFocus = [];
+  app.focus({ steal: true }); window.show(); window.focus(); contents.focus();
+  await contents.executeJavaScript(`document.body.insertAdjacentHTML('beforeend','<button id="qa-edit-target">修改后</button>'); window.qaEdits=[]; window.qaEditEvents=[]; document.getElementById('qa-edit-target').addEventListener('keydown', event => { window.qaEditEvents.push({key:event.key,meta:event.metaKey,shift:event.shiftKey,targetId:event.target.id}); if(event.metaKey && event.key==='z') { event.preventDefault(); const command=event.shiftKey?'redo':'undo'; window.qaEdits.push(command); event.currentTarget.textContent=command==='undo'?'原始文字':'修改后'; } });`);
+  try {
+    for (const [index, command, value] of [[0, 'undo', '原始文字'], [1, 'redo', '修改后']]) {
+      report.phase = 'native-menu-' + command;
+      await contents.executeJavaScript('document.getElementById("qa-edit-target").focus(); void 0');
+      await until(() => contents.executeJavaScript('document.activeElement?.id === "qa-edit-target"'), 'actual DOM editor focus');
+      report.menuFocus.push(await editFocusSnapshot(window, 'before-' + command));
+      // The locked native MenuItem API takes (event, BrowserWindow, WebContents).
+      // Explicit context exercises the production route without inventing OS focus.
+      edit.items[index].click({}, window, contents);
+      await until(() => contents.executeJavaScript(`window.qaEdits.length === ${index + 1} && document.getElementById("qa-edit-target").textContent === ${JSON.stringify(value)}`), 'native menu ' + command + ' UI result');
+      assert.deepEqual(await contents.executeJavaScript('window.qaEdits'), index ? ['undo', 'redo'] : ['undo']);
+      report.menuFocus.push(await editFocusSnapshot(window, 'after-' + command));
+    }
+  } catch (error) { report.menuFocus.push(await editFocusSnapshot(window, 'failure')); throw error; }
+  report.nativeMenuEditing = { invocation: 'Electron MenuItem.click with actual window and contents', undoObserved: true, redoObserved: true, uiResultsVerified: true, osWindowFocused: window.isFocused(), rendererKeys: await contents.executeJavaScript('window.qaEditEvents') };
   await contents.executeJavaScript('document.getElementById("qa-edit-target").remove()');
   report.checks.push('Native Undo and Redo dispatch cancelable Command shortcuts to editors');
   // Open the production custom save window and accept through its sandboxed renderer bridge.

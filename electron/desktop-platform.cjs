@@ -6,12 +6,17 @@ function mainWindowPlatformOptions(platform = process.platform) {
     : { frame: false };
 }
 
-function applicationMenu({ app, getWindow, getFocusedWebContents = () => getWindow()?.webContents, getMainWebContents = () => getWindow()?.webContents, requestExit, platform = process.platform }) {
+function applicationMenu({ app, getWindow, getFocusedWebContents = () => getWindow()?.webContents, getMainWebContents = () => getWindow()?.webContents, getWindowForWebContents = () => undefined, requestExit, platform = process.platform }) {
   if (platform !== 'darwin') return null;
-  const edit = command => {
-    const window = getWindow();
-    const contents = getFocusedWebContents();
-    if (!contents) return;
+  const edit = (command, menuWindow) => {
+    const candidate = getFocusedWebContents();
+    const focused = candidate && !candidate.isDestroyed?.() ? candidate : undefined;
+    const focusedWindow = focused && getWindowForWebContents(focused);
+    const window = menuWindow || focusedWindow || getWindow();
+    if (window?.isDestroyed?.()) return;
+    const contents = focused && (!menuWindow || !focusedWindow || focusedWindow === menuWindow)
+      ? focused : window?.webContents || (!window ? getMainWebContents() : undefined);
+    if (!contents || contents.isDestroyed?.()) return;
     if (contents !== getMainWebContents() || window?.getParentWindow?.()) contents[command]();
     else contents.send('window:edit-command', command);
   };
@@ -22,8 +27,8 @@ function applicationMenu({ app, getWindow, getFocusedWebContents = () => getWind
       { label: '退出序作工作台', accelerator: 'Command+Q', click: () => requestExit() },
     ] },
     { label: '编辑', submenu: [
-      { label: '撤销', accelerator: 'Command+Z', click: () => edit('undo') },
-      { label: '重做', accelerator: 'Command+Shift+Z', click: () => edit('redo') },
+      { label: '撤销', accelerator: 'Command+Z', click: (_item, window) => edit('undo', window) },
+      { label: '重做', accelerator: 'Command+Shift+Z', click: (_item, window) => edit('redo', window) },
       { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'pasteAndMatchStyle' }, { role: 'selectAll' },
     ] },
     { label: '显示', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },

@@ -616,7 +616,7 @@ function createWindow() {
   studioDialogs.installOwner(mainWindow);
   mainWindow.on('focus', () => { void automaticBilling?.trigger(); });
   mainWindow.on('restore', () => { void automaticBilling?.trigger(); });
-  const menu = applicationMenu({ app, getWindow: () => BrowserWindow.getFocusedWindow() || mainWindow, getMainWebContents: () => mainWindow?.webContents, getFocusedWebContents: () => webContents.getFocusedWebContents(), requestExit: () => applicationExit.request() });
+  const menu = applicationMenu({ app, getWindow: () => BrowserWindow.getFocusedWindow() || mainWindow, getMainWebContents: () => mainWindow?.webContents, getFocusedWebContents: () => webContents.getFocusedWebContents(), getWindowForWebContents: contents => BrowserWindow.fromWebContents(contents), requestExit: () => applicationExit.request() });
   Menu.setApplicationMenu(menu ? Menu.buildFromTemplate(menu) : null);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, url) => {

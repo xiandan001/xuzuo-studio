@@ -22,6 +22,38 @@ describe('macOS desktop integration', () => {
     const menu = applicationMenu({ app: {}, platform: 'darwin', getWindow: () => ({ webContents: { undo: parentUndo } }), getMainWebContents: () => main, getFocusedWebContents: () => ({ undo }) });
     menu[1].submenu[0].click(); expect(undo).toHaveBeenCalledOnce(); expect(parentUndo).not.toHaveBeenCalled(); expect(main.send).not.toHaveBeenCalled();
   });
+  it('uses the native menu window when global focused contents is temporarily absent', () => {
+    const main = { send: vi.fn() }, other = { webContents: { undo: vi.fn(), send: vi.fn() } }, window = { webContents: main };
+    const menu = applicationMenu({ app: {}, platform: 'darwin', getWindow: () => other, getMainWebContents: () => main, getFocusedWebContents: () => null });
+    menu[1].submenu[0].click(undefined, window); menu[1].submenu[1].click(undefined, window);
+    expect(main.send.mock.calls).toEqual([['window:edit-command', 'undo'], ['window:edit-command', 'redo']]);
+    expect(other.webContents.undo).not.toHaveBeenCalled(); expect(other.webContents.send).not.toHaveBeenCalled();
+  });
+  it('preserves an embedded focused contents owned by the actual menu window', () => {
+    const main = { send: vi.fn() }, embedded = { undo: vi.fn() }, window = { webContents: main };
+    const menu = applicationMenu({ app: {}, platform: 'darwin', getWindow: () => window, getMainWebContents: () => main, getFocusedWebContents: () => embedded, getWindowForWebContents: () => window });
+    menu[1].submenu[0].click(undefined, window);
+    expect(embedded.undo).toHaveBeenCalledOnce(); expect(main.send).not.toHaveBeenCalled();
+  });
+  it('does not edit a different focused window when the native menu belongs to a dialog', () => {
+    const main = { send: vi.fn(), undo: vi.fn() }, mainWindow = { webContents: main }, undo = vi.fn(), popup = { getParentWindow: () => mainWindow, webContents: { undo, send: vi.fn() } };
+    const menu = applicationMenu({ app: {}, platform: 'darwin', getWindow: () => mainWindow, getMainWebContents: () => main, getFocusedWebContents: () => main, getWindowForWebContents: () => mainWindow });
+    menu[1].submenu[0].click(undefined, popup);
+    expect(undo).toHaveBeenCalledOnce(); expect(main.send).not.toHaveBeenCalled(); expect(main.undo).not.toHaveBeenCalled(); expect(popup.webContents.send).not.toHaveBeenCalled();
+  });
+  it('falls back through a live focused window and then the validated main contents', () => {
+    const main = { send: vi.fn() }, window = { webContents: main };
+    const options = { app: {}, platform: 'darwin', getMainWebContents: () => main, getFocusedWebContents: () => null };
+    applicationMenu({ ...options, getWindow: () => window })[1].submenu[0].click();
+    applicationMenu({ ...options, getWindow: () => null })[1].submenu[1].click();
+    expect(main.send.mock.calls).toEqual([['window:edit-command', 'undo'], ['window:edit-command', 'redo']]);
+  });
+  it('never falls back from a destroyed menu window or targets destroyed contents', () => {
+    const main = { send: vi.fn() }, window = { webContents: main }, options = { app: {}, platform: 'darwin', getWindow: () => window, getMainWebContents: () => main, getFocusedWebContents: () => null };
+    applicationMenu(options)[1].submenu[0].click(undefined, { isDestroyed: () => true });
+    applicationMenu({ ...options, getWindow: () => null, getMainWebContents: () => ({ ...main, isDestroyed: () => true }) })[1].submenu[0].click();
+    expect(main.send).not.toHaveBeenCalled();
+  });
   it('retains Windows frameless controls and chooses platform animation binaries', () => {
     expect(applicationMenu({ platform: 'win32' })).toBeNull();
     expect(mainWindowPlatformOptions('win32')).toEqual({ frame: false });
