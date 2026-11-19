@@ -8,6 +8,8 @@ import type { AutomationActionResult } from '../lib/automation-dispatch';
 import { naturalKindLabel, naturalPreparationMissing, naturalQuestionAnswer } from '../lib/natural-automation-composer-state';
 import { AutomationProjectField } from './AutomationProjectField';
 import { naturalModelSelection } from './NaturalAutomationModels';
+import { repairAfterReviewEnabled } from '../lib/natural-automation-plan';
+import { PlanQualityRepairOption } from './PlanQualityRepairOption';
 import { NaturalAutomationPlanCard } from './NaturalAutomationPlanCard';
 import { RememberedDetails } from './RememberedDetails';
 import { homeCreationArtifacts, homeCreationDocumentSource, homeCreationRun } from '../lib/home-creation';
@@ -105,6 +107,7 @@ export function HomePlanCard({ props, session, onOpenModels, continuation, defer
     {jobError && <p className="home-plan-error" role="alert">{jobError}</p>}
     {stage && <p className="home-plan-stage" role="status">{stage}</p>}
     {unknown && !planError && <p className="home-plan-error" role="alert">{(!execution && readiness.errors.join('\n')) || '上次提交结果尚未确认，读取状态不会重发任务。'}</p>}
+    {!run && !unknown && <PlanQualityRepairOption session={session} disabled={blocked || session.frozen} savedWorkflow={session.savedWorkflow} />}
     {(!run || unknown) && <div className="home-plan-primary">
       <button type="button" className="btn btn-primary" disabled={blocked || !execution && unknown && readiness.dispatchLoading} onClick={() => { void primary(); }}>{blocked ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}{primaryLabel}</button>
       {!submitted && !unknown && <button type="button" className="text-button" disabled={blocked} onClick={() => { void (created ? readiness.perform('save') : session.save()).then(() => { if (mounted.current && missingCount) setPreparing(true); }); }}><Save size={14} />{deferProject ? created ? '保存流程设置' : '仅保存为自动化' : '以后再做 · 仅保存流程'}</button>}
@@ -120,6 +123,6 @@ export function HomePlanCard({ props, session, onOpenModels, continuation, defer
       {!!readiness.errors.length && <ul className="home-plan-error">{readiness.errors.map((error, index) => <li key={index}>{error}</li>)}</ul>}
       <small>填好后，再点击上方“{primaryLabel}”。不会因填写资料或选择模型自动开始。</small>
     </div>}
-    <RememberedDetails className="home-plan-details" rememberKey={`workspace:${props.workspaceId}:home-plan-details`}><summary>步骤与高级设置<ChevronDown size={14} /></summary><NaturalAutomationPlanCard hideModels imagePreset={draft.imagePreset} props={props} plan={plan} onChange={plan => session.setDraft(value => ({ ...value, plan }))} bindings={session.bindings} onBinding={session.setProductionBinding} compiled={result.compiled} error={result.error} disabled={editingBlocked || session.frozen} calendarResolved={draft.calendarResolved} onResolveCalendar={() => session.setDraft(value => ({ ...value, calendarResolved: true, plan: value.plan && { ...value.plan, trigger: { type: 'manual' } } }))} />{created && !execution && !session.savedRule?.enabled && <button type="button" className="btn btn-secondary" disabled={blocked || unknown} onClick={() => { void session.createAndRun({ repeat: true }); }}>明确再运行一次</button>}</RememberedDetails>
+    <RememberedDetails className="home-plan-details" rememberKey={`workspace:${props.workspaceId}:home-plan-details`}><summary>步骤与高级设置<ChevronDown size={14} /></summary><NaturalAutomationPlanCard hideModels imagePreset={draft.imagePreset} props={props} plan={plan} reviewEnabled={repairAfterReviewEnabled(draft.acceptedInput || draft.input, draft.repairAfterFailedReview)} onDocumentRepairsChange={rounds => session.setDraft(value => ({ ...value, plan: value.plan && { ...value.plan, maxRepairs: rounds }, repairAfterFailedReview: rounds > 0 }))} onChange={plan => session.setDraft(value => ({ ...value, plan }))} bindings={session.bindings} onBinding={session.setProductionBinding} compiled={result.compiled} error={result.error} disabled={editingBlocked || session.frozen} calendarResolved={draft.calendarResolved} onResolveCalendar={() => session.setDraft(value => ({ ...value, calendarResolved: true, plan: value.plan && { ...value.plan, trigger: { type: 'manual' } } }))} />{created && !execution && !session.savedRule?.enabled && <button type="button" className="btn btn-secondary" disabled={blocked || unknown} onClick={() => { void session.createAndRun({ repeat: true }); }}>明确再运行一次</button>}</RememberedDetails>
   </section>{run && !unknown && <HomeProductionResult key={run.id} props={props} run={run} kind={plan.outputKind} />}</>;
 }

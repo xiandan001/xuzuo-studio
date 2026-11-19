@@ -28,6 +28,10 @@ it('红包旧质检给出当前标准和可编辑补救动作，展开和编辑�
   try {
     await act(async () => root.render(<HomeQualityRecovery props={props} run={run} project={project} onRead={vi.fn()} />));
     expect(host.textContent).toContain('957 × 1278');
+    expect(ctl).not.toHaveBeenCalled(); expect(host.textContent).toContain('最多另做 1 次纠正复检');
+    await act(async () => action('自动处理并继续').click());
+    expect(ctl).toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-quality', reviewAttemptId: 'failed-check' }));
+    ctl.mockClear();
     await act(async () => action('按建议精修').click());
     const textarea = host.querySelector('textarea')!;
     expect(textarea.value).toContain('小熊双爪递红包'); expect(textarea.value).toContain('移除画面中绘入的金色'); expect(textarea.value).not.toContain('9:16');

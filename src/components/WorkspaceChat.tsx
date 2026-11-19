@@ -1,5 +1,5 @@
 import { useAutoSizeTextarea } from '../hooks/useAutoSizeTextarea';
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, Check, Copy, FileDown, History, LoaderCircle, MessageCircle, Paperclip, Plus, RotateCcw, Sparkles, Square, UserRound, WandSparkles } from 'lucide-react';
 import type { PageProps, Project, ProjectKind } from '../types';
 import type { ChatAttachment, ChatQueueEntry, ChatTarget, ChatTargetInspection, ChatTurn, ChatStartRequest } from '../chat-types';
@@ -147,14 +147,13 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy, child
   const followTail = useCallback(() => {
     const element = thread.current;
     if (!element || !pinned.current) return;
-    element.scrollTop = element.scrollHeight;
+    const maximum = element.scrollHeight - element.clientHeight;
+    if (maximum - element.scrollTop > 1) element.scrollTop = maximum;
     lastScrollTop.current = element.scrollTop;
   }, []);
-  useEffect(() => {
-    if (!hasConversation || !pinned.current) return;
-    const frame = requestAnimationFrame(followTail);
-    return () => cancelAnimationFrame(frame);
-  }, [followTail, hasConversation, latest?.updatedAt, latest?.text, turns.length]);
+  useLayoutEffect(() => {
+    if (hasConversation) followTail();
+  }, [followTail, hasConversation, latest?.text, latest?.status, turns.length]);
   useEffect(() => {
     const element = thread.current;
     if (!hasConversation || !element || typeof ResizeObserver === 'undefined') return;
@@ -259,7 +258,7 @@ function WorkspaceChatSession({ props, conversationId, onSelect, onLegacy, child
     try { requestText = retry ? (retry.requestText || retry.userText) : planReference.requestText(preparedDiscussion ? `附件为选定成品的静态PNG参考，仅评价画面；不能据此检查动画时序，也不能声称检查了SVG矢量结构。\n${text}` : targetData ? selectedFiles.length ? text : `本轮只讨论成品的修改要求，未提供可读取的原图或正文，不能声称看过文件内容。\n${text}` : chatScenarioInput(scenario, text)); } catch (cause) { chat.setError(cause instanceof Error ? cause.message : '引用暂未准备，请检查原回复后再发送。'); return; }
     const referenceVersion = planReference.revision.current;
     const submittedVersion = input.revision.current, attachmentVersion = attachments.revision.current;
-    sending.current = true; pinned.current = true; windowScroll.current = 'end'; setWindowStart(undefined); setSearchMatch('');
+    sending.current = true; pinned.current = true; lastScrollTop.current = thread.current?.scrollTop || 0; windowScroll.current = 'end'; setWindowStart(undefined); setSearchMatch('');
     try {
       const imagePreset = retry ? retry.imagePreset : !targetData && mode === 'plan' && scenario.imagePreset === WECHAT_RED_PACKET_COVER ? WECHAT_RED_PACKET_COVER : undefined;
       const planFromTurnId = retry ? retry.planFromTurnId : !targetData && mode === 'plan' ? planReference.reference?.turnId : undefined;

@@ -10,6 +10,10 @@ exports.naturalAutomationRequestIssues = naturalAutomationRequestIssues;
 exports.naturalAutomationPreparationNotes = naturalAutomationPreparationNotes;
 exports.appendNaturalPreparationNotes = appendNaturalPreparationNotes;
 exports.adjustNaturalImageRefinements = adjustNaturalImageRefinements;
+exports.repairAfterReviewEnabled = repairAfterReviewEnabled;
+exports.separateConditionalImageRepairs = separateConditionalImageRepairs;
+exports.imageReviewEditBinding = imageReviewEditBinding;
+exports.imagePlanHasQualityGate = imagePlanHasQualityGate;
 exports.compileNaturalAutomationPlan = compileNaturalAutomationPlan;
 const automation_recipes_1 = require("./automation-recipes");
 const creation_quality_1 = require("./creation-quality");
@@ -326,6 +330,35 @@ function bindingResolver(configuration, bindings, missing) {
         return result;
     };
 }
+function repairAfterReviewEnabled(userInput, choice) {
+    if (choice !== undefined)
+        return choice;
+    return !/(?:不要|禁止|无需|关闭|不允许|不用|不进行|不做|不)\s*(?:质检失败[后时]?\s*)?自动(?:处理|修改|改图|精修|修复|修订|重试)|(?:质检|检查|验收)(?:不通过|失败|未通过)(?:时|后)?[，,\s]*(?:请|就|直接)?(?:停止|暂停|交给我|先问我|等我确认)|(?:质检|检查|验收)(?:失败|不通过|未通过)(?:后|时)?(?:自动(?:处理|修复|精修|修订))?\s*(?:0|零)\s*(?:次|轮)/i.test(userInput);
+}
+// At model acceptance only. Later edits to the user's planned rounds must win.
+function separateConditionalImageRepairs(plan, brief) {
+    if (plan.outputKind !== 'image' || !plan.maxRepairs && !plan.steps.some(step => step.kind === 'image-editing'))
+        return plan;
+    const failureClause = /(?:仅(?:仅)?在|只在|如果?|若|当)?(?:最终)?(?:质检|验收|检查)?\s*(?:未通过|没通过|不通过|失败|未达标|不达标|不合格|有问题)(?:时|后)?[，,\s]*(?:(?:才|再|就|自动|按(?:照)?建议|帮我|进行|尝试)\s*)*(?:精修|修复|修订|修改|修)(?:原图)?(?:[一二三123]轮|一次)?/g;
+    const unconditional = brief.replace(failureClause, '');
+    if (unconditional === brief || /(?:精修|修复|修订)/.test(unconditional))
+        return plan;
+    const firstSource = plan.steps.find(step => step.kind === 'image-generation' || step.kind === 'image-editing');
+    const plannedRounds = firstSource?.kind === 'image-editing' ? 1 : 0;
+    if (!firstSource || (plan.maxRepairs === plannedRounds && plan.steps.filter(step => step.kind === 'image-editing').length === plannedRounds))
+        return plan;
+    return adjustNaturalImageRefinements(plan, plannedRounds);
+}
+function imageReviewEditBinding(configuration, bindings, source) {
+    const selected = bindings['image-editing'] || source || bindingResolver(configuration, bindings, new Set())('image-generation');
+    if (!selected.modelConfigId)
+        return undefined;
+    const edit = bindingResolver(configuration, { 'image-editing': { modelConfigId: selected.modelConfigId, credentialId: selected.credentialId } }, new Set())('image-editing');
+    return edit.modelConfigId && edit.credentialId ? { modelConfigId: edit.modelConfigId, credentialId: edit.credentialId } : undefined;
+}
+function imagePlanHasQualityGate(plan, preset) {
+    return plan.outputKind === 'image' && (preset === wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER || !(0, animation_workflow_1.animationRequestMode)(plan.objective)) && !(0, bead_intent_1.isBeadPatternRequest)(plan.objective);
+}
 const conciseReview = '只列影响交付的发现。把相同问题合并为至多 8 条，每条用一句话写明检查到的位置和下一步。无需展开推理或复述需求。';
 function reviewOutputLimit(kind, plan, effort, instruction = '') {
     const checks = [...plan.acceptance, ...plan.constraints];
@@ -471,7 +504,10 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     const reviewKind = project.kind === 'image' ? 'vision' : 'text', reviewBinding = select(reviewKind);
     const reviewInstruction = existingFinalReview ? plan.steps.at(-1)?.instruction || '' : '';
     const reviewPrompt = [reviewInstruction && `本次检查要求：${reviewInstruction}`, base.steps[2].prompt, conciseReview, 'summary 用一至两句话写明结论与仍需核对的要点。即使全部通过也须返回完整 JSON。'].filter(Boolean).join('\n\n');
-    const reviewer = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name } : {}), prompt: reviewPrompt, maxOutputTokens: reviewOutputLimit(reviewKind, plan, reviewBinding.reasoningEffort, reviewInstruction), ...reviewBinding, qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
+    const conditional = repairAfterReviewEnabled(plan.objective, options.repairAfterFailedReview);
+    const qualityRepairs = conditional ? project.kind === 'image' ? 1 : Math.max(1, plan.maxRepairs) : 0;
+    const repairBinding = project.kind === 'image' && conditional ? imageReviewEditBinding(configuration, bindings, steps.find(step => step.id === sourceId)) : undefined;
+    const reviewer = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name } : {}), prompt: reviewPrompt, maxOutputTokens: reviewOutputLimit(reviewKind, plan, reviewBinding.reasoningEffort, reviewInstruction), ...reviewBinding, qualityGate: { ...(project.kind !== 'image' || conditional ? { repairStepId: sourceId } : {}), maxRepairs: qualityRepairs, ...(repairBinding ? { imageRepairBinding: repairBinding } : {}), minScore: 80 } };
     const delivery = { ...base.steps[3], contentSourceStepId: sourceId, ...(wallpaperRequested ? { name: '适配设备壁纸', wallpaperTarget: wallpaperTarget || null, contentSourceStepId: undefined, contentSourceStepIds: [...imageOutputs] } : {}) };
     if (wallpaperRequested) {
         add(delivery);
@@ -488,7 +524,7 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     const unfilledVariables = new Set([plan.objective, ...workflow.steps.map(step => step.prompt)].flatMap(prompt_variables_1.extractVariables));
     for (const name of unfilledVariables)
         missing.add(`方案仍有未填变量“${name}”，请在目标或步骤要求里改成真实内容`);
-    const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮，最终检查不再自动增加精修，等待人工确认。`) : workflow.description;
+    const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮。${conditional ? '最终质检不通过时，最多再精修当前图片并复检1轮，按实际调用计费。' : '最终质检不通过时暂停。'}`) : workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, qualityRepairs ? `质检不通过时最多修订正文并复检${qualityRepairs}轮，按实际调用计费。` : '质检不通过时暂停。');
     const calendarNote = calendarResolved ? `执行时机已确认改为${plan.trigger.type === 'manual' ? '手动运行' : `应用运行期间每隔${plan.trigger.intervalMinutes}分钟运行`}；原描述的固定日历时间不再作为执行要求。` : '';
     const draft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, ...(redPacketCover ? { imagePreset: wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
     const { type, ...triggerDetails } = plan.trigger;
@@ -900,6 +936,7 @@ exports.redPacketCoverGenerationSize = redPacketCoverGenerationSize;
 exports.redPacketCoverPrompt = redPacketCoverPrompt;
 exports.redPacketCoverProviderPrompt = redPacketCoverProviderPrompt;
 exports.isRedPacketCoverWorkflow = isRedPacketCoverWorkflow;
+exports.coverReviewFindings = coverReviewFindings;
 const red_packet_cover_layout_json_1 = require("../../electron/red-packet-cover-layout.json");
 const image_output_options_1 = require("./image-output-options");
 exports.WECHAT_RED_PACKET_COVER = '微信红包封面';
@@ -1022,6 +1059,22 @@ function isRedPacketCoverWorkflow(workflow, projectId) {
     return workflow.imagePreset === exports.WECHAT_RED_PACKET_COVER
         || workflow.id === `quick-${projectId}-image-generation-red-packet-cover`
         || workflow.id === `quick-${projectId}-image-editing-red-packet-cover`;
+}
+function coverReviewFindings(findings) {
+    const clauses = findings.flatMap(text => text.split(/[，,；;。\n]|但(?:是)?|不过/)).map(text => text.trim()).filter(Boolean);
+    const button = /按钮|开字|下摆|系统控件/;
+    const obsolete = clauses.some(text => /9\s*[:：/]\s*16|1080\s*[×xX✕*]\s*1920/.test(text)
+        || button.test(text) && /缺少|缺失|需要添加|应(?:该)?(?:加上|补上|绘制)|请(?:添加|补上|绘制)/.test(text));
+    const uiDefect = (text) => button.test(text) && /移除|去掉|删除|误画|画入|绘入|已绘|绘制了|存在|嵌入|内嵌|画了|烘焙/.test(text);
+    // Quoting an incorrect ratio does not invalidate other, independently
+    // actionable findings in the same review (e.g. an actual baked-in button).
+    const factual = clauses.filter(text => !/未(?:被)?遮挡|没有(?:遮挡|错字)|未(?:画|绘)入/.test(text) &&
+        (uiDefect(text) || /错别字|错字|漏字|缺笔|不清晰|模糊|画错|变形|遮挡|重叠|错位|色偏|太小|太大|裁掉|被截断|不符合.{0,6}(?:主题|角色|配色)|(?:姿势|角色|文案|题字|颜色|风格).{0,12}(?:错误|缺失|不符|不一致)/.test(text)));
+    const meaningful = obsolete ? factual : clauses;
+    const instructions = meaningful.filter(text => !uiDefect(text)).map(text => coverCreativeText(text)).filter(Boolean);
+    if (meaningful.some(uiDefect))
+        instructions.push('移除画面中绘入的金色“开”按钮及系统控件，让微信叠加。');
+    return { obsolete, recalibrate: obsolete && !factual.length, instructions };
 }
 
 },

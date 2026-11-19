@@ -113,6 +113,8 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     }
     if (step.qualityGate) {
       const policy = step.qualityGate;
+      const repairBinding = policy.imageRepairBinding;
+      if (repairBinding !== undefined && (workflow.outputKind !== 'image' || step.kind !== 'vision' || !repairBinding || typeof repairBinding !== 'object' || Array.isArray(repairBinding) || Object.keys(repairBinding).some(key => !['modelConfigId', 'credentialId'].includes(key)) || !text(repairBinding.modelConfigId, 160) || !text(repairBinding.credentialId, 160))) addError(`“${step.name}”的自动精修配置需要模型及账户的编号。`, 'modelConfigId', step.id);
       if (step.role !== 'reviewer' || !['text', 'vision'].includes(step.kind) || !Number.isSafeInteger(policy.maxRepairs) || policy.maxRepairs < 0 || policy.maxRepairs > 3 || policy.minScore !== undefined && (!Number.isFinite(policy.minScore) || policy.minScore < 0 || policy.minScore > 100)) addError(`“${step.name}”的独立检查参数无效。`, undefined, step.id);
       if (policy.maxRepairs > 0) { const source = workflow.steps.findIndex(item => item.id === policy.repairStepId && (item.enabled || completedStepIds.has(item.id)) && !['planner', 'reviewer'].includes(item.role) && ['text', 'image-generation', 'image-editing'].includes(item.kind)); if (source < 0 || source >= workflow.steps.indexOf(step)) addError(`“${step.name}”的自动修订来源必须是前面启用的制作步骤。`, 'inputSource', step.id); }
     }

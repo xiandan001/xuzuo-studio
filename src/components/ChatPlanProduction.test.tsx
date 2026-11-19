@@ -148,13 +148,25 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
   it('红包方案在明确执行前不派发，创建项目后用红包参数生产并保存场景', async () => {
     const f = await fixture({ cover: true });
     expect(JSON.parse(localStorage.getItem(f.key)!).imagePreset).toBe('微信红包封面');
+    const consent = host.querySelector<HTMLInputElement>('.image-quality-repair-option input')!;
+    expect(consent.checked).toBe(true); expect(consent.parentElement?.parentElement?.textContent).toContain('每轮另计一次原图精修和一次复检');
     expect(f.startLive).not.toHaveBeenCalled();
     await click('执行方案'); await f.created({ ...makeProject(), kind: 'image' });
     await until(() => f.startLive.mock.calls.length === 1, 'red packet cover dispatch');
     const workflow = f.startLive.mock.calls[0][0];
     expect(workflow.imagePreset).toBe('微信红包封面');
+    expect(workflow.steps.find(step => step.qualityGate)?.qualityGate).toMatchObject({ maxRepairs: 1 });
     expect(workflow.steps.find(step => step.kind === 'image-generation')).toMatchObject({ imageOutputFormat: 'png', count: 1, imageBackground: 'opaque', prompt: expect.stringContaining('微信红包封面构图') });
     f.verifyLedger();
+  });
+  it('执行前关闭失败自动处理不派发调用，保存快照和正常制作工作流都保留0次', async () => {
+    const f = await fixture({ cover: true });
+    await act(async () => host.querySelector<HTMLInputElement>('.image-quality-repair-option input')!.click());
+    expect(JSON.parse(localStorage.getItem(f.key)!).repairAfterFailedReview).toBe(false);
+    expect(f.startLive).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled();
+    await click('执行方案'); await f.created({ ...makeProject(), kind: 'image' });
+    await until(() => f.startLive.mock.calls.length === 1, 'direct dispatch with opt-out');
+    expect(f.startLive.mock.calls[0][0].steps.find(step => step.qualityGate)?.qualityGate?.maxRepairs).toBe(0); f.verifyLedger();
   });
   it('上轮聊天材料先复制成真实项目引用，等props回显后才预检派发', async () => {
     const f = await fixture({ attachments: true, delayReferences: true }); await click('执行方案'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();

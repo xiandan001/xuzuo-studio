@@ -23,13 +23,15 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
   const recoveryKey = `xuzuo-automation-readiness-v1:${props.workspaceId}:${rule?.id || ''}`;
   const panelRef = useRef<HTMLElement>(null);
   const reveal = () => { setExpanded(true); requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })); };
-  const flowFingerprint = (value: WorkflowDefinition) => JSON.stringify(value.steps.map(step => step.reasoningEffort === undefined ? [step.id, step.modelConfigId, step.credentialId] : [step.id, step.modelConfigId, step.credentialId, step.reasoningEffort]));
+  const flowFingerprint = (value: WorkflowDefinition) => JSON.stringify(value.steps.map(step => [step.id, step.modelConfigId, step.credentialId, ...(step.reasoningEffort !== undefined ? [step.reasoningEffort] : []), ...(step.qualityGate?.imageRepairBinding ? [step.qualityGate.imageRepairBinding.modelConfigId, step.qualityGate.imageRepairBinding.credentialId] : [])]));
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!rule || !workflow || owner.current === rule.id) return;
     owner.current = rule.id;
     const initial: NaturalAutomationBindings = {};
     for (const step of workflow.steps) if (['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind) && !initial[step.kind as keyof NaturalAutomationBindings]) initial[step.kind as keyof NaturalAutomationBindings] = { modelConfigId: step.modelConfigId, credentialId: step.credentialId, ...(step.reasoningEffort !== undefined ? { reasoningEffort: step.reasoningEffort } : {}) };
+    const repairBinding = workflow.steps.find(step => step.enabled && step.kind === 'vision' && step.qualityGate?.maxRepairs)?.qualityGate?.imageRepairBinding;
+    if (repairBinding && !initial['image-editing']) initial['image-editing'] = { ...repairBinding };
     let restored: { answers?: Record<string, string>; bindings?: NaturalAutomationBindings; changedCapabilities?: (keyof NaturalAutomationBindings)[] } | undefined;
     const fingerprint = flowFingerprint(workflow);
     try { const raw = localStorage.getItem(recoveryKey), value = raw ? JSON.parse(raw) : undefined; if (value?.version === 1 && value.ruleId === rule.id && value.updatedAt === rule.updatedAt && value.workflowFingerprint === fingerprint && value.answers && typeof value.answers === 'object' && !Array.isArray(value.answers) && Object.values(value.answers).every(answer => typeof answer === 'string') && value.bindings && typeof value.bindings === 'object' && !Array.isArray(value.bindings)) restored = value; } catch { /* The authoritative rule still supplies the saved values. */ }
@@ -40,6 +42,8 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
   useEffect(() => !rule ? undefined : registerEditorSession({ id: `automation-readiness-${rule.id}`, projectId: rule.projectId, label: '自动化运行设置', getState: () => ({ dirty: true, pending: pending.current, persistenceError: recoveryRef.current.error || undefined }), save: async () => recoveryRef.current.retry(), exportRecovery: () => recoveryRef.current.exportDraft(), flushRecovery: () => recoveryRef.current.retry() }), [rule?.id]);
   const effective = useMemo(() => naturalEffectiveBindings(props.configuration, bindings, bindings.text || {}), [bindings, props.configuration.models, props.configuration.connections, props.configuration.credentials]);
   const capabilities = [...new Set((workflow?.steps || []).filter(step => step.enabled && ['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind)).map(step => step.kind as keyof NaturalAutomationBindings))];
+  const reviewLimit = workflow?.steps.find(step => step.enabled && step.role === 'reviewer' && step.qualityGate)?.qualityGate?.maxRepairs || 0;
+  const optionalEditModel = workflow?.outputKind === 'image' && reviewLimit > 0 && !capabilities.includes('image-editing');
   const missing = capabilities.flatMap(capability => {
     const steps = workflow?.steps.filter(step => step.enabled && step.kind === capability) || [];
     const invalid = changedCapabilities.includes(capability) ? [naturalModelSelection(props.configuration, capability, effective[capability])] : steps.map(step => naturalModelSelection(props.configuration, capability, step.modelConfigId || step.credentialId ? { modelConfigId: step.modelConfigId, credentialId: step.credentialId } : effective[capability]));
@@ -88,7 +92,7 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
         if (!check.ok) { if (stillCurrent()) { setErrors(check.errors); reveal(); } return { status: 'needs-input' }; }
       }
       if (!stillCurrent()) return { status: 'failed' };
-      const changed = source.workflow.steps.some((step, index) => step.modelConfigId !== bound.steps[index].modelConfigId || step.credentialId !== bound.steps[index].credentialId || step.reasoningEffort !== bound.steps[index].reasoningEffort);
+      const changed = source.workflow.steps.some((step, index) => step.modelConfigId !== bound.steps[index].modelConfigId || step.credentialId !== bound.steps[index].credentialId || step.reasoningEffort !== bound.steps[index].reasoningEffort || step.qualityGate?.imageRepairBinding?.modelConfigId !== bound.steps[index].qualityGate?.imageRepairBinding?.modelConfigId || step.qualityGate?.imageRepairBinding?.credentialId !== bound.steps[index].qualityGate?.imageRepairBinding?.credentialId);
       if (changed && !source.props.configuration.saveWorkflow(bound, bound.id, { silent: true })) throw Error('调用设置未能可靠保存，原流程和费用保留。');
       const latest = current.current.props;
       await bridge.syncContext({ workspaceId: source.props.workspaceId, workspaces: latest.workspaces, projects: latest.projects, workflows: latest.configuration.workflows.map(item => item.id === bound.id ? bound : item), models: latest.configuration.models, connections: latest.configuration.connections });
@@ -131,5 +135,5 @@ export function useAutomationReadiness(props: PageProps, rule: AutomationRule | 
   const setCapability = (capability: keyof NaturalAutomationBindings, value: NonNullable<NaturalAutomationBindings[keyof NaturalAutomationBindings]>) => { setBindings(previous => ({ ...previous, [capability]: value })); setChangedCapabilities(previous => previous.includes(capability) ? previous : [...previous, capability]); };
   const mixed = capabilities.some(capability => new Set(workflow?.steps.filter(step => step.kind === capability).map(step => `${step.modelConfigId}:${step.credentialId}:${step.reasoningEffort || 'auto'}`)).size > 1);
   const scope = `${props.workspaceId}/${rule?.id || ''}`, ownsDispatch = !!rule && dispatchScope === scope;
-  return { answers, setAnswers, bindings: effective, setCapability, mixed, expanded, setExpanded, panelRef, reveal, busy, loadedRuleId: loadedId, lastJob: lastJob && lastJob.ruleId === rule?.id && lastJob.workspaceId === props.workspaceId ? lastJob : undefined, dispatchUnknown: ownsDispatch && dispatchUnknown, dispatchLoading: dispatchLoadingScope === scope && dispatchLoading, readDispatch, errors: [...(owner.current === rule?.id ? errors : []), ...(ownsDispatch && dispatchError ? [dispatchError] : []), ...(recovery.error ? [recovery.error] : [])], missing, unanswered, questions, capabilities, project, perform, addReferences, remaining: missing.length + unanswered.length };
+  return { answers, setAnswers, reviewLimit, optionalEditModel, bindings: effective, setCapability, mixed, expanded, setExpanded, panelRef, reveal, busy, loadedRuleId: loadedId, lastJob: lastJob && lastJob.ruleId === rule?.id && lastJob.workspaceId === props.workspaceId ? lastJob : undefined, dispatchUnknown: ownsDispatch && dispatchUnknown, dispatchLoading: dispatchLoadingScope === scope && dispatchLoading, readDispatch, errors: [...(owner.current === rule?.id ? errors : []), ...(ownsDispatch && dispatchError ? [dispatchError] : []), ...(recovery.error ? [recovery.error] : [])], missing, unanswered, questions, capabilities, project, perform, addReferences, remaining: missing.length + unanswered.length };
 }

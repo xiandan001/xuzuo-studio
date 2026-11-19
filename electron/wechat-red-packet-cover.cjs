@@ -10,6 +10,7 @@ exports.redPacketCoverGenerationSize = redPacketCoverGenerationSize;
 exports.redPacketCoverPrompt = redPacketCoverPrompt;
 exports.redPacketCoverProviderPrompt = redPacketCoverProviderPrompt;
 exports.isRedPacketCoverWorkflow = isRedPacketCoverWorkflow;
+exports.coverReviewFindings = coverReviewFindings;
 const red_packet_cover_layout_json_1 = require("./red-packet-cover-layout.json");
 const image_output_options_1 = require("./image-output-options.cjs");
 exports.WECHAT_RED_PACKET_COVER = '微信红包封面';
@@ -132,4 +133,20 @@ function isRedPacketCoverWorkflow(workflow, projectId) {
     return workflow.imagePreset === exports.WECHAT_RED_PACKET_COVER
         || workflow.id === `quick-${projectId}-image-generation-red-packet-cover`
         || workflow.id === `quick-${projectId}-image-editing-red-packet-cover`;
+}
+function coverReviewFindings(findings) {
+    const clauses = findings.flatMap(text => text.split(/[，,；;。\n]|但(?:是)?|不过/)).map(text => text.trim()).filter(Boolean);
+    const button = /按钮|开字|下摆|系统控件/;
+    const obsolete = clauses.some(text => /9\s*[:：/]\s*16|1080\s*[×xX✕*]\s*1920/.test(text)
+        || button.test(text) && /缺少|缺失|需要添加|应(?:该)?(?:加上|补上|绘制)|请(?:添加|补上|绘制)/.test(text));
+    const uiDefect = (text) => button.test(text) && /移除|去掉|删除|误画|画入|绘入|已绘|绘制了|存在|嵌入|内嵌|画了|烘焙/.test(text);
+    // Quoting an incorrect ratio does not invalidate other, independently
+    // actionable findings in the same review (e.g. an actual baked-in button).
+    const factual = clauses.filter(text => !/未(?:被)?遮挡|没有(?:遮挡|错字)|未(?:画|绘)入/.test(text) &&
+        (uiDefect(text) || /错别字|错字|漏字|缺笔|不清晰|模糊|画错|变形|遮挡|重叠|错位|色偏|太小|太大|裁掉|被截断|不符合.{0,6}(?:主题|角色|配色)|(?:姿势|角色|文案|题字|颜色|风格).{0,12}(?:错误|缺失|不符|不一致)/.test(text)));
+    const meaningful = obsolete ? factual : clauses;
+    const instructions = meaningful.filter(text => !uiDefect(text)).map(text => coverCreativeText(text)).filter(Boolean);
+    if (meaningful.some(uiDefect))
+        instructions.push('移除画面中绘入的金色“开”按钮及系统控件，让微信叠加。');
+    return { obsolete, recalibrate: obsolete && !factual.length, instructions };
 }

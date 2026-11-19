@@ -81,7 +81,7 @@ export interface LiveRuntimeBridge {
   snapshot: () => Promise<LiveSnapshot>;
   pollSnapshot?: (afterRevision: number) => Promise<LiveSnapshot | null>;
   runDetail?: (id: string) => Promise<WorkflowRun>;
-  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue' | 'recheck-quality' | 'refine-quality'; reviewAttemptId?: string; reviewBinding?: { modelConfigId: string; credentialId: string }; refinement?: { sourceArtifactId: string; instruction: string; modelConfigId: string; credentialId: string }; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; imageExportSize?: { width: number; height: number }; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
+  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue' | 'recheck-quality' | 'refine-quality' | 'auto-quality'; reviewAttemptId?: string; reviewBinding?: { modelConfigId: string; credentialId: string }; refinement?: { sourceArtifactId: string; instruction: string; modelConfigId: string; credentialId: string }; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; imageExportSize?: { width: number; height: number }; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
   reconcile: (input: { entryId: string; costCents: number }) => Promise<void>;
   recalculateCosts?: () => Promise<{ updated: number }>;
   importFiles: (projectId?: string) => Promise<ArtifactMetadata[]>;

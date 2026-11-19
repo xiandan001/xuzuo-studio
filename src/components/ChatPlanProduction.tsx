@@ -4,6 +4,7 @@ import type { PageProps } from '../types';
 import { NaturalAutomationModels, type NaturalBinding } from './NaturalAutomationModels';
 import { useNaturalAutomationSession } from '../hooks/useNaturalAutomationSession';
 import { useChatPlanExecution } from '../hooks/useChatPlanExecution';
+import { imagePlanHasQualityGate, imageReviewEditBinding, repairAfterReviewEnabled } from '../lib/natural-automation-plan';
 import { HomePlanCard } from './HomePlanCard';
 import { useRememberedBoolean } from '../hooks/useRememberedBoolean';
 
@@ -20,7 +21,7 @@ export function ChatPlanProduction({ props, turn, conversationId, planner }: { p
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (session.draft.plan || !turn.plan || session.store.issue) return;
-    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, imagePreset: turn.imagePreset, input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner }); }
+    try { session.store.persist({ ...session.store.current.current, plan: turn.plan, imagePreset: turn.imagePreset, repairAfterFailedReview: repairAfterReviewEnabled(turn.userText), input: turn.userText.slice(0, 10000), acceptedInput: turn.userText.slice(0, 10000), planner }); }
     catch (cause) { session.setError(cause instanceof Error ? cause.message : '方案草稿未保存，请重试。'); }
   }, [turn.id, session.draft.plan, session.store.issue]);
   useEffect(() => {
@@ -70,7 +71,10 @@ export function ChatPlanProduction({ props, turn, conversationId, planner }: { p
   }
   if (!session.draft.plan) return <p role="status">正在准备已保存的方案…{session.store.issue || session.error}</p>;
   const capabilities = [...new Set((session.result.compiled?.workflow.steps || session.draft.plan.steps).map(step => step.kind).filter(kind => ['text', 'vision', 'image-generation', 'image-editing'].includes(kind)))] as ('text' | 'vision' | 'image-generation' | 'image-editing')[];
+  const conditionalOnly = !capabilities.includes('image-editing') && imagePlanHasQualityGate(session.draft.plan, session.draft.imagePreset) && repairAfterReviewEnabled(session.draft.acceptedInput || session.draft.input, session.draft.repairAfterFailedReview);
+  if (conditionalOnly) capabilities.push('image-editing');
+  const fallbackEdit = conditionalOnly ? imageReviewEditBinding(props.configuration, session.bindings) : undefined;
   const labels = { text: '文字与文档', vision: '看图检查', 'image-generation': '生成图片', 'image-editing': '精修图片' };
   const busy = choosing || !!runProject || execution.busy;
-  return <div className="chat-plan-production"><HomePlanCard props={props} session={session} externalBusy={busy} execution={direct ? execution : undefined} deferProject beforeRun={beforeRun} onChooseProject={chooseProject} onOpenModels={() => setModelsOpen(true)} /><details className="chat-plan-models" open={modelsOpen} onToggle={event => setModelsOpen(event.currentTarget.open)}><summary>制作模型与账户</summary>{capabilities.map(capability => <NaturalAutomationModels key={capability} configuration={props.configuration} capability={capability} label={labels[capability]} value={session.bindings[capability] || {}} disabled={session.locked || busy || !!session.draft.chatExecution} onChange={value => session.setProductionBinding(capability, value)} />)}</details>{choosing && <p role="status">正在准备保存项目；取消会保留方案。</p>}</div>;
+  return <div className="chat-plan-production"><HomePlanCard props={props} session={session} externalBusy={busy} execution={direct ? execution : undefined} deferProject beforeRun={beforeRun} onChooseProject={chooseProject} onOpenModels={() => setModelsOpen(true)} /><details className="chat-plan-models" open={modelsOpen} onToggle={event => setModelsOpen(event.currentTarget.open)}><summary>制作模型与账户</summary>{capabilities.map(capability => <NaturalAutomationModels key={capability} configuration={props.configuration} capability={capability} label={labels[capability]} value={session.bindings[capability] || (capability === 'image-editing' ? fallbackEdit : undefined) || {}} explicitOnly={capability === 'image-editing' && conditionalOnly} disabled={session.locked || busy || !!session.draft.chatExecution} onChange={value => session.setProductionBinding(capability, value)} />)}</details>{choosing && <p role="status">正在准备保存项目；取消会保留方案。</p>}</div>;
 }

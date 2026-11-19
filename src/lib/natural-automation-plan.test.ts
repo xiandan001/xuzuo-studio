@@ -3,13 +3,46 @@ import { describe, expect, it } from 'vitest';
 import type { NaturalAutomationPlan } from '../natural-automation-types';
 import type { Project } from '../types';
 import type { ModelCapability, StudioConfiguration } from '../configuration-types';
-import { adjustNaturalImageRefinements, appendNaturalPreparationNotes, compileNaturalAutomationPlan, naturalAutomationPreparationNotes, naturalAutomationRequestIssues, NATURAL_AUTOMATION_SCHEMA, parseNaturalAutomationPlan } from './natural-automation-plan';
+import { adjustNaturalImageRefinements, repairAfterReviewEnabled, appendNaturalPreparationNotes, compileNaturalAutomationPlan, naturalAutomationPreparationNotes, naturalAutomationRequestIssues, NATURAL_AUTOMATION_SCHEMA, parseNaturalAutomationPlan } from './natural-automation-plan';
 import { documentIllustrationSteps, illustratedDocumentSteps } from './document-illustrations';
 import { normalizeRedPacketCoverPlan } from './wechat-red-packet-cover';
+import { separateConditionalImageRepairs } from './natural-automation-plan';
+
+it('明确要求关闭自动处理或失败先问我时不授权自动调用', () => {
+  for (const text of ['不要自动处理', '质检未通过时，请先问我', '检查失败后自动处理零轮']) expect(repairAfterReviewEnabled(text)).toBe(false);
+  expect(repairAfterReviewEnabled('质检失败时自动处理')).toBe(true);
+});
 
 const require = createRequire(import.meta.url);
 type Configuration = Pick<StudioConfiguration, 'models' | 'connections' | 'credentials' | 'workflows'>;
 const kinds = ['text', 'vision', 'image-generation', 'image-editing'] as const;
+it('只有质检失败才修不会编入必做精修；用户明确先精修时保留计划内步骤', () => {
+  const modelAnswer = imagePlan();
+  const conditional = separateConditionalImageRepairs(modelAnswer, '制作一份宣传图，如果质检未通过，再精修一轮。');
+  expect(conditional.maxRepairs).toBe(0); expect(conditional.steps.some(step => step.kind === 'image-editing')).toBe(false);
+  expect(separateConditionalImageRepairs(modelAnswer, '先精修一轮，如果质检未通过再精修一轮')).toEqual(modelAnswer);
+  const result = compileNaturalAutomationPlan(conditional, project(), configuration());
+  expect(result.workflow.steps.find(step => step.qualityGate)?.qualityGate).toMatchObject({ maxRepairs: 1, repairStepId: result.workflow.steps.find(step => step.kind === 'image-generation')?.id });
+});
+it('缺少可选精修绑定仍可制作，支持编辑时沿用同一已选模型账户，用户显式关闭优先', () => {
+  const plan = adjustNaturalImageRefinements(imagePlan(), 0), config = configuration();
+  const gate = (r: ReturnType<typeof compileNaturalAutomationPlan>) => r.workflow.steps.find(step => step.qualityGate)!.qualityGate!;
+  const first = compileNaturalAutomationPlan(plan, project(), config);
+  expect(first.missing).toEqual([]); expect(gate(first).maxRepairs).toBe(1); expect(gate(first).imageRepairBinding).toBeUndefined();
+  config.models.find(model => model.id === 'model-image-generation')!.capabilities.push('image-editing');
+  const inherited = compileNaturalAutomationPlan(plan, project(), config);
+  expect(gate(inherited).imageRepairBinding).toEqual({ modelConfigId: 'model-image-generation', credentialId: 'key-image-generation' });
+  const stale = compileNaturalAutomationPlan(plan, project(), config, { 'image-editing': { modelConfigId: 'removed', credentialId: 'old' } });
+  expect(stale.missing).toEqual([]); expect(gate(stale).imageRepairBinding).toBeUndefined();
+  const off = compileNaturalAutomationPlan(plan, project(), config, {}, { repairAfterFailedReview: false });
+  expect(gate(off)).toEqual({ maxRepairs: 0, minScore: 80 });
+});
+it.each(['word','ppt','excel'] as const)('%s 新方案默认失败修订一次，关闭和既有文档上限生效', kind => {
+  const plan = { ...wordPlan(), outputKind: kind, maxRepairs: 0 };
+  const gate = (overrides: {repairAfterFailedReview?: boolean} = {}, count = 0) => compileNaturalAutomationPlan({ ...plan, maxRepairs: count }, project(kind), configuration(), {}, overrides).workflow.steps.find(step => step.qualityGate)!.qualityGate!;
+  expect(gate()).toMatchObject({ maxRepairs: 1, repairStepId: expect.any(String) });
+  expect(gate({}, 2).maxRepairs).toBe(2); expect(gate({ repairAfterFailedReview: false },2).maxRepairs).toBe(0);
+});
 it('截图中的旧红包计划在编译和重新编辑后均保留创意，上传和质检标准由本地确定', () => {
   const plan = imagePlan();
   plan.name = '小熊给你留了个红包｜3D竖屏概念图';
@@ -141,20 +174,20 @@ describe('本地编译与真实配置选择', () => {
     const result = compileNaturalAutomationPlan(plan, target, config), steps = result.workflow.steps;
     expect(steps.map(step => step.kind)).toEqual(['text', 'image-generation', 'vision', 'image-editing', 'vision', 'export', 'manual-review']);
     expect(steps[0].role).toBe('planner'); expect(steps[2].qualityGate).toBeUndefined(); expect(steps[3].imageSourceStepId).toBe(steps[1].id); expect(steps[3].inputSource).toBe('previous');
-    expect(steps[4].qualityGate).toEqual({ maxRepairs: 0, minScore: 80 }); expect(steps[5].contentSourceStepId).toBe(steps[3].id);
+    expect(steps[4].qualityGate).toEqual({ repairStepId: steps[3].id, imageRepairBinding: { modelConfigId: 'model-image-editing', credentialId: 'key-image-editing' }, maxRepairs: 1, minScore: 80 }); expect(steps[5].contentSourceStepId).toBe(steps[3].id);
     expect(steps[1].prompt).toContain('序作内置创作规范'); expect(steps[3].prompt).toContain('序作内置创作规范'); expect(result.missing).toEqual([]); expect(result.rule.variables).toEqual({}); expect(result.rule).not.toHaveProperty('enabled');
     expect(result.stepsSummary.join('\n')).toContain('实际原图'); expect(JSON.stringify({ plan, target, config })).toBe(before);
   });
-  it('AI遗漏意见或计划内精修时本地补齐有上限的实际步骤，不额外重试最终检查', () => {
+  it('AI遗漏意见或计划内精修时补齐有上限的实际步骤，条件精修单独配置', () => {
     const result = compileImage({ ...imagePlan(), steps: [imagePlan().steps[0]], maxRepairs: 3 }), steps = result.workflow.steps;
     expect(steps.filter(step => step.kind === 'image-editing')).toHaveLength(3); expect(steps.filter(step => step.kind === 'vision')).toHaveLength(4);
     const images = steps.filter(step => ['image-generation', 'image-editing'].includes(step.kind)); for (let index = 1; index < images.length; index++) expect(images[index].imageSourceStepId).toBe(images[index - 1].id);
-    expect(steps.at(-3)?.qualityGate?.maxRepairs).toBe(0); expect(steps.at(-2)?.contentSourceStepId).toBe(images.at(-1)?.id);
+    expect(steps.at(-3)?.qualityGate?.maxRepairs).toBe(1); expect(steps.at(-2)?.contentSourceStepId).toBe(images.at(-1)?.id);
     expect(() => compileImage({ ...imagePlan(), maxRepairs: 0 })).toThrow('超过计划内');
   });
   it('已有末尾看图检查复用为最终门，不增加第二次相同检查请求', () => {
     const result = compileImage({ ...imagePlan(), steps: imagePlan().steps.slice(0, 2), maxRepairs: 0 });
-    expect(result.workflow.steps.map(step => step.kind)).toEqual(['text', 'image-generation', 'vision', 'export', 'manual-review']); expect(result.workflow.steps[2].qualityGate?.maxRepairs).toBe(0);
+    expect(result.workflow.steps.map(step => step.kind)).toEqual(['text', 'image-generation', 'vision', 'export', 'manual-review']); expect(result.workflow.steps[2].qualityGate?.maxRepairs).toBe(1);
   });
   it('新计划的图片检查留出推理空间，只要求简洁意见和完整验收结论', () => {
     const result = compileImage(); const vision = result.workflow.steps.filter(step => step.kind === 'vision');
@@ -252,7 +285,7 @@ describe('创建停用方案与免费本地调整', () => {
     const original = imagePlan(), before = JSON.stringify(original), adjusted = adjustNaturalImageRefinements(original, rounds), result = compileImage(adjusted), stages = result.workflow.steps;
     expect(adjusted.maxRepairs).toBe(rounds); expect(adjusted.steps.filter(step => step.kind === 'image-editing')).toHaveLength(rounds); expect(stages.filter(step => step.kind === 'image-generation')).toHaveLength(1); expect(stages.filter(step => step.kind === 'vision')).toHaveLength(rounds + 1);
     const images = stages.filter(step => ['image-generation', 'image-editing'].includes(step.kind)); for (let index = 1; index < images.length; index++) expect(images[index].imageSourceStepId).toBe(images[index - 1].id);
-    expect(stages.at(-3)?.qualityGate).toEqual({ maxRepairs: 0, minScore: 80 }); expect(stages.at(-2)?.contentSourceStepId).toBe(images.at(-1)?.id); expect(adjusted.steps.find(step => step.kind === 'image-generation')?.instruction).toBe(original.steps[0].instruction); if (rounds) expect(adjusted.steps.find(step => step.kind === 'image-editing')?.instruction).toContain(original.steps[2].instruction); expect(JSON.stringify(original)).toBe(before);
+    expect(stages.at(-3)?.qualityGate).toMatchObject({ repairStepId: images.at(-1)?.id, maxRepairs: 1, minScore: 80 }); expect(stages.at(-2)?.contentSourceStepId).toBe(images.at(-1)?.id); expect(adjusted.steps.find(step => step.kind === 'image-generation')?.instruction).toBe(original.steps[0].instruction); if (rounds) expect(adjusted.steps.find(step => step.kind === 'image-editing')?.instruction).toContain(original.steps[2].instruction); expect(JSON.stringify(original)).toBe(before);
     expect(result.workflow.description).toContain(`计划内精修${rounds}轮`);
   });
   it('降低多轮精修会移除孤立检查，不把编辑替换为重新生图，参考图首次编辑不能静默消失', () => {

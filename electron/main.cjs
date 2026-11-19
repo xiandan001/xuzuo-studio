@@ -183,7 +183,7 @@ function registerRuntime(credentials) {
   animationService = require('./animation-service.cjs').createAnimationService({ ...businessOptions, directory: app.getPath('userData'), store: animationStore, tool: animationTool, onChanged: value => { try { mainWindow?.webContents.send('animation:changed', value); } catch { /* The renderer may already be closed. */ } }, onExport: async input => { const location = await editorProject(input.projectId); await liveEngine.recordLocalExport({ ...input, workspaceId: location.workspaceId, name: input.document.title, kind: 'image' }); try { mainWindow?.webContents.send('runtime:project-files-changed', { projectId: input.projectId }); } catch { /* Completed artifacts remain registered. */ } } });
   const exportWallpaper4K = require('./local-wallpaper-export.cjs').createLocalWallpaperExporter({ artifactStore, fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), onExport: async input => { const location = await editorProject(input.projectId); return liveEngine.recordLocalExport({ projectId: input.projectId, workspaceId: location.workspaceId, name: input.artifact.name, kind: 'image', artifacts: [input.artifact], wallpaperExport: { sourceArtifactId: input.sourceArtifactId, sourceSha256: input.sourceSha256, target: input.target } }); } });
   automationCenter = createAutomationCenter({ directory: app.getPath('userData'), liveEngine, onChanged: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automation:changed'); }, assertAdmission: async project => !runtimeClosing && !relocatingProjects.has(project.id) && !writingProjects.has(project.id), start: (input, options) => withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.start(input, options); }), control: async input => {
-    if (!['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality'].includes(input.action)) return liveEngine.control(input);
+    if (!['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality', 'auto-quality'].includes(input.action)) return liveEngine.control(input);
     if (!input.project) throw new Error('请先恢复任务所属项目。');
     return withProjectWrite(input.project.id, async () => { await assertProjectReady(input); return liveEngine.control(input); });
   } });
@@ -432,7 +432,7 @@ function registerRuntime(credentials) {
   handle('poll-snapshot', afterRevision => liveEngine.snapshot(afterRevision, { summaryOnly: true, delta: true }));
   handle('run-detail', id => liveEngine.runDetail(id));
   handle('control', async input => {
-    if (['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality'].includes(input?.action)) {
+    if (['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality', 'auto-quality'].includes(input?.action)) {
       const run = (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.find(item => item.id === input.id);
       if (run) return withProjectWrite(run.projectId, async () => {
         await assertProjectReady({ project: { id: run.projectId, workspaceId: input.project?.workspaceId || run.workspaceId }, attachmentIds: [...(run.attachmentIds || []), ...run.attempts.flatMap(attempt => (attempt.artifacts || []).map(artifact => artifact.id))] });

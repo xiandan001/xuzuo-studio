@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PageProps } from '../types';
 import type { AutomationContinuation, AutomationRule } from '../automation-types';
-import { compileNaturalAutomationPlan, naturalAutomationRequestIssues } from '../lib/natural-automation-plan';
+import { repairAfterReviewEnabled, compileNaturalAutomationPlan, naturalAutomationRequestIssues } from '../lib/natural-automation-plan';
 import { registerEditorSession } from '../lib/editor-session-guard';
 import { normalizedNaturalDraftPlan, useNaturalAutomationDraft } from './useNaturalAutomationDraft';
 import type { NaturalAutomationDraft, NaturalAutomationDraftOptions } from './useNaturalAutomationDraft';
@@ -46,9 +46,9 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
   const bindings = useMemo(() => naturalEffectiveBindings(props.configuration, draft.bindings, selected.model && selected.credentialId ? { ...draft.planner, modelConfigId: selected.model.id, credentialId: selected.credentialId } : draft.planner), [draft.bindings, draft.planner, selected.model?.id, selected.credentialId, props.configuration.models, props.configuration.connections, props.configuration.credentials]);
   const result = useMemo(() => {
     if (!draft.plan || !project) return {};
-    try { const plan = { ...normalizedNaturalDraftPlan(draft.plan), unsupported: [...new Set([...draft.plan.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || planning.record?.input || draft.input)])] }; return { compiled: compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset }) }; }
+    try { const plan = { ...normalizedNaturalDraftPlan(draft.plan), unsupported: [...new Set([...draft.plan.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || planning.record?.input || draft.input)])] }; return { compiled: compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset, repairAfterFailedReview: repairAfterReviewEnabled(draft.acceptedInput || draft.input, draft.repairAfterFailedReview) }) }; }
     catch (cause) { return { error: cause instanceof Error ? cause.message : '方案还需要调整。' }; }
-  }, [draft.plan, bindings, draft.input, draft.acceptedInput, draft.calendarResolved, draft.imagePreset, planning.record?.input, project?.id, project?.kind, project?.referenceFiles, props.configuration.models, props.configuration.connections, props.configuration.credentials, props.configuration.workflows]);
+  }, [draft.plan, bindings, draft.input, draft.acceptedInput, draft.calendarResolved, draft.imagePreset, draft.repairAfterFailedReview, planning.record?.input, project?.id, project?.kind, project?.referenceFiles, props.configuration.models, props.configuration.connections, props.configuration.credentials, props.configuration.workflows]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => registerEditorSession({ id: `natural-automation-${props.workspaceId}`, projectId: draft.projectId, label: '一句话自动化方案', getState: () => ({ dirty: true, pending: saving.current, persistenceError: latest.current.store.issue || latest.current.store.recovery.error || undefined }), save: async () => latest.current.store.recovery.retry(), exportRecovery: () => latest.current.store.recovery.exportDraft(), flushRecovery: () => latest.current.store.recovery.retry() }), [props.workspaceId, draft.projectId]);
   useEffect(() => { const id = draft.ruleId; if (!id) return; void window.desktop?.automation?.snapshot(props.workspaceId).then(snapshot => { if (mounted.current && latest.current.store.current.current.ruleId === id) setSavedRule(snapshot.rules.find(rule => rule.id === id)); }).catch(() => undefined); }, [draft.ruleId, props.workspaceId]);

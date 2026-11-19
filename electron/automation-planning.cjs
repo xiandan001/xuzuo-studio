@@ -18,7 +18,7 @@ function plannerPrompt(projectKind) {
 outputKind只允许word、ppt、excel、image。当前计费项目类型为${projectKind}。当前项目仅归属规划费用，不限制方案产物类型。用户明确要求宣传图或PPT等其他类型时按真实意图返回完整方案；界面会免费匹配或新建正确目标，不因此添加questions。未指定类型时沿用当前项目。steps.kind只允许text、vision、image-generation、image-editing。trigger.type只允许manual、schedule、reference-imported、run-completed；默认manual，manual不填写intervalMinutes或sourceWorkflowId。只有schedule填写1至10080的intervalMinutes；只有run-completed填写上下文已有的sourceWorkflowId。不支持每天几点/周几/cron或时区日历，不能偷换为间隔，明确列入unsupported。
 这是创建可重复使用的流程配置，暂缺品牌名、产品图、文案、客户资料等制作材料时，仍须返回完整步骤；questions只作为运行前补材料的提醒，不要求用户重新规划，不因此拒绝输出方案。不要编造未提供的事实或授权。技术上不支持的能力才列入unsupported，不能把一般资料缺项写入unsupported。
 接续对话时依据上一完整方案、本轮要求及明确用户本地编辑继续修改，只返回一份完整的新方案，不返回片段或执行指令。用户已明确改为手动或间隔运行后，不因历史中的9点要求反复提问；此确认不改变邮件、发布等其他能力边界。
-steps按目标安排，不加入导出和人工确认（本地编译器会添加）。Word/PPT/Excel最后一个制作步骤必须是text并输出完整正文。图片精修必须引用实际初稿，不把再次纯文字生图冒充编辑。仅明确需要精修时安排image-editing；图片maxRepairs至少等于明确安排的精修步骤数，未要求精修时填0。文档需要配图时用illustrations：mode为none时count=0；generate为1至20张；references为1至12张。maxRepairs为0至3。
+steps按目标安排，不加入导出和人工确认（本地编译器会添加）。Word/PPT/Excel最后一个制作步骤必须是text并输出完整正文。图片精修必须引用实际初稿，不把再次纯文字生图冒充编辑。只有明确要求无条件执行的计划内精修才安排 image-editing 并计入图片 maxRepairs。用户说“如果质检未通过再修一轮”是条件处理：不额外安排必做的 image-editing，图片 maxRepairs 填0；本地质检门在实际失败时单独精修原图并复检。直接用参考图作为首次制作所需的 image-editing 仍保留。文档需要配图时用illustrations：mode为none时count=0；generate为1至20张；references为1至12张。maxRepairs为0至3。
 不要编造模型、项目或已完成的操作。音视频、网页发布、邮件发送、操作系统命令、任意文件路径或Key操作列入unsupported。不得返回enabled、可执行代码、接口URL、价格、凭证或实际工作流配置。`;
 }
 

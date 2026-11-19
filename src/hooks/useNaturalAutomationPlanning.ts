@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PageProps, Project } from '../types';
 import type { AutomationPlanningRecord, NaturalAutomationPlan } from '../natural-automation-types';
-import { naturalAutomationRequestIssues, parseNaturalAutomationPlan } from '../lib/natural-automation-plan';
+import { naturalAutomationRequestIssues, parseNaturalAutomationPlan, repairAfterReviewEnabled, separateConditionalImageRepairs } from '../lib/natural-automation-plan';
 import { naturalModelSelection, type NaturalBinding } from '../components/NaturalAutomationModels';
 import { normalizedNaturalDraftPlan, type NaturalAutomationDraft, type useNaturalAutomationDraft } from './useNaturalAutomationDraft';
 import { naturalTargetProject } from '../lib/natural-automation-composer-state';
@@ -19,17 +19,17 @@ export function naturalPlanningStartDraft(draft: NaturalAutomationDraft, request
   const acceptedInput = base ? draft.plan ? draft.acceptedInput || draft.input : base.objective : undefined;
   const acceptedPlanningProjectId = base ? draft.acceptedPlanningProjectId || draft.planningProjectId || draft.projectId : undefined;
   return { ...draft, input, planningProjectId: billingProjectId, requestId, cancelledRequestId: undefined, bindings: { ...draft.bindings, text: draft.bindings.text || planner },
-    ...(preserve ? { plan: base, acceptedRequestId, acceptedInput, acceptedPlanningProjectId } : { plan: undefined, preparationAnswers: {}, calendarResolved: false, needsSetup: false, workflowId: undefined, creationKey: undefined, workflowSaved: false, ruleId: undefined, acceptedRequestId: undefined, acceptedInput: undefined, acceptedPlanningProjectId: undefined }),
+    ...(preserve ? { plan: base, acceptedRequestId, acceptedInput, acceptedPlanningProjectId } : { plan: undefined, repairAfterFailedReview: undefined, preparationAnswers: {}, calendarResolved: false, needsSetup: false, workflowId: undefined, creationKey: undefined, workflowSaved: false, ruleId: undefined, acceptedRequestId: undefined, acceptedInput: undefined, acceptedPlanningProjectId: undefined }),
     requestedCalendarResolved: newCalendarIntent(input) ? false : preserve ? options.calendarResolved ?? draft.calendarResolved ?? false : false,
   };
 }
 export function naturalPlanningAcceptedDraft(previous: NaturalAutomationDraft, value: AutomationPlanningRecord, projects: Project[]): NaturalAutomationDraft {
   if (value.workspaceId !== previous.workspaceId || value.projectId !== (previous.planningProjectId || previous.projectId) || value.id !== previous.requestId || value.id === previous.cancelledRequestId || value.status !== 'complete' || !value.resultText) return previous;
-  const original = parseNaturalAutomationPlan(value.resultText);
+  const original = separateConditionalImageRepairs(parseNaturalAutomationPlan(value.resultText), value.input);
   const sameAccepted = !!previous.plan && (previous.acceptedRequestId === value.id || !previous.acceptedRequestId && previous.requestedCalendarResolved === undefined);
   const inputCalendar = newCalendarIntent(value.input) && !naturalAutomationRequestIssues(value.input).some(issue => /日历|cron/i.test(issue)) && !original.unsupported.some(issue => /日历|cron|每天|每周|几点|固定.{0,5}时间/i.test(issue)) ? ['本次又要求固定日历时间，当前仍只支持手动或间隔执行，请重新确认执行时机。'] : [];
   const plan = { ...(sameAccepted ? previous.plan! : original), unsupported: [...new Set([...original.unsupported, ...inputCalendar])] };
-  const next = { ...previous, plan, acceptedRequestId: value.id, acceptedInput: value.input, acceptedPlanningProjectId: value.projectId, planningProjectId: value.projectId,
+  const next = { ...previous, plan, repairAfterFailedReview: sameAccepted && previous.repairAfterFailedReview !== undefined ? previous.repairAfterFailedReview : repairAfterReviewEnabled(value.input) && (previous.repairAfterFailedReview ?? true), acceptedRequestId: value.id, acceptedInput: value.input, acceptedPlanningProjectId: value.projectId, planningProjectId: value.projectId,
     projectId: sameAccepted && previous.workflowSaved ? previous.projectId : naturalTargetProject(projects, previous.projectId, plan.outputKind),
     ...(!sameAccepted ? { workflowId: undefined, creationKey: undefined, workflowSaved: false, ruleId: undefined, needsSetup: false, calendarResolved: previous.requestedCalendarResolved ?? (newCalendarIntent(value.input) ? false : previous.calendarResolved) } : {}), requestedCalendarResolved: undefined,
   };

@@ -17,6 +17,13 @@ function fixture() {
 }
 
 describe('真实启动回执与冻结请求', () => {
+  it('条件精修上限、实际图片来源和模型账户编号穿过预检后的真实启动边界', async () => {
+    const f = fixture(), input = request();
+    const extra = { modelConfigId: 'edit-model', credentialId: 'account-id', secret: 'discard-me' };
+    input.workflow.steps.push({ id: 'gate', name: '看图检查', kind: 'vision', role: 'reviewer', enabled: true, inputSource: 'previous', prompt: '独立检查', qualityGate: { minScore: 80, repairStepId: input.workflow.steps[0].id, maxRepairs: 1, imageRepairBinding: extra } });
+    await f.coordinator().start(input);
+    expect(f.payloads[0].workflow.steps.at(-1)?.qualityGate).toEqual({ minScore: 80, repairStepId: input.workflow.steps[0].id, maxRepairs: 1, imageRepairBinding: { modelConfigId: 'edit-model', credentialId: 'account-id' } });
+  });
   it('红包用途穿过启动请求的筛选，真实任务快照可以按封面格式导出', async () => {
     const f = fixture(), input = request();
     input.workflow.imagePreset = '微信红包封面';

@@ -1,7 +1,7 @@
 import type { ModelCapability, StudioConfiguration, WorkflowDefinition } from '../configuration-types';
 import type { Project } from '../types';
 import type { NaturalAutomationPlan } from '../natural-automation-types';
-import type { NaturalAutomationBindings } from './natural-automation-plan';
+import { imageReviewEditBinding, type NaturalAutomationBindings } from './natural-automation-plan';
 import { naturalModelSelection, type NaturalBinding } from '../components/NaturalAutomationModels';
 import { normalizeReasoningEffort } from './reasoning-options';
 
@@ -35,6 +35,11 @@ export function naturalPreparationMissing(plan: NaturalAutomationPlan, answers: 
 }
 export function naturalBoundWorkflow(workflow: WorkflowDefinition, configuration: StudioConfiguration, bindings: NaturalAutomationBindings, changedCapabilities?: (keyof NaturalAutomationBindings)[]): WorkflowDefinition {
   return { ...workflow, steps: workflow.steps.map(step => {
+    if (workflow.outputKind === 'image' && step.kind === 'vision' && step.qualityGate?.maxRepairs && (changedCapabilities?.includes('image-editing') || !changedCapabilities && bindings['image-editing'])) {
+      const source = workflow.steps.find(item => item.id === step.qualityGate?.repairStepId);
+      const imageRepairBinding = imageReviewEditBinding(configuration, bindings, source);
+      step = { ...step, qualityGate: { ...step.qualityGate, imageRepairBinding } };
+    }
     if (!['text', 'vision', 'image-generation', 'image-editing'].includes(step.kind)) return step;
     const explicitlyChanged = !changedCapabilities || changedCapabilities.includes(step.kind as keyof NaturalAutomationBindings);
     if (!explicitlyChanged && step.modelConfigId && step.credentialId) return step;

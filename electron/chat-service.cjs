@@ -8,7 +8,7 @@ const { resolveOfficialBillingRule } = require('./official-billing.cjs');
 const { completeBillingUsage } = require('./billing-request-shape.cjs');
 const { executeChat, prepareChat, prepareChatMessages, compactChatRequest } = require('./provider-chat.cjs');
 const { createChatAttachments, validPublicMetadata, backupBytes, MAX_COUNT, MAX_TOTAL, legacyTurnValid, upgradeLegacyRecord } = require('./chat-attachments.cjs');
-const { parseNaturalAutomationPlan } = require('./natural-automation-plan.runtime.cjs');
+const { parseNaturalAutomationPlan, separateConditionalImageRepairs } = require('./natural-automation-plan.runtime.cjs');
 const { WECHAT_RED_PACKET_COVER, normalizeRedPacketCoverPlan } = require('./wechat-red-packet-cover.cjs');
 const { imageType } = require('./image-output-formats.cjs');
 const { queueEntriesValid, publicQueue, createChatQueue } = require('./chat-queue.cjs');
@@ -404,7 +404,7 @@ function createChatService({ directory, credentialStore, fetchImpl = fetch, fxRa
       if (terminal.error) turn.error = terminal.error.name === 'ModelRuntimeError' ? terminal.error.message : '对话未能完成，请检查本地凭证或网络；原记录与费用保留。';
       if (turn.status === 'complete' && input.mode === 'plan') {
         try {
-          const plan = parseNaturalAutomationPlan(turn.text);
+          const plan = separateConditionalImageRepairs(parseNaturalAutomationPlan(turn.text), input.text);
           if (input.imagePreset && plan.outputKind !== 'image') throw Error('红包封面需要图片方案');
           turn.plan = input.imagePreset === WECHAT_RED_PACKET_COVER ? normalizeRedPacketCoverPlan(plan) : plan;
         } catch { turn.status = 'failed'; turn.error = '模型返回的制作方案不完整或格式不正确，尚未执行制作；已保留回答与费用，可调整需求后重试。'; }

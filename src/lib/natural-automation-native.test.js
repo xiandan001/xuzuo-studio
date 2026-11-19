@@ -242,7 +242,7 @@ describe('真实引擎内的自然语言规划', () => {
     await f.engine.control({ id: run.id, action: 'resume' }); await f.service.start(input); await until(() => f.service.read(input), value => value.status === 'failed');
     const after = await deliverySource({ projectId: 'project', kind: 'image', artifactIds: [] }); expect(after.sourceHash).toBe(before.sourceHash); expect(after.files).toEqual(before.files);
   });
-  it('自然图片核对使用新预算，截断的可解析 JSON 仍需明确续跑后才能交付', async () => {
+  it('明确关闭自动处理时，截断的图片质检即使含可解析 JSON 也需确认续跑', async () => {
     const reviewLimits = [];
     const reply = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     const f = await fixture({ fetchOverride: async (url, options) => {
@@ -251,7 +251,7 @@ describe('真实引擎内的自然语言规划', () => {
       if (vision) reviewLimits.push(body.max_tokens);
       return reply({ choices: [{ message: { content: vision ? '{"passed":true,"score":90,"issues":[],"summary":"主体完整"}' : '已整理真实制作要求' }, finish_reason: vision && reviewLimits.length === 1 ? 'length' : 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
     } });
-    const compiled = compileNaturalAutomationPlan({ ...plan, maxRepairs: 0 }, f.project, { models: f.models, connections: [f.connection], credentials: await f.credentials.list(), workflows: [] });
+    const compiled = compileNaturalAutomationPlan({ ...plan, maxRepairs: 0 }, f.project, { models: f.models, connections: [f.connection], credentials: await f.credentials.list(), workflows: [] }, {}, { repairAfterFailedReview: false });
     const workflow = { ...f.workflow, ...compiled.workflow }, review = workflow.steps.find(step => step.qualityGate);
     const { id } = await f.engine.start({ project: f.project, workflow, models: f.models, connections: [f.connection], input: compiled.rule.input, variables: {}, attachmentIds: [], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
     await f.engine.drain();

@@ -173,7 +173,10 @@ async function checkStreamingScroll(anchor) {
   };
   const scroll = "document.querySelector('.workspace-chat-scroll')";
   await append('\n\n' + '自然增长的回复段落。\n\n'.repeat(36) + '滚动样本甲', '滚动样本甲');
-  await dom(`(()=>{const e=${scroll},max=e.scrollHeight-e.clientHeight;return max>200&&Math.abs(max-e.scrollTop)<=2})()`, 'stream follows the new bottom');
+  await until(async () => {
+    report.tailFollow = await evaluate(`(()=>{const e=${scroll};return {top:e.scrollTop,max:e.scrollHeight-e.clientHeight,visibility:document.visibilityState}})()`);
+    return report.tailFollow.max > 200 && Math.abs(report.tailFollow.max - report.tailFollow.top) <= 2;
+  }, 'stream follows the new bottom');
   const following = await composerPosition('long-stream-following', anchor);
   assert(Math.abs(following.composer.top - anchor.composer.top) <= 1, 'Streaming text must not change composer height');
   const point = await evaluate(`(()=>{const e=${scroll},r=e.getBoundingClientRect();
@@ -189,10 +192,8 @@ async function checkStreamingScroll(anchor) {
   await evaluate(`(()=>{const e=${scroll};window.chatReadingPosition=e.scrollTop<=1;const onScroll=()=>{if(e.scrollTop<=1){window.chatReadingPosition=true;e.removeEventListener('scroll',onScroll)}};e.addEventListener('scroll',onScroll);e.scrollTo({top:0,behavior:'instant'});})()`);
   await dom('window.chatReadingPosition', 'actual scroller settled on the older messages');
   const reading = await composerPosition('reading-history', anchor);
-  await evaluate(`(()=>{const body=${scroll}.querySelector('.workspace-chat-scroll-content'),height=body.getBoundingClientRect().height;
-    window.chatHistoryResized=false;const observer=new ResizeObserver(()=>{if(body.getBoundingClientRect().height>height){window.chatHistoryResized=true;observer.disconnect()}});observer.observe(body)})()`);
   await append('\n\n' + '继续返回的新段落。\n\n'.repeat(15) + '滚动样本乙', '滚动样本乙');
-  await dom('window.chatHistoryResized', 'growth reached the renderer resize observers');
+  await dom(`${scroll}.scrollHeight-${scroll}.clientHeight>${reading.scrollMaximum}`, 'renderer committed more content above the pinned composer');
   const after = await composerPosition('stream-while-reading', anchor);
   assert(after.scrollMaximum > reading.scrollMaximum && Math.abs(after.scrollTop - reading.scrollTop) <= 1, 'New chunks must retain the manual history scroll position');
   assert(Math.abs(after.composer.top - anchor.composer.top) <= 1, 'Reading older messages must not move the composer');
@@ -381,7 +382,7 @@ async function scenario() {
 }
 async function run() {
   prepare(); await app.whenReady(); await initialize();
-  window = new BrowserWindow({ show: false, frame: false, skipTaskbar: true, width: 1440, height: 1000, useContentSize: true, webPreferences: { preload: path.join(root, 'electron/preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } }); report.windows.created++;
+  window = new BrowserWindow({ show: false, frame: false, skipTaskbar: true, width: 1024, height: 720, useContentSize: true, webPreferences: { preload: path.join(root, 'electron/preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } }); report.windows.created++;
   window.on('show', () => { report.windows.shown++; void finish(Error('Offline chat acceptance must remain hidden')); }); window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault()); window.webContents.on('will-redirect', event => event.preventDefault()); window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.webContents.session.webRequest.onBeforeRequest((details, callback) => { const allowed = details.url.startsWith(pathToFileURL(owner.dist + path.sep).href) || details.url.startsWith('data:image/'); if (!allowed) report.externalRequests++; callback({ cancel: !allowed }); });
   await window.loadFile(path.join(owner.dist, 'chat-studio.html')); report.processIds.push(window.webContents.getOSProcessId()); await scenario(); await finish();

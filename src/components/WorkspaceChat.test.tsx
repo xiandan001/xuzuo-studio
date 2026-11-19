@@ -209,21 +209,23 @@ describe('普通聊天的真实组件交互', () => {
     await f.update('清新一天', 'complete'); await input('再简短一点'); await click('发送聊天消息');
     expect(f.start).toHaveBeenCalledTimes(2); expect(f.createProject).not.toHaveBeenCalled();
   });
-  it('无 ResizeObserver 时，已排队的尾部跟随仍尊重用户的上滚位置', async () => {
+  it('旧滚动事件晚于增量时继续跟底；用户向上阅读后只在回到底部时恢复跟随', async () => {
     vi.stubGlobal('ResizeObserver', undefined);
-    const frames = new Map<number, FrameRequestCallback>(); let nextFrame = 0;
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
-    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
-    const flushFrames = async () => { const pending = [...frames.values()]; frames.clear(); await act(async () => { for (const callback of pending) callback(1); }); };
     const f = await fixture(); await input('保留当前阅读位置'); await click('发送聊天消息');
-    const thread = host.querySelector<HTMLDivElement>('.workspace-chat-scroll')!;
-    Object.defineProperties(thread, { scrollHeight: { configurable: true, value: 2400 }, clientHeight: { configurable: true, value: 400 } });
-    thread.scrollTop = 2000; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
-    await f.update('正在回答，尾部跟随已排进动画帧'); expect(frames.size).toBeGreaterThan(0);
-    thread.scrollTop = 800; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
-    await flushFrames(); expect(thread.scrollTop).toBe(800);
-    thread.scrollTop = 2000; await act(async () => { thread.dispatchEvent(new Event('scroll', { bubbles: true })); });
-    await f.update('用户主动回到底部后，后续回复仍能正常跟随'); await flushFrames(); expect(thread.scrollTop).toBe(2400);
+    const scroller = host.querySelector<HTMLDivElement>('.workspace-chat-scroll')!;
+    let contentHeight = 2400, position = 0;
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 400 }, scrollHeight: { get: () => contentHeight },
+      scrollTop: { get: () => position, set: (value: number) => { position = Math.min(value, contentHeight - 400); } },
+    });
+    const scroll = () => act(async () => { scroller.dispatchEvent(new Event('scroll')); });
+    await f.update('首段'); expect(position).toBe(2000);
+    contentHeight = 2600; await scroll(); // Delayed acknowledgement of the last automatic scroll.
+    await f.update('回复继续增长'); expect(position).toBe(2200);
+    scroller.scrollTop = 800; await scroll();
+    contentHeight = 2900; await f.update('用户在阅读旧消息'); expect(position).toBe(800);
+    scroller.scrollTop = 2500; await scroll();
+    contentHeight = 3100; await f.update('回到底部后继续跟随'); expect(position).toBe(2700);
     expect(f.start).toHaveBeenCalledOnce(); expect(f.createProject).not.toHaveBeenCalled(); expect(f.props.ledger).toEqual([]);
   });
   it('停止保留部分回答；再次回答使用新请求编号且明确是重试', async () => {

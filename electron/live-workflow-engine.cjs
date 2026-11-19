@@ -10,6 +10,7 @@ const { illustrationAssets, composeDocumentImages } = require('./document-illust
 const { createRunHistoryStore, validateRecords, runSummary } = require('./run-history-store.cjs');
 const { evaluateQuality, repairInput, reviewVerdict } = require('./automation-quality.cjs');
 const { normalizeReasoningEffort } = require('./reasoning-options.cjs');
+const { qualityRecoveryDecision } = require('./quality-recovery-policy.cjs');
 const { imageExportAssets } = require('./image-export-sources.cjs');
 const { imageExportSizeError, singleProducedPng, readResizeSource } = require('./resized-image-export.cjs');
 const { startFingerprint } = require('./live-start.cjs');
@@ -74,7 +75,7 @@ function imageResizeAtReview(run) {
   if (source && previous?.artifacts?.some(file => file.id === source.id)) return { exportIndex, source };
 }
 
-async function prepareQualityRecovery(run, reviewAttemptId, reviewBinding, refinement, request, readArtifact) {
+async function prepareQualityRecovery(run, reviewAttemptId, reviewBinding, refinement, request, readArtifact, keepAllowance = false) {
   const reviewer = run.snapshot.steps[run.stepIndex];
   const attempt = run.attempts.findLast(item => item.stepId === reviewer?.id);
   const verdict = run.qualityReviews?.findLast(item => item.stepId === reviewer?.id);
@@ -93,7 +94,7 @@ async function prepareQualityRecovery(run, reviewAttemptId, reviewBinding, refin
   }
   // Each explicit recovery authorizes one check and, optionally, one edit.
   // Keep the same reviewer and passing score, with no additional automatic repairs.
-  reviewer.qualityGate = { ...reviewer.qualityGate, maxRepairs: 0 };
+  if (!keepAllowance) reviewer.qualityGate = { ...reviewer.qualityGate, maxRepairs: 0 };
   if (reviewBinding) {
     if (![reviewBinding.modelConfigId, reviewBinding.credentialId].every(id => typeof id === 'string' && id.trim() && id.length <= 160)) throw Error('请选择质检模型及对应账户。');
     if (reviewer.modelConfigId !== reviewBinding.modelConfigId && reviewer.reasoningEffort !== undefined) {
@@ -122,10 +123,11 @@ async function prepareQualityRecovery(run, reviewAttemptId, reviewBinding, refin
   if (run.snapshot.steps.length >= 40) throw Error('当前流程已达40步，请在图片工作台另存修订。');
   await readResizeSource(readArtifact, target.source.id, run.projectId, run.id);
   const exporter = run.snapshot.steps[target.exportIndex], sourceStep = latestBefore(run, run.stepIndex).stepId;
+  const producer = run.snapshot.steps.find(step => step.id === sourceStep);
   const edit = { id: randomUUID(), name: '按质检建议精修', role: 'producer', kind: 'image-editing', enabled: true,
     inputSource: 'previous', imageSourceStepId: sourceStep, prompt: refinement.instruction.trim(),
     modelConfigId: refinement.modelConfigId, credentialId: refinement.credentialId, count: 1, imageOutputFormat: 'png',
-    imageSize: run.snapshot.steps.find(step => step.id === sourceStep)?.imageSize || 'auto' };
+    ...(producer?.budgetCents !== undefined ? { budgetCents: producer.budgetCents } : {}), imageSize: producer?.imageSize || 'auto' };
   if (exporter.contentSourceStepIds) exporter.contentSourceStepIds = [edit.id];
   else exporter.contentSourceStepId = edit.id;
   run.snapshot.steps.splice(run.stepIndex, 0, edit);
@@ -325,6 +327,87 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     controllers.delete(record.run.id);
     await persist();
   }
+  async function checkRemaining(record, nextRun, nextRequest, nextBaseline, automatic = false) {
+    const remaining = nextRun.snapshot.steps.map((step, index) => ({ ...step, enabled: step.enabled && (nextRun.retryStepOnly ? index === nextRun.stepIndex : index >= nextRun.stepIndex) }));
+    const first = remaining.find(step => step.enabled);
+    if (first) {
+      first.inputSource = 'project';
+      const completedStepIds = new Set(nextRun.snapshot.steps.filter(step => step.enabled && nextRun.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && (attempt.summary || attempt.artifacts?.length))).map(step => step.id));
+      let completedImageStepIds;
+      try { completedImageStepIds = await validateResumeImageSources(nextRun, remaining, artifactStore); }
+      catch (error) {
+        if (error.referenceIssue) { update(record, { error: error.message, referenceIssue: error.referenceIssue }); await persist(); }
+        throw error;
+      }
+      const continuingVideo = !nextRun.retryStepOnly && first.kind === 'video-generation' && nextRun.attempts.some(attempt => attempt.stepId === first.id && attempt.providerRequestId && ['failed', 'cancelled'].includes(attempt.status));
+      const priorResult = latestBefore(nextRun, nextRun.stepIndex);
+      const resumeAttachmentIds = [...new Set([...nextRequest.attachmentIds, ...(nextRun.snapshot.steps[nextRun.stepIndex]?.inputSource === 'previous' ? priorResult?.artifacts?.filter(file => file.kind === 'image').map(file => file.id) || [] : [])])];
+      const check = await checkPrepared({ ...nextRequest, attachmentIds: resumeAttachmentIds, project: { ...nextRequest.project, costCents: Math.max(projectCost(record), nextBaseline + projectLedgerCost(nextRun.projectId)) }, workflow: { ...nextRun.snapshot, steps: remaining } }, continuingVideo ? first.id : undefined, completedImageStepIds, completedStepIds);
+      if (check.errors.length) throw new Error(check.errors.join('\n'));
+      if (automatic && (!nextRequest.acknowledgePaidCalls || check.unknownCost && !nextRequest.acknowledgeUnknownCost)) throw Error('本任务未授权无法预估或新增的模型费用，请核对价格和账户后处理。');
+      if (shuttingDown) throw new Error('应用正在退出，未继续执行模型请求。');
+    }
+  }
+
+  async function prepareAutomaticQuality(run, request, expectedId, reviewBinding, refinement, authorizeRound) {
+    const step = run.snapshot.steps[run.stepIndex];
+    const attempt = run.attempts.findLast(item => item.stepId === step?.id);
+    if (!step?.qualityGate || attempt?.id !== expectedId || run.qualityDispatchAttempts?.[step.id] === expectedId) throw Error('本次质检状态已变化，请重新读取。');
+    const review = run.qualityReviews?.findLast(item => item.stepId === step.id && item.attemptId === expectedId);
+    const source = latestBefore(run, run.stepIndex);
+    if (authorizeRound) {
+      const count = run.repairCounts?.[step.id] || 0;
+      if (!Number.isSafeInteger(count) || count < 0 || count >= (step.qualityGate.maxRepairs || 3)) throw Error('本步自动修订已达上限，请核对后手动处理。');
+      step.qualityGate = { ...step.qualityGate, maxRepairs: count + 1, repairStepId: step.qualityGate.repairStepId || source?.stepId };
+      if (refinement?.modelConfigId && refinement.credentialId) step.qualityGate.imageRepairBinding = { modelConfigId: refinement.modelConfigId, credentialId: refinement.credentialId };
+    }
+    const decision = qualityRecoveryDecision(run, step, attempt, review);
+    if (!decision || decision.stop) throw Error(decision?.stop || '这一步未授权自动处理。');
+    if (decision.action === 'recheck') {
+      await prepareQualityRecovery(run, expectedId, reviewBinding, undefined, request, id => artifactStore.read(id), true);
+      run.qualityRecheckAttempts = { ...run.qualityRecheckAttempts, [step.id]: expectedId };
+    } else if (run.snapshot.outputKind === 'image') {
+      const target = imageResizeAtReview(run);
+      if (!target || step.qualityGate.repairStepId !== source?.stepId) throw Error('当前图片来源或后续步骤需人工核对，未重新生图。');
+      const binding = step.qualityGate.imageRepairBinding;
+      if (!binding?.modelConfigId || !binding.credentialId) throw Error('尚未选择可用的精修模型及账户。');
+      if (refinement?.sourceArtifactId && refinement.sourceArtifactId !== target.source.id) throw Error('精修样稿已变化，请重新读取。');
+      const repair = { modelConfigId: binding.modelConfigId, credentialId: binding.credentialId, sourceArtifactId: target.source.id, instruction: refinement?.instruction || decision.instruction };
+      await prepareQualityRecovery(run, expectedId, reviewBinding, repair, request, id => artifactStore.read(id), true);
+      step.qualityGate.repairStepId = run.snapshot.steps[run.stepIndex].id;
+      run.repairCounts = { ...run.repairCounts, [step.id]: decision.number };
+    } else {
+      await prepareQualityRecovery(run, expectedId, reviewBinding, undefined, request, id => artifactStore.read(id), true);
+      const repair = evaluateQuality(run, step, attempt)?.repair;
+      if (!repair || run.snapshot.steps[repair.targetIndex]?.kind !== 'text') throw Error('当前文稿没有可用的原修订步骤。');
+      if (run.snapshot.steps.slice(repair.targetIndex + 1, run.stepIndex).some(item => item.enabled)) throw Error('文稿制作与质检之间还有其他步骤，需要人工确认依赖，未重跑这些步骤。');
+      run.repairCounts = { ...run.repairCounts, [step.id]: repair.number };
+      run.repairContext = repair; run.stepIndex = repair.targetIndex;
+    }
+    run.qualityDispatchAttempts = { ...run.qualityDispatchAttempts, [step.id]: expectedId };
+  }
+
+  async function automaticQuality(record, step, attempt, controller) {
+    const run = record.run;
+    if (!step.qualityGate?.maxRepairs || run.retryStepOnly || run.pauseRequested || shuttingDown || controller.signal.aborted) return {};
+    const next = structuredClone(run); next.status = 'waiting-review';
+    const request = safeRequest(record.request);
+    try {
+      await prepareAutomaticQuality(next, request, attempt.id, undefined, undefined, false);
+      next.snapshot = await prepareWorkflow({ ...request, workflow: next.snapshot }); request.workflow = next.snapshot;
+      await checkRemaining(record, next, request, record.legacyBaseCostCents || 0, true);
+    } catch (error) { return { issue: error.message }; }
+    if (record.run !== run || run.status !== 'running' || run.pauseRequested || shuttingDown || controller.signal.aborted) return {};
+    const previousRequest = record.request;
+    next.status = 'running'; delete next.error; record.run = next; record.request = request; update(record, {});
+    try { await persist(); }
+    catch {
+      record.run = run; record.request = previousRequest; mark(record);
+      return { issue: '自动处理授权未能保存，未提交新调用。' };
+    }
+    return { scheduled: true };
+  }
+
   async function pump(id) {
     if (controllers.has(id)) return;
     const record = records.get(id);
@@ -451,12 +534,19 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           if (run.repairContext?.stepId === step.id) delete run.repairContext;
           let quality;
           try { quality = evaluateQuality(run, step, attempt); }
-          catch (error) { update(record, { status: 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
+          catch (error) {
+            const recovery = await automaticQuality(record, step, attempt, controller);
+            if (recovery.scheduled) continue;
+            if (run.status === 'running') update(record, { status: 'waiting-review', error: [error.message, recovery.issue].filter(Boolean).join(' ') });
+            controllers.delete(id); await persist(); break;
+          }
           if (quality) {
             run.qualityReviews = [...(run.qualityReviews || []), quality.result];
             if (!quality.result.passed) {
-              if (quality.repair) { run.repairCounts = { ...run.repairCounts, [step.id]: quality.repair.number }; run.repairContext = quality.repair; run.stepIndex = quality.repair.targetIndex; update(record, { error: undefined }); await persist(); continue; }
-              update(record, { status: 'waiting-review', error: `独立检查未通过，已停止自动修订：${quality.result.issues.join('；') || quality.result.summary || '请检查实际结果。'}` }); controllers.delete(id); await persist(); break;
+              const recovery = await automaticQuality(record, step, attempt, controller);
+              if (recovery.scheduled) continue;
+              if (run.status === 'running') update(record, { status: 'waiting-review', error: `独立检查未通过，已停止自动修订：${quality.result.issues.join('；') || quality.result.summary || '请检查实际结果。'}${recovery.issue ? ' ' + recovery.issue : ''}` });
+              controllers.delete(id); await persist(); break;
             }
           }
           const retryExport = run.retryStepOnly && isRedPacketCoverWorkflow(run.snapshot, run.projectId) && ['image-generation', 'image-editing'].includes(step.kind)
@@ -726,7 +816,10 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
         if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
         if (project && project.workspaceId !== run.workspaceId) { nextRun.originWorkspaceId ||= run.workspaceId; nextRun.workspaceId = project.workspaceId; nextRun.snapshot.workspaceId = project.workspaceId; nextRequest.workflow = nextRun.snapshot; }
-        if (action === 'recheck-quality' || action === 'refine-quality') {
+        if (action === 'auto-quality') {
+          if (run.status !== 'waiting-review' || run.hiddenAt || run.trashedAt || run.supersededByRunId || project?.workspaceId !== run.workspaceId) throw Error('原任务或质检状态已变化，未提交自动处理。');
+          await prepareAutomaticQuality(nextRun, nextRequest, reviewAttemptId, reviewBinding, refinement, true);
+        } else if (action === 'recheck-quality' || action === 'refine-quality') {
           if (project?.workspaceId !== run.workspaceId || action === 'refine-quality' && !refinement ||
               action === 'recheck-quality' && refinement) throw Error('请重新读取原项目与质检记录。');
           await prepareQualityRecovery(nextRun, reviewAttemptId, reviewBinding, refinement, nextRequest, fileId => artifactStore.read(fileId));
@@ -752,24 +845,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         nextRun.snapshot = await prepareWorkflow({ ...nextRequest, workflow: nextRun.snapshot });
         nextRequest.workflow = nextRun.snapshot;
         const nextBaseline = project ? Math.max(record.legacyBaseCostCents || 0, project.costCents - projectLedgerCost(project.id)) : record.legacyBaseCostCents || 0;
-        const remaining = nextRun.snapshot.steps.map((step, index) => ({ ...step, enabled: step.enabled && (nextRun.retryStepOnly ? index === nextRun.stepIndex : index >= nextRun.stepIndex) }));
-        const first = remaining.find(step => step.enabled);
-        if (first) {
-          first.inputSource = 'project';
-          const completedStepIds = new Set(nextRun.snapshot.steps.filter(step => step.enabled && nextRun.attempts.some(attempt => attempt.stepId === step.id && attempt.status === 'complete' && (attempt.summary || attempt.artifacts?.length))).map(step => step.id));
-          let completedImageStepIds;
-          try { completedImageStepIds = await validateResumeImageSources(nextRun, remaining, artifactStore); }
-          catch (error) {
-            if (error.referenceIssue) { update(record, { error: error.message, referenceIssue: error.referenceIssue }); await persist(); }
-            throw error;
-          }
-          const continuingVideo = !nextRun.retryStepOnly && first.kind === 'video-generation' && nextRun.attempts.some(attempt => attempt.stepId === first.id && attempt.providerRequestId && ['failed', 'cancelled'].includes(attempt.status));
-          const priorResult = latestBefore(nextRun, nextRun.stepIndex);
-          const resumeAttachmentIds = [...new Set([...nextRequest.attachmentIds, ...(nextRun.snapshot.steps[nextRun.stepIndex]?.inputSource === 'previous' ? priorResult?.artifacts?.filter(file => file.kind === 'image').map(file => file.id) || [] : [])])];
-          const check = await checkPrepared({ ...nextRequest, attachmentIds: resumeAttachmentIds, project: { ...nextRequest.project, costCents: Math.max(projectCost(record), nextBaseline + projectLedgerCost(run.projectId)) }, workflow: { ...nextRun.snapshot, steps: remaining } }, continuingVideo ? first.id : undefined, completedImageStepIds, completedStepIds);
-          if (check.errors.length) throw new Error(check.errors.join('\n'));
-          if (shuttingDown) throw new Error('应用正在退出，未继续执行模型请求。');
-        }
+        await checkRemaining(record, nextRun, nextRequest, nextBaseline, action === 'auto-quality');
         const previous = { run: structuredClone(run), request: record.request, legacyBaseCostCents: record.legacyBaseCostCents };
         record.request = nextRequest; record.legacyBaseCostCents = nextBaseline;
         Object.assign(run, nextRun); update(record, { status: 'running', error: undefined, referenceIssue: undefined, pauseRequested: false });

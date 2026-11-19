@@ -19,7 +19,7 @@ export { BEAD_WORKSPACE_NOTICE, isBeadPatternRequest } from './bead-intent';
 type Capability = NaturalAutomationPlan['steps'][number]['kind'];
 type ModelBinding = { modelConfigId?: string; credentialId?: string; reasoningEffort?: ReasoningEffort };
 export type NaturalAutomationBindings = Partial<Record<Capability, ModelBinding>>;
-export interface NaturalAutomationCompileOptions { allowPreparationQuestions?: boolean; calendarResolved?: boolean; imagePreset?: WorkflowDraft['imagePreset']; }
+export interface NaturalAutomationCompileOptions { allowPreparationQuestions?: boolean; calendarResolved?: boolean; imagePreset?: WorkflowDraft['imagePreset']; repairAfterFailedReview?: boolean; }
 type Configuration = Pick<StudioConfiguration, 'models' | 'connections' | 'credentials' | 'workflows'>;
 const capabilities: Capability[] = ['text', 'vision', 'image-generation', 'image-editing'];
 const labels: Record<Capability, string> = { text: '文字制作', vision: '图片检查', 'image-generation': '图片生成', 'image-editing': '图片精修' };
@@ -240,6 +240,34 @@ function bindingResolver(configuration: Configuration, bindings: NaturalAutomati
   };
 }
 
+export function repairAfterReviewEnabled(userInput: string, choice?: boolean): boolean {
+  if (choice !== undefined) return choice;
+  return !/(?:不要|禁止|无需|关闭|不允许|不用|不进行|不做|不)\s*(?:质检失败[后时]?\s*)?自动(?:处理|修改|改图|精修|修复|修订|重试)|(?:质检|检查|验收)(?:不通过|失败|未通过)(?:时|后)?[，,\s]*(?:请|就|直接)?(?:停止|暂停|交给我|先问我|等我确认)|(?:质检|检查|验收)(?:失败|不通过|未通过)(?:后|时)?(?:自动(?:处理|修复|精修|修订))?\s*(?:0|零)\s*(?:次|轮)/i.test(userInput);
+}
+
+// At model acceptance only. Later edits to the user's planned rounds must win.
+export function separateConditionalImageRepairs(plan: NaturalAutomationPlan, brief: string): NaturalAutomationPlan {
+  if (plan.outputKind !== 'image' || !plan.maxRepairs && !plan.steps.some(step => step.kind === 'image-editing')) return plan;
+  const failureClause = /(?:仅(?:仅)?在|只在|如果?|若|当)?(?:最终)?(?:质检|验收|检查)?\s*(?:未通过|没通过|不通过|失败|未达标|不达标|不合格|有问题)(?:时|后)?[，,\s]*(?:(?:才|再|就|自动|按(?:照)?建议|帮我|进行|尝试)\s*)*(?:精修|修复|修订|修改|修)(?:原图)?(?:[一二三123]轮|一次)?/g;
+  const unconditional = brief.replace(failureClause, '');
+  if (unconditional === brief || /(?:精修|修复|修订)/.test(unconditional)) return plan;
+  const firstSource = plan.steps.find(step => step.kind === 'image-generation' || step.kind === 'image-editing');
+  const plannedRounds = firstSource?.kind === 'image-editing' ? 1 : 0;
+  if (!firstSource || (plan.maxRepairs === plannedRounds && plan.steps.filter(step => step.kind === 'image-editing').length === plannedRounds)) return plan;
+  return adjustNaturalImageRefinements(plan, plannedRounds);
+}
+
+export function imageReviewEditBinding(configuration: Configuration, bindings: NaturalAutomationBindings, source?: ModelBinding) {
+  const selected = bindings['image-editing'] || source || bindingResolver(configuration, bindings, new Set())('image-generation');
+  if (!selected.modelConfigId) return undefined;
+  const edit = bindingResolver(configuration, { 'image-editing': { modelConfigId: selected.modelConfigId, credentialId: selected.credentialId } }, new Set())('image-editing');
+  return edit.modelConfigId && edit.credentialId ? { modelConfigId: edit.modelConfigId, credentialId: edit.credentialId } : undefined;
+}
+
+export function imagePlanHasQualityGate(plan: NaturalAutomationPlan, preset?: WorkflowDraft['imagePreset']) {
+  return plan.outputKind === 'image' && (preset === WECHAT_RED_PACKET_COVER || !animationRequestMode(plan.objective)) && !isBeadPatternRequest(plan.objective);
+}
+
 const conciseReview = '只列影响交付的发现。把相同问题合并为至多 8 条，每条用一句话写明检查到的位置和下一步。无需展开推理或复述需求。';
 
 function reviewOutputLimit(kind: 'text' | 'vision', plan: NaturalAutomationPlan, effort?: ReasoningEffort, instruction = '') {
@@ -347,7 +375,10 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   const reviewKind = project.kind === 'image' ? 'vision' : 'text', reviewBinding = select(reviewKind);
   const reviewInstruction = existingFinalReview ? plan.steps.at(-1)?.instruction || '' : '';
   const reviewPrompt = [reviewInstruction && `本次检查要求：${reviewInstruction}`, base.steps[2].prompt, conciseReview, 'summary 用一至两句话写明结论与仍需核对的要点。即使全部通过也须返回完整 JSON。'].filter(Boolean).join('\n\n');
-  const reviewer: WorkflowStep = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name } : {}), prompt: reviewPrompt, maxOutputTokens: reviewOutputLimit(reviewKind, plan, reviewBinding.reasoningEffort, reviewInstruction), ...reviewBinding, qualityGate: { ...(project.kind === 'image' ? {} : { repairStepId: sourceId }), maxRepairs: project.kind === 'image' ? 0 : plan.maxRepairs, minScore: 80 } };
+  const conditional = repairAfterReviewEnabled(plan.objective, options.repairAfterFailedReview);
+  const qualityRepairs = conditional ? project.kind === 'image' ? 1 : Math.max(1, plan.maxRepairs) : 0;
+  const repairBinding = project.kind === 'image' && conditional ? imageReviewEditBinding(configuration, bindings, steps.find(step => step.id === sourceId)) : undefined;
+  const reviewer: WorkflowStep = { ...base.steps[2], ...(existingFinalReview ? { id: existingFinalReview.id, name: existingFinalReview.name } : {}), prompt: reviewPrompt, maxOutputTokens: reviewOutputLimit(reviewKind, plan, reviewBinding.reasoningEffort, reviewInstruction), ...reviewBinding, qualityGate: { ...(project.kind !== 'image' || conditional ? { repairStepId: sourceId } : {}), maxRepairs: qualityRepairs, ...(repairBinding ? { imageRepairBinding: repairBinding } : {}), minScore: 80 } };
   const delivery: WorkflowStep = { ...base.steps[3], contentSourceStepId: sourceId, ...(wallpaperRequested ? { name: '适配设备壁纸', wallpaperTarget: wallpaperTarget || null, contentSourceStepId: undefined, contentSourceStepIds: [...imageOutputs] } : {}) };
   if (wallpaperRequested) { add(delivery); add(reviewer); } else { add(reviewer); add(delivery); }
   add(base.steps[4]);
@@ -355,7 +386,7 @@ export function compileNaturalAutomationPlan(input: NaturalAutomationPlan, proje
   const workflow = withCreationFoundation({ ...base, id: 'natural-preview', workspaceId: project.workspaceId, updatedAt: '', steps });
   const unfilledVariables = new Set([plan.objective, ...workflow.steps.map(step => step.prompt)].flatMap(extractVariables));
   for (const name of unfilledVariables) missing.add(`方案仍有未填变量“${name}”，请在目标或步骤要求里改成真实内容`);
-  const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮，最终检查不再自动增加精修，等待人工确认。`) : workflow.description;
+  const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮。${conditional ? '最终质检不通过时，最多再精修当前图片并复检1轮，按实际调用计费。' : '最终质检不通过时暂停。'}`) : workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, qualityRepairs ? `质检不通过时最多修订正文并复检${qualityRepairs}轮，按实际调用计费。` : '质检不通过时暂停。');
   const calendarNote = calendarResolved ? `执行时机已确认改为${plan.trigger.type === 'manual' ? '手动运行' : `应用运行期间每隔${plan.trigger.intervalMinutes}分钟运行`}；原描述的固定日历时间不再作为执行要求。` : '';
   const draft: WorkflowDraft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, ...(redPacketCover ? { imagePreset: WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
   const { type, ...triggerDetails } = plan.trigger;
