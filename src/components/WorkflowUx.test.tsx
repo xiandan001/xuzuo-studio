@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { PageProps } from '../types';
+import type { PageProps, Project } from '../types';
 import type { WorkflowDefinition, WorkflowStep } from '../configuration-types';
 import { blankWorkflow, exampleWorkflow, switchNewWorkflowOutput, WorkflowEditor } from '../pages/Workflows';
 import { StudioConnectionFields } from './StudioConnectionFields';
@@ -12,6 +12,19 @@ const props = {
 } as unknown as PageProps;
 const step = (id: string, name: string): WorkflowStep => ({ id, name, kind: 'text', prompt: '只处理已提供内容', inputSource: id === 'first' ? 'project' : 'previous', enabled: true, maxOutputTokens: 2048 });
 describe('工作流配置和错误修复视图', () => {
+  it.each(['已标记的新红包流程', '旧版快捷红包流程'])('%s在流程编辑器中保持固定的封面规格', name => {
+    const image: WorkflowStep = { ...step('first', '绘制封面'), kind: 'image-generation', modelConfigId: 'image-model', credentialId: 'key-one', imageSize: '1536x1024', count: 4, imageBackground: 'transparent', imageOutputFormat: 'gif' };
+    const legacy = name === '旧版快捷红包流程';
+    const activeProject = { id: 'project-legacy' } as Project;
+    const html = renderToStaticMarkup(<WorkflowEditor props={{ ...props, projects: [activeProject] }}
+      initial={{ name, description: '', outputKind: 'image', steps: [image], ...(legacy ? {} : { imagePreset: '微信红包封面' }) }}
+      workflowId={legacy ? 'quick-project-legacy-image-generation-red-packet-cover' : 'chat-workflow'} onClose={() => undefined} />);
+    expect(html).toContain('957 × 1278 JPEG');
+    expect(html).toContain('一张不透明 PNG');
+    for (const label of ['工作流图片尺寸', '工作流图片数量', '工作流图片背景', '图片输出格式', 'GIF动画帧数']) expect(html).not.toContain(label);
+    expect(html).toContain('步骤模型');
+    expect(html).toContain('步骤金额上限');
+  });
   it('图片步骤复用高级格式控件，SVG多张显示错误但不改原数量', () => {
     const imageProps = { ...props, configuration: { ...props.configuration, models: props.configuration.models.map(model => model.id === 'image-model' ? { ...model, modelId: 'gpt-image-2.6-sunburst' } : model) } };
     const image: WorkflowStep = { ...step('first', 'SVG制作'), kind: 'image-generation', modelConfigId: 'image-model', credentialId: 'key-one', count: 2, imageOutputFormat: 'svg', imageQuality: 'max', imageComplexity: 'high' };

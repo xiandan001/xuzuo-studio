@@ -9,6 +9,7 @@ import { AutomationProjectField } from './AutomationProjectField';
 import { AutomationCenter } from '../pages/AutomationCenter';
 import { Workflows } from '../pages/Workflows';
 import { RunWorkflowDialog } from './RunWorkflowDialog';
+import { WorkflowEditor } from './WorkflowEditor';
 
 let root: Root | undefined, host: HTMLDivElement;
 const project = (id: string, kind: Project['kind'] = 'word', workspaceId = 'workspace') => ({ id, workspaceId, name: `项目-${id}`, kind, description: `本次需求-${id}`, status: 'draft', version: 0, costCents: 0, accent: 'blue', updatedAt: '' } as Project);
@@ -105,4 +106,22 @@ it('红包专用确认固定生成规格，保留付费勾选和模型账户入�
   await render(dialog(false));
   await click('高级步骤');
   expect(onEdit).toHaveBeenCalledOnce();
+});
+
+it('保存旧版红包模板时自动替换无效的图片设置，保留提示词和账户', async () => {
+  const coverProject = project('cover-project', 'image');
+  const page = props({ projects: [coverProject], prompts: [] });
+  page.configuration.models = [{ id: 'model', connectionId: 'connection', name: '图像模型', modelId: 'gpt-image-1', enabled: true, capabilities: ['image-generation'], pricing: { unit: 'image', currency: 'CNY', input: '', output: '0.10' } }];
+  page.configuration.connections = [{ id: 'connection', name: '隔离服务', enabled: true, providerId: 'openai', protocol: 'openai-chat', baseUrl: 'https://offline.invalid', status: 'configured' }];
+  page.configuration.credentials = [{ id: 'key', name: '测试账户', connectionId: 'connection', lastFour: '0000', enabled: true, updatedAt: '' } as PageProps['configuration']['credentials'][number]];
+  const id = 'quick-cover-project-image-generation-red-packet-cover', prompt = '用梅花制作红包封面';
+  await render(<WorkflowEditor props={page} workflowId={id} initial={{ name: '自定义红包制作', description: '', outputKind: 'image', steps: [
+    { id: 'cover', name: '生成封面', kind: 'image-generation', enabled: true, inputSource: 'project', prompt, imageSize: '1536x1024', imageOutputFormat: 'gif', imageFrameCount: 9, imageBackground: 'transparent', count: 4, modelConfigId: 'model', credentialId: 'key' },
+  ] }} onClose={vi.fn()} />);
+  const form = document.querySelector<HTMLFormElement>('#wf-editor-form')!;
+  await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  const saveCall = vi.mocked(page.configuration.saveWorkflow).mock.calls[0];
+  expect(saveCall).toEqual([expect.objectContaining({ imagePreset: '微信红包封面' }), id]);
+  expect(saveCall[0].steps[0]).toMatchObject({ prompt, credentialId: 'key', count: 1, imageSize: '1024x1536', imageBackground: 'opaque', imageOutputFormat: 'png' });
+  expect(saveCall[0].steps[0].imageFrameCount).toBeUndefined();
 });
