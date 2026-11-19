@@ -3,6 +3,7 @@ const { app, BrowserWindow, Menu, session } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
 assert.equal(process.platform, 'darwin', 'Run this acceptance probe on macOS with Electron.');
 const root = path.resolve(__dirname, '..');
 const output = fs.mkdtempSync(path.join(root, 'work/macos-desktop-'));
@@ -46,9 +47,17 @@ async function run() {
   await app.whenReady();
   const window = await until(() => BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/index.html')), 'main window');
   const contents = window.webContents;
-  contents.on('console-message', (_event, details) => { if (details.level === 'error' && !/ERR_BLOCKED_BY_CLIENT|Content Security Policy/.test(details.message)) report.errors.push(`Renderer: ${details.message}`); });
+  const consoleProbe = 'macos-console-probe-' + randomUUID(); let consoleProbeReceived = false;
+  contents.on('console-message', details => {
+    if (details.level !== 'error') return;
+    if (details.message === consoleProbe) { consoleProbeReceived = true; return; }
+    if (!/ERR_BLOCKED_BY_CLIENT|Content Security Policy/.test(details.message)) report.errors.push(`Renderer: ${details.message}`);
+  });
   await until(() => contents.executeJavaScript('Boolean(window.desktop && document.querySelector(".studio-app-shell"))'), 'React application');
   await until(() => contents.executeJavaScript('Boolean(document.querySelector(".conversation-home"))'), 'home page');
+  await contents.executeJavaScript(`console.error(${JSON.stringify(consoleProbe)}); void 0`);
+  await until(() => consoleProbeReceived, 'actual renderer console error capture');
+  report.consoleErrorCaptureVerified = true;
   assert.equal(await contents.executeJavaScript('window.desktop.platform'), 'darwin');
   assert.equal(await contents.executeJavaScript('Boolean(document.querySelector(".platform-macos"))'), true);
   assert.equal(await contents.executeJavaScript('Boolean(document.querySelector(".desktop-titlebar .window-controls"))'), false);
