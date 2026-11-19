@@ -68,13 +68,17 @@ it.each(['gpt-6.2-astra', 'gpt-6.2-sol'])('旧2.11.0配置升级后目录可见%
 });
 it('快捷接入列出Astra和Sol，由用户明确选用新型号并复用已有Key，不重建连接或覆盖原模型', async () => {
   const before = localStorage.getItem(CONFIGURATION_KEY); await mounted(true); expect(localStorage.getItem(CONFIGURATION_KEY)).toBe(before);
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true));
   for (const modelId of ['gpt-6.2-astra', 'gpt-6.2-sol']) expect(quickSetupEntries('openai').some(entry => entry.modelId === modelId)).toBe(true);
   await click('下一步'); expect(document.querySelector('input[type="password"]')).toBeNull(); await click('下一步');
   const trigger = document.querySelector<HTMLButtonElement>('[aria-label="快速接入文字模型"]')!;
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) { return this === trigger ? { x: 0, y: 40, left: 0, top: 40, right: 320, bottom: 84, width: 320, height: 44, toJSON: () => ({}) } : { x: 0, y: 0, left: 0, top: 0, right: 1024, bottom: 768, width: 1024, height: 768, toJSON: () => ({}) }; });
   await act(async () => trigger.click());
-  const options = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')];
-  for (const name of ['GPT-6.2 Astra', 'GPT-6.2 Sol']) expect(options.some(option => option.textContent?.includes(name) && !option.disabled), options.map(option => option.textContent).join(", ")).toBe(true);
+  const options = await vi.waitFor(() => {
+    const available = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+    for (const name of ['GPT-6.2 Astra', 'GPT-6.2 Sol']) expect(available.some(option => option.textContent?.includes(name) && !option.disabled), available.map(option => option.textContent).join(", ")).toBe(true);
+    return available;
+  });
   const chosen = options.find(option => option.textContent?.includes('GPT-6.2 Sol'))!; await act(async () => chosen.click()); expect(localStorage.getItem(CONFIGURATION_KEY)).toBe(before);
   await click('保存并完成接入'); await vi.waitFor(() => expect(document.body.textContent).toContain('已接入，可以开始使用')); unchangedLegacy();
   expect(current.models).toHaveLength(legacy.models.length + 1); expect(current.models.at(-1)?.modelId).toBe('gpt-6.2-sol'); expect(current.connections).toHaveLength(1); expect(current.credentials).toHaveLength(1);
