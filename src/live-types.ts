@@ -43,14 +43,26 @@ export interface GeneratedAnimationReferenceInput { projectId: string; sourceArt
 export interface GeneratedAnimationReference { sourceArtifactId: string; sourceSha256: string; prompt: string; imageOptions: ImageOutputOptions; mimeType: 'image/gif'; width: number; height: number; sourceBytes?: Uint8Array; reference?: ArtifactMetadata; }
 export interface SvgReferenceInput { projectId: string; sourceArtifactId: string; sourceSha256?: string; pngBytes?: Uint8Array; }
 export interface SvgReference { sourceArtifactId: string; sourceSha256: string; mimeType: 'image/svg+xml'; sourceWidth: number; sourceHeight: number; width: number; height: number; sourceBytes?: Uint8Array; reference?: ArtifactMetadata; }
-export interface RedPacketCoverExportInput { projectId: string; sourceArtifactId: string; }
+export interface RedPacketCoverSource { projectId: string; sourceArtifactId: string; }
+export interface RedPacketCoverExportInput extends RedPacketCoverSource { preparedSha256?: string; sourceSha256?: string; }
+export interface PreparedRedPacketCover {
+  dataUrl: string;
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string;
+  sourceSha256: string;
+  originalArtifactId?: string;
+}
+export interface RedPacketCoverExportResult { saved: boolean; path?: string; width?: number; height?: number; bytes?: number; }
 export interface Wallpaper4KExportInput { projectId: string; sourceArtifactId: string; orientation: 'portrait' | 'landscape'; fit: 'cover' | 'contain'; }
 export interface Wallpaper4KExportResult { artifact: ArtifactMetadata; target: import('./wallpaper-types').WallpaperTarget; locallyAdapted: true; }
 export interface LiveRuntimeStatus { available: boolean; reason?: string; }
 export interface LiveRuntimeBridge {
   prepareGeneratedAnimationReference?: (input: GeneratedAnimationReferenceInput) => Promise<GeneratedAnimationReference>;
   prepareSvgReference?: (input: SvgReferenceInput) => Promise<SvgReference>;
-  exportRedPacketCover?: (input: RedPacketCoverExportInput) => Promise<{ saved: boolean; path?: string }>;
+  prepareRedPacketCover?: (input: RedPacketCoverSource) => Promise<PreparedRedPacketCover>;
+  exportRedPacketCover?: (input: RedPacketCoverExportInput) => Promise<RedPacketCoverExportResult>;
   exportWallpaper4K?: (input: Wallpaper4KExportInput) => Promise<Wallpaper4KExportResult>;
   saveImageMarkup?: (input: { projectId: string; sourceArtifactId: string; dataUrl: string }) => Promise<ArtifactMetadata>;
   startChecked?: (input: LiveStartRequest) => Promise<LiveCheckedStartResult>;

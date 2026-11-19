@@ -67,7 +67,8 @@ export interface StudioConfiguration {
 export interface WorkflowRunner {
   prepareGeneratedAnimationReference?: (input: import('./live-types').GeneratedAnimationReferenceInput) => Promise<import('./live-types').GeneratedAnimationReference>;
   prepareSvgReference?: (input: import('./live-types').SvgReferenceInput) => Promise<import('./live-types').SvgReference>;
-  exportRedPacketCover?: (input: import('./live-types').RedPacketCoverExportInput) => Promise<{ saved: boolean; path?: string }>;
+  prepareRedPacketCover?: import('./live-types').LiveRuntimeBridge['prepareRedPacketCover'];
+  exportRedPacketCover?: import('./live-types').LiveRuntimeBridge['exportRedPacketCover'];
   exportWallpaper4K?: (input: import('./live-types').Wallpaper4KExportInput) => Promise<import('./live-types').Wallpaper4KExportResult>;
   inventoryRevision?: number;
   thumbnailArtifact?: (id: string) => Promise<import('./live-types').ArtifactPreview>;

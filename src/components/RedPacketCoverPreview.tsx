@@ -1,60 +1,54 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { CircleUserRound, Download, Gift, LoaderCircle } from 'lucide-react';
-import type { WorkflowRunner } from '../configuration-types';
-import type { ArtifactMetadata } from '../live-types';
+import { useState, type ReactNode } from 'react';
+import { CircleUserRound, Eye, Image, LoaderCircle, MessageSquare } from 'lucide-react';
+import type { usePreparedRedPacketCover } from '../hooks/usePreparedRedPacketCover';
+import layout from '../../electron/red-packet-cover-layout.json';
 import './red-packet-cover.css';
 
-type PreviewState = { url: string } | { error: string };
+const curve = Array.from({ length: 33 }, (_, i) => { const t = i / 32; return (100 * t) + '% ' + (100 * (1 - (2 * t - 1) ** 2)) + '%'; });
+const corners = 'polygon(' + curve.join(', ') + ', 100% 100%, 0 100%)';
+export const coverFileSize = (bytes: number) => (bytes / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' KB';
 
-export function RedPacketCoverPreview({ source, runner, original, disabled, exporting, exportError, onExport }: {
-  source?: ArtifactMetadata; runner: WorkflowRunner; original: ReactNode; disabled: boolean;
-  exporting: boolean; exportError: string; onExport: () => void;
+export function RedPacketCoverPreview({ preparation, original }: {
+  preparation: ReturnType<typeof usePreparedRedPacketCover>; original?: ReactNode;
 }) {
-  const [view, setView] = useState<'original' | 'mock'>('original');
-  const [preview, setPreview] = useState<PreviewState>();
-  const [retry, setRetry] = useState(0);
-  const runnerRef = useRef(runner);
-  runnerRef.current = runner;
-  useEffect(() => {
-    if (!source || view !== 'mock' || preview) return;
-    let current = true;
-    const read = runnerRef.current.thumbnailArtifact || runnerRef.current.previewArtifact;
-    void read(source.id).then(result => {
-      if (!result.dataUrl || !/^data:image\/(?:png|jpeg|webp);base64,/i.test(result.dataUrl)) throw Error('预览格式不可用');
-      if (current) setPreview({ url: result.dataUrl });
-    }).catch(() => {
-      if (current) setPreview({ error: '暂时无法读取当前封面，请检查原图后重试。' });
-    });
-    return () => { current = false; };
-  }, [source?.id, view, preview, retry]);
-
+  const [view, setView] = useState<'original' | 'message' | 'open'>('original');
+  const [crop, setCrop] = useState(72), [showSource, setShowSource] = useState(false);
+  const overlay = view === 'open', bubble = view === 'message';
+  const { file, error, retry } = preparation, { identity, button, cornerDepth } = layout;
   return <section className="red-packet-result" aria-label="微信红包封面结果">
     <header className="red-packet-result-toolbar">
       <div className="red-packet-view" role="group" aria-label="红包封面预览方式">
-        <button type="button" aria-pressed={view === 'original'} onClick={() => setView('original')}>原图</button>
-        <button type="button" aria-pressed={view === 'mock'} disabled={!source} onClick={() => setView('mock')}>红包位置模拟</button>
+        <button type="button" aria-pressed={view === 'original'} onClick={() => setView('original')}><Image size={15} />原图</button>
+        <button type="button" aria-pressed={bubble} onClick={() => setView('message')}><MessageSquare size={15} />聊天气泡</button>
+        <button type="button" aria-pressed={overlay} onClick={() => setView('open')}><Eye size={15} />拆红包页</button>
       </div>
-      <button type="button" className="btn btn-secondary" disabled={!source || !runner.exportRedPacketCover || disabled || exporting} onClick={onExport}>
-        {exporting ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{exporting ? '正在导出…' : '导出红包封面 JPEG'}
-      </button>
+      {file && <output className="red-packet-spec" title={file.bytes.toLocaleString('zh-CN') + ' 字节'}>
+        {file.width} × {file.height} px · JPG · <strong>{coverFileSize(file.bytes)}</strong>
+      </output>}
     </header>
-    {exportError && <p className="red-packet-result-error" role="alert">{exportError}</p>}
-    {source && !runner.exportRedPacketCover && <p className="red-packet-result-note">当前桌面后台不支持红包封面 JPEG 导出。</p>}
-    {view === 'original' ? original : <div className="red-packet-simulation">
-      {preview && 'url' in preview ? <>
-        <div className="red-packet-simulation-frame">
-          <img alt="裁剪后的红包封面画面" src={preview.url} />
-          <div className="red-packet-overlay" aria-hidden="true">
-            <div className="red-packet-overlay-profile"><CircleUserRound size={25} /><span>发送者昵称</span></div>
-            <span className="red-packet-overlay-greeting">祝福语显示区</span>
-            <div className="red-packet-overlay-bottom"><span>开</span></div>
+    <div className={bubble ? 'red-packet-stage is-chat' : 'red-packet-stage'}>
+      {file ? <div className={bubble ? 'red-packet-card is-bubble' : overlay ? 'red-packet-card with-system' : 'red-packet-card'}>
+        {bubble && <div className="red-packet-chat-sender"><CircleUserRound size={25} /><span>发送者</span></div>}<div className="red-packet-frame">
+        <img src={file.dataUrl} style={bubble ? { objectPosition: 'center ' + crop + '%' } : undefined} alt={bubble ? '聊天中的红包封面取景' : overlay ? '封面及微信拆红包页遮挡示意' : '将要导出的封面原图'} width={file.width} height={file.height} />
+        {bubble && <button type="button" className="red-packet-bubble-open" aria-label="点开红包预览拆红包页" onClick={() => setView('open')}>
+          <span className="red-packet-bubble-line"><span className="red-packet-mini-envelope" aria-hidden="true"><i /></span><strong>恭喜发财，大吉大利</strong></span>
+          <small>微信红包</small>
+        </button>}
+        {overlay && <div className="red-packet-overlay" aria-hidden="true">
+          <div className="red-packet-system-info" style={{left: identity.left * 100 + '%', top: identity.top * 100 + '%', width: (identity.right - identity.left) * 100 + '%', height: (identity.bottom - identity.top) * 100 + '%'}}>
+            <span><CircleUserRound size={21} />发送者的红包</span><strong>恭喜发财，大吉大利</strong>
           </div>
-        </div>
-        <p className="red-packet-result-note">模拟居中裁剪及界面遮挡。导出的 JPEG 只包含封面图案。</p>
-      </> : preview && 'error' in preview ? <p className="red-packet-result-error" role="alert">
-        {preview.error} <button type="button" className="text-button" onClick={() => { setPreview(undefined); setRetry(value => value + 1); }}>重新读取</button>
-      </p> : <p className="red-packet-result-note" role="status"><LoaderCircle size={16} className="spin" /> 正在读取本机封面原图…</p>}
-    </div>}
-    {!source && <p className="red-packet-result-note"><Gift size={14} />生成静态封面后可模拟位置并导出 957 × 1278 JPEG。</p>}
+          <div className="red-packet-system-corners" style={{height: cornerDepth * 100 + '%', clipPath: corners}} />
+          <span className="red-packet-system-open" style={{left: button.centerX * 100 + '%', top: button.centerY * 100 + '%', width: button.diameterRatio * 100 + '%'}}><b>開</b></span>
+        </div>}
+      </div>{overlay && <div className="red-packet-system-foot" aria-hidden="true" />}</div> : error ? <p className="red-packet-result-error" role="alert">{error} <button type="button" className="text-button" onClick={retry}>重新准备</button></p>
+        : <p className="red-packet-result-note" role="status"><LoaderCircle size={16} className="spin" />正在本机准备封面…</p>}
+    </div>
+    {bubble && file && <label className="red-packet-crop">气泡取景<input type="range" min="0" max="100" value={crop} onChange={event => setCrop(Number(event.target.value))} /></label>}
+    <footer className="red-packet-caption">
+      <span>{bubble ? '聊天中点开前的示意，实际取景可在微信平台调整。' : overlay ? '拆红包页模拟 · 昵称、祝福语和按钮只在预览中显示。' : '预览与导出使用同一份 JPG。'}</span>
+      {original && !error && <button type="button" className="text-button" aria-expanded={showSource} onClick={() => setShowSource(value => !value)}>{showSource ? '收起生成源图' : '查看生成源图'}</button>}
+    </footer>
+    {(showSource || error) && original}
   </section>;
 }

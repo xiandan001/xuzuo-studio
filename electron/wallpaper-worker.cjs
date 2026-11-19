@@ -1,4 +1,4 @@
-const { COVER_TARGET } = require('./red-packet-cover-export.cjs');
+const { composeCover } = require('./red-packet-cover-layout.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { imageType, rasterDimensions } = require('./image-output-formats.cjs');
 
@@ -53,7 +53,36 @@ function fitEngineeringPng(input, loadModule = require) {
   try { return fitRasterPng(input, loadModule, true); } catch (error) { error.message = error.message.replaceAll('壁纸', '工程图片'); throw error; }
 }
 function cropRedPacketCoverPng(input, loadModule = require) {
-  try { return fitRasterPng({ buffer: input.buffer, target: COVER_TARGET }, loadModule, false, 255); }
+  try {
+    const { PNG } = loadModule('pngjs');
+    const composed = composeCover(checkedPng(input, PNG));
+    return PNG.sync.write(composed, { colorType: 2, inputColorType: 6, deflateLevel: 6, filterType: 4 });
+  }
   catch (error) { error.message = error.message.replaceAll('壁纸', '微信红包封面'); throw error; }
 }
-module.exports = { fitWallpaperPng, fitEngineeringPng, cropRedPacketCoverPng, wallpaperGeometry };
+function prepareRedPacketCoverBitmap(input, loadModule = require) {
+  let source;
+  if (input.bitmap) {
+    const { width, height } = input;
+    if (![width, height].every(v => Number.isInteger(v) && v > 0 && v <= 8192) || width * height > 16000000 || input.bitmap.byteLength !== width * height * 4) throw Error('红包原图像素无效。');
+    // Electron supplies premultiplied sRGB BGRA. Composite on white before
+    // passing ordinary RGBA into the same layout used by the PNG export.
+    const data = new Uint8Array(input.bitmap.buffer, input.bitmap.byteOffset, input.bitmap.byteLength);
+    for (let i = 0; i < data.length; i += 4) {
+      const blue = data[i], white = 255 - data[i + 3];
+      data[i] = Math.min(255, data[i + 2] + white);
+      data[i + 1] = Math.min(255, data[i + 1] + white);
+      data[i + 2] = Math.min(255, blue + white);
+      data[i + 3] = 255;
+    }
+    source = { width, height, data };
+  } else {
+    source = checkedPng(input, loadModule('pngjs').PNG);
+  }
+  const { data } = composeCover(source);
+  for (let i = 0; i < data.length; i += 4) {
+    const red = data[i]; data[i] = data[i + 2]; data[i + 2] = red;
+  }
+  return data;
+}
+module.exports = { fitWallpaperPng, fitEngineeringPng, cropRedPacketCoverPng, prepareRedPacketCoverBitmap, wallpaperGeometry };

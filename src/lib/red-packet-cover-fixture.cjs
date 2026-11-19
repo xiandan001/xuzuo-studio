@@ -1,0 +1,2 @@
+// Valid solid-colour 957×1278 JPEG. Deflated here to keep the test fixture small.
+module.exports = require('node:zlib').inflateSync(Buffer.from('eNrtzk1qAkEQBeCqtE5POz3ENpOg0v5GGAWRZDKQBBQXgqCn8g65Qe4huPAQajaexM7oTl259n21ezyqym3cnorz6WxKzEScDbk/mpDvedLL+1JKpfyCjkIdBLpSenqMatVGvVa1ttkZxM12/9Xa7mev//aepmkj/h59JcPBR5ocl7BSSge6HIblpGVbyc3cioyfO4il4DY9GBaG3ZqeT6+e8bI4Kl6mlKUvzJftvDy2zXV7R1pwdkcYGtMPh78LAgAAAAAAAAAAAAAAAID7INz2H8V8LLM=', 'base64'));

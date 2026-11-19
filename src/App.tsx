@@ -584,7 +584,7 @@ export default function App() {
       try { steps = illustratedDocumentSteps(firstStep, tail, parameters.documentImages, configuration, parameters.input || instruction); }
       catch (cause) { notify(cause instanceof Error ? cause.message : '图文工作流配置未完成。', 'error'); return; }
     }
-    const draft: WorkflowDraft = { name: redPacketCover ? `${project.name} · ${WECHAT_RED_PACKET_COVER}` : existing?.name || `${project.name} · ${action}`, description: redPacketCover ? '固定导出 957 × 1278 JPEG，原图保存在项目。' : parameters?.documentImages ? '完整正文与独立插图自动排版，成品可继续编辑。配图和正文调用分别记费。' : '由工作台创建，可编辑步骤、模型和提示词后重复使用。', outputKind: project.kind, businessCategoryId: project.businessCategoryId, steps };
+    const draft: WorkflowDraft = { ...(redPacketCover ? { imagePreset: WECHAT_RED_PACKET_COVER } : {}), name: redPacketCover ? `${project.name} · ${WECHAT_RED_PACKET_COVER}` : existing?.name || `${project.name} · ${action}`, description: redPacketCover ? '固定导出 957 × 1278 JPEG，原图保存在项目。' : parameters?.documentImages ? '完整正文与独立插图自动排版，成品可继续编辑。配图和正文调用分别记费。' : '由工作台创建，可编辑步骤、模型和提示词后重复使用。', outputKind: project.kind, businessCategoryId: project.businessCategoryId, steps };
     if (!configuration.saveWorkflow(draft, id, { silent: true })) return;
     rememberProject(projectId, workspaceId);
     const previousImages = projectImageContent(workflowRunner.runs, projectId, workflowRunner.trashedArtifacts).images.slice(0, 1).map(item => item.id);

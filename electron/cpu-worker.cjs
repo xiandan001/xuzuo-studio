@@ -10,6 +10,7 @@ async function run() {
   if (workerData.task === 'bead-export') return require('./bead-exports.cjs').createBeadExport(workerData.input);
   if (workerData.task === 'bead-bundle') return require('./bead-exports.cjs').createBeadBundle(workerData.input);
   if (workerData.task === 'red-packet-cover') return require('./wallpaper-worker.cjs').cropRedPacketCoverPng(workerData.input);
+  if (workerData.task === 'red-packet-cover-bitmap') return require('./wallpaper-worker.cjs').prepareRedPacketCoverBitmap(workerData.input);
   if (workerData.task === 'wallpaper') return require('./wallpaper-worker.cjs').fitWallpaperPng(workerData.input);
   if (workerData.task === 'engineering') return require('./wallpaper-worker.cjs').fitEngineeringPng(workerData.input);
   if (workerData.task === 'reference-text') return require('./reference-text.cjs').extractReferenceText(workerData.input);
@@ -22,4 +23,4 @@ async function run() {
   }
   throw new Error('Unsupported CPU task');
 }
-run().then(result => parentPort.postMessage({ result }), error => parentPort.postMessage({ error: error.message || '后台文件处理未完成。' }));
+run().then(result => parentPort.postMessage({ result }, workerData.task === 'red-packet-cover-bitmap' ? [result.buffer] : []), error => parentPort.postMessage({ error: error.message || '后台文件处理未完成。' }));

@@ -26,12 +26,14 @@ try {
   console.log(JSON.stringify({ reused: true, version })); process.exit(0);
 } catch { /* A fresh npm package defers the Electron binary download. */ }
 await assert.rejects(fsp.lstat(dist), { code: 'ENOENT' });
-const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'xuzuo-locked-runtime-preparation' };
+const userAgent = 'xuzuo-locked-runtime-preparation';
+const githubHeaders = { Accept: 'application/vnd.github+json', 'User-Agent': userAgent };
+if (process.env.GITHUB_TOKEN) githubHeaders.Authorization = 'Bearer ' + process.env.GITHUB_TOKEN;
 const networkCodes = ['DOWNLOAD_HTTP_ERROR', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'];
 const unavailable = error => ['AbortError', 'TimeoutError'].includes(error.name) || networkCodes.includes(error.code || error.cause?.code);
 let asset;
 try {
-  const response = await fetch(`https://api.github.com/repos/electron/electron/releases/tags/v${version}`, { headers, signal: AbortSignal.timeout(30000) });
+  const response = await fetch(`https://api.github.com/repos/electron/electron/releases/tags/v${version}`, { headers: githubHeaders, redirect: 'manual', signal: AbortSignal.timeout(30000) });
   if (response.status !== 200) { await response.body?.cancel(); throw Object.assign(Error('Official metadata HTTP ' + response.status), { code: 'DOWNLOAD_HTTP_ERROR' }); }
   const release = await response.json(); assert.equal(release.tag_name, 'v' + version);
   const matches = release.assets.filter(asset => asset.name === name); assert.equal(matches.length, 1); asset = matches[0];
@@ -45,7 +47,7 @@ async function downloadArchive(initial, hosts, filename) {
   const signal = AbortSignal.timeout(180000); let url = new URL(initial), response;
   for (let hop = 0; ; hop++) {
     assert.equal(url.protocol, 'https:'); assert(!url.username && !url.password && !url.port); assert(hosts.includes(url.hostname));
-    response = await fetch(url, { redirect: 'manual', signal, headers: { 'User-Agent': headers['User-Agent'] } });
+    response = await fetch(url, { redirect: 'manual', signal, headers: { 'User-Agent': userAgent } });
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     assert(hop < 3); url = new URL(response.headers.get('location'), url); await response.body?.cancel();
   }
@@ -58,15 +60,21 @@ async function downloadArchive(initial, hosts, filename) {
 let archive = path.join(temporary, name), bytes, downloadOrigin = 'github-api';
 try {
   if (!asset) throw Object.assign(Error('Official metadata is unavailable'), { code: 'DOWNLOAD_HTTP_ERROR' });
-  const response = await fetch(`https://api.github.com/repos/electron/electron/releases/assets/${asset.id}?download=${randomUUID()}`, { redirect: 'manual', headers: { ...headers, Accept: 'application/octet-stream', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(30000) });
+  const response = await fetch(`https://api.github.com/repos/electron/electron/releases/assets/${asset.id}?download=${randomUUID()}`, { redirect: 'manual', headers: { ...githubHeaders, Accept: 'application/octet-stream', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(30000) });
   if (response.status !== 302) { await response.body?.cancel(); throw Object.assign(Error('Official asset redirect HTTP ' + response.status), { code: 'DOWNLOAD_HTTP_ERROR' }); }
   const location = response.headers.get('location'); assert(typeof location === 'string' && location); await response.body?.cancel();
   bytes = await downloadArchive(location, ['release-assets.githubusercontent.com', 'objects.githubusercontent.com'], archive);
 } catch (error) {
   if (!unavailable(error)) throw error;
   console.log(JSON.stringify({ officialDownloadUnavailable: true, reason: error.message }));
-  downloadOrigin = 'npmmirror-checksum-verified'; archive = path.join(temporary, 'mirror-' + name);
-  bytes = await downloadArchive(`https://npmmirror.com/mirrors/electron/${version}/${name}`, ['npmmirror.com', 'cdn.npmmirror.com'], archive);
+  downloadOrigin = 'github-release'; archive = path.join(temporary, 'release-' + name);
+  try {
+    bytes = await downloadArchive(`https://github.com/electron/electron/releases/download/v${version}/${name}`, ['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'], archive);
+  } catch (releaseError) {
+    if (!unavailable(releaseError)) throw releaseError;
+    downloadOrigin = 'npmmirror-checksum-verified'; archive = path.join(temporary, 'mirror-' + name);
+    bytes = await downloadArchive(`https://npmmirror.com/mirrors/electron/${version}/${name}`, ['npmmirror.com', 'cdn.npmmirror.com'], archive);
+  }
 }
 const runtime = path.join(temporary, 'runtime'); await fsp.mkdir(runtime);
 await require('@electron-internal/extract-zip').extract(archive, { dir: runtime });

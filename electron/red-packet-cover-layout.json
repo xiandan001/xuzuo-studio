@@ -1,0 +1,8 @@
+{
+  "canvas": { "width": 957, "height": 1278 },
+  "identity": { "left": 0.16, "top": 0.20, "right": 0.84, "bottom": 0.45 },
+  "titleBand": { "top": 0.035, "bottom": 0.175 },
+  "protectedBand": { "top": 0.48, "bottom": 0.84 },
+  "button": { "centerX": 0.5, "centerY": 0.985, "diameterRatio": 0.32 },
+  "cornerDepth": 0.10
+}

@@ -205,6 +205,7 @@ contextBridge.exposeInMainWorld('desktop', {
     exportRecovery: input => ipcRenderer.invoke('runtime:bead-export-recovery', input),
   },
   runtime: {
+    prepareRedPacketCover: input => ipcRenderer.invoke('runtime:prepare-red-packet-cover', input),
     exportRedPacketCover: input => ipcRenderer.invoke('runtime:export-red-packet-cover', input),
     exportWallpaper4K: input => ipcRenderer.invoke('runtime:export-wallpaper-4k', input),
     saveImageMarkup: input => ipcRenderer.invoke('runtime:save-image-markup', input),

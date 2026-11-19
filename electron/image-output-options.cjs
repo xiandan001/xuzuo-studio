@@ -37,4 +37,4 @@ function imageOutputFields(options = {}) {
   return fields;
 }
 
-module.exports = { imageOptionsError, imageOutputFields };
+module.exports = { imageOptionsError, imageOutputFields, isModernImage: id => IMAGE25.test(id) || IMAGE26.test(id) };

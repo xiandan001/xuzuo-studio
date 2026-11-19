@@ -292,6 +292,14 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         return result;
       },
     } : {}),
+    ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.prepareRedPacketCover === 'function' ? {
+      async prepareRedPacketCover(input: import('../live-types').RedPacketCoverSource) {
+        const bridge = window.desktop?.runtime;
+        if (!bridge?.prepareRedPacketCover) throw Error('当前桌面后台不支持红包封面预览。');
+        if (optionsRef.current.projects.some(project => project.id === input.projectId && project.purgedAt)) throw Error('项目已永久移除，无法准备封面。');
+        return bridge.prepareRedPacketCover(input);
+      },
+    } : {}),
     ...(typeof window !== 'undefined' && typeof window.desktop?.runtime?.exportRedPacketCover === 'function' ? {
       async exportRedPacketCover(input: import('../live-types').RedPacketCoverExportInput) {
         const bridge = window.desktop?.runtime;

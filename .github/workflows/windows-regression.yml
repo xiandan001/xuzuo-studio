@@ -35,6 +35,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked Electron runtime
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             node scripts/prepare-ci-electron.mjs
@@ -199,7 +201,7 @@ jobs:
             ${{ runner.temp }}/xuzuo-chromium-close-*/report.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/failure.json
             ${{ runner.temp }}/xuzuo-chromium-close-*/deadline-failure.json
-            outputs/release-v2.12.10/full-install-lifecycle.json
+            outputs/release-v2.12.11/full-install-lifecycle.json
       - name: Retain verified internal installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -209,8 +211,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            outputs/release-v2.12.10/Xuzuo-Studio-Setup-2.12.10.exe
-            outputs/release-v2.12.10/Xuzuo-Studio-Setup-2.12.10.exe.blockmap
-            outputs/release-v2.12.10/Xuzuo-Studio-Setup-2.12.10.manifest.json
-            outputs/release-v2.12.10/latest.yml
-            outputs/release-v2.12.10/package-verification.json
+            outputs/release-v2.12.11/Xuzuo-Studio-Setup-2.12.11.exe
+            outputs/release-v2.12.11/Xuzuo-Studio-Setup-2.12.11.exe.blockmap
+            outputs/release-v2.12.11/Xuzuo-Studio-Setup-2.12.11.manifest.json
+            outputs/release-v2.12.11/latest.yml
+            outputs/release-v2.12.11/package-verification.json

@@ -7,6 +7,9 @@ const { spreadsheetDeliveryChecks } = require('./spreadsheet-delivery.cjs');
 const { wallpaperTargetError } = require('./wallpaper-export.cjs');
 const { engineeringSourceError, readEngineeringSource } = require('./engineering-export.cjs');
 const { imageType, rasterDimensions } = require('./image-output-formats.cjs');
+const { isRedPacketCoverWorkflow } = require('./wechat-red-packet-cover.cjs');
+const { currentCoverFiles, coverProof } = require('./red-packet-cover-delivery.cjs');
+const { canvas: coverCanvas } = require('./red-packet-cover-layout.json');
 const { imageExportSizeError, singleImageExportSourceStepId, singleProducedPng, isRunPng } = require('./resized-image-export.cjs');
 const MIME = { word: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ppt: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', excel: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -41,6 +44,10 @@ function completedOutputs(runs, projectId, kind) {
   return runs.filter(run => run.mode === 'live' && run.projectId === projectId && !['automation-plan', 'business-assist'].includes(run.purpose || '')).flatMap(run => run.attempts.flatMap(attempt => {
     const step = run.snapshot.steps.find(item => item.id === attempt.stepId);
     const exporter = run.snapshot.steps.findLast(item => item.enabled && item.kind === 'export');
+    if (kind === 'image' && isRedPacketCoverWorkflow(run.snapshot, projectId)) {
+      const artifacts = currentCoverFiles(run, exporter, attempt);
+      return artifacts.length ? [{ run, attempt, step, artifacts }] : [];
+    }
     const imageSources = Array.isArray(exporter?.contentSourceStepIds) ? exporter.contentSourceStepIds : exporter?.contentSourceStepId ? [exporter.contentSourceStepId] : undefined;
     const resized = exporter?.imageExportSize !== undefined;
     const currentImageAttempt = !resized && !Array.isArray(exporter?.contentSourceStepIds) || attempt === run.attempts.findLast(item => item.stepId === attempt.stepId && item.status === 'complete');
@@ -94,6 +101,12 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
       if (input.kind === 'image') {
         const owner = selectedOutputs.find(item => item.artifacts.some(artifact => artifact.id === id));
         let dimensions = inspectImage ? await inspectImage(bytes, file.mimeType) : {};
+        const cover = owner && coverProof(owner.run, owner.attempt, file);
+        if (cover) {
+          const actual = rasterDimensions(bytes);
+          if (imageType(bytes).mimeType !== 'image/jpeg' || actual.width !== coverCanvas.width || actual.height !== coverCanvas.height || files.at(-1).sha256 !== cover.sha256 || bytes.length !== cover.bytes) throw Error('红包封面实际文件与本次交付记录不一致，请重新导出 JPEG。');
+          dimensions = { ...dimensions, ...actual };
+        }
         const resized = owner?.step.imageExportSize;
         const target = resized ?? (owner?.step.engineeringReferenceId !== undefined ? owner.attempt.engineeringSource : owner?.step.wallpaperTarget);
         if (target && (file.mimeType !== 'image/png' || file.runId !== owner.run.id)) throw Error('本地适配成品类型或来源发生变化，请重新读取本次导出。');
@@ -104,7 +117,7 @@ function createDeliverySource({ workspaceStorage, artifactStore, liveEngine, edi
         const animation = owner?.step.kind === 'animation-compose' ? owner.step.animation : undefined;
         const resizeSource = resized ? owner.run.snapshot.steps.find(step => step.id === singleImageExportSourceStepId(owner.step)) : undefined;
         const requiresTransparency = resized ? resizeSource?.imageBackground === 'transparent' : !target && (animation ? animation.background === 'transparent' : owner?.step.imageBackground === 'transparent');
-        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: animation ? `${animation.width}x${animation.height}` : target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency });
+        const checks = imageDeliveryChecks({ ...dimensions, mimeType: file.mimeType, artifactAvailable: true, expectedSize: cover ? `${coverCanvas.width}x${coverCanvas.height}` : animation ? `${animation.width}x${animation.height}` : target ? `${target.width}x${target.height}` : owner?.step.imageSize, requiresTransparency });
         imageChecks.push(...checks.filter(check => check.status !== 'manual').map(check => ({ ...check, id: `${check.id}-${id.slice(0, 8)}`, label: `${file.name.slice(0, 80)} · ${check.label}` })));
         for (const check of checks.filter(check => check.status === 'manual')) if (!imageChecks.some(item => item.id === check.id)) imageChecks.push(check);
       }

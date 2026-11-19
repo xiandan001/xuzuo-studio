@@ -1,4 +1,5 @@
 const { ModelRuntimeError, endpoint, failure, checkedUrl, ensureActive, progress, request: httpRequest, jsonRequest, readLimited, normalizedUsage } = require('./provider-http.cjs');
+const { WECHAT_RED_PACKET_COVER, redPacketCoverProviderPrompt } = require('./wechat-red-packet-cover.cjs');
 const { combinedText } = require('./provider-text.cjs');
 const { imageType, validateGif } = require('./image-output-formats.cjs');
 const { imageOptionsError, imageOutputFields } = require('./image-output-options.cjs');
@@ -35,7 +36,7 @@ function mediaFields(request, files, context) {
   const prompt = combinedText(request, files);
   if (!prompt) throw failure('EMPTY_INPUT', '图片步骤需要填写画面描述或修改要求。', context);
   const count = request.options.count || 1;
-  const fields = { model: request.model.modelId, prompt, n: count, ...imageOutputFields(request.options) };
+  const fields = { model: request.model.modelId, prompt: request.imagePreset === WECHAT_RED_PACKET_COVER ? redPacketCoverProviderPrompt(prompt) : prompt, n: count, ...imageOutputFields(request.options) };
   if (request.options.size) fields.size = request.options.size;
   if (request.options.background) fields.background = request.options.background;
   if (request.kind === 'image-editing' && !images.length) throw failure('MISSING_IMAGE', '图片编辑步骤需要至少一张本机参考图片。', context);

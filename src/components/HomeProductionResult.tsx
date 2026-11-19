@@ -8,6 +8,8 @@ import { homeCreationArtifacts, homeCreationDocumentSource, homeCreationPreviewU
 import { runCostRecords, summarizeCosts } from '../lib/cost-display';
 import { workflowPublicError } from '../lib/studio-run';
 import { workflowReviewState } from '../lib/workflow-review';
+import { usePreparedRedPacketCover } from '../hooks/usePreparedRedPacketCover';
+import { RedPacketCoverPreview, coverFileSize } from './RedPacketCoverPreview';
 import { WECHAT_RED_PACKET_COVER } from '../lib/wechat-red-packet-cover';
 import { CostTotal } from './CostAmount';
 import { HomeResultFilePicker } from './HomeResultFilePicker';
@@ -94,11 +96,14 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const file = files.find(item => item.id === selectedId) || files[0] || documentSource;
   const cover = kind === 'image' && actual.snapshot.imagePreset === WECHAT_RED_PACKET_COVER;
   const project = props.projects.find(item => item.id === run.projectId && item.workspaceId === props.workspaceId && !item.trashedAt && !item.purgedAt);
+  const reviewState = workflowReviewState(actual);
+  const finished = actual.status === 'complete' || reviewState === 'manual';
+  const preparation = usePreparedRedPacketCover(props.workflowRunner, run.projectId, project && run.workspaceId === props.workspaceId && cover && visible && finished ? file : undefined);
   if (!project || run.workspaceId !== props.workspaceId || run.purpose === 'automation-plan' || run.mode !== 'live') return null;
   const Icon = icons[kind], progress = homeCreationProgress(actual);
-  const reviewState = workflowReviewState(actual);
+  const originalId = preparation.file?.originalArtifactId;
+  const coverOriginal = originalId ? actual.attempts.flatMap(attempt => attempt.artifacts || []).find(item => item.id === originalId && !item.unavailable && !item.trashedAt && !trashed.has(item.id)) : file;
   const blocked = reviewState === 'quality-failed' || reviewState === 'blocked';
-  const finished = actual.status === 'complete' || reviewState === 'manual';
   const needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
   const openSteps = () => props.onOpenTask ? props.onOpenTask(actual.id, project.id) : props.navigate('activity', project.id);
   async function save() {
@@ -106,9 +111,9 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
     const requested = currentScope.current; pending.current = true; setSaving(true); setError('');
     try {
       const bridge = runner.current;
-      if (cover && !bridge.exportRedPacketCover) throw Error('请在桌面版导出红包封面 JPEG。');
-      const result = cover ? await bridge.exportRedPacketCover!({ projectId: run.projectId, sourceArtifactId: file.id }) : await bridge.saveArtifact(file.id);
-      if (currentScope.current === requested && result.saved) props.notify(cover ? '红包封面已另存为 957 × 1278 JPEG。' : '实际生成文件已另存，历史版本和费用保持。');
+      if (cover && (!bridge.exportRedPacketCover || !preparation.file)) throw Error('请先等待上传封面准备完成。');
+      const result = cover ? await bridge.exportRedPacketCover!({ projectId: run.projectId, sourceArtifactId: file.id, preparedSha256: preparation.file!.sha256, sourceSha256: preparation.file!.sourceSha256 }) : await bridge.saveArtifact(file.id);
+      if (currentScope.current === requested && result.saved) props.notify(cover ? `封面已导出 · ${preparation.file!.width} × ${preparation.file!.height} · ${coverFileSize(preparation.file!.bytes)}` : '实际生成文件已另存，历史版本和费用保持。');
     }
     catch (cause) { if (currentScope.current === requested) setError(workflowPublicError(cause, '文件未能另存，项目内原文件仍保留。')); }
     finally { pending.current = false; if (currentScope.current === requested) setSaving(false); }
@@ -128,8 +133,8 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
     {needsHelp && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
     {reviewState === 'manual' && <div className="creation-production-progress"><button type="button" className="btn btn-primary" onClick={openSteps}>检查并交付<ArrowRight size={14} /></button></div>}
     {file && blocked && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
-    {file && finished && <><HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出红包封面 JPEG' : `导出${names[kind]}`}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}
+    {file && finished && <>{cover ? <RedPacketCoverPreview key={file.id} preparation={preparation} original={coverOriginal && <HomeArtifactPreview file={coverOriginal} kind={kind} props={props} />} /> : <HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />}{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving || cover && !preparation.file} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出微信封面 JPG' : `导出${names[kind]}`}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}
     {finished && !file && <div className="creation-production-empty"><p>这次制作尚无可用的{names[kind]}成品。已保存的步骤、源内容和费用仍保留。</p><button type="button" className="btn btn-secondary" onClick={() => props.navigate('activity', project.id)}>查看结果与步骤</button></div>}
-    {error && <p className="home-plan-error" role="alert">{error}</p>}
+    {error && <p className="home-plan-error" role="alert">{error}{cover && <button type="button" className="text-button" disabled={saving} onClick={() => { setError(''); preparation.retry(); }}>刷新封面</button>}</p>}
   </section>;
 }

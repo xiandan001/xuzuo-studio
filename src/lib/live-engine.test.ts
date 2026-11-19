@@ -1,5 +1,6 @@
 import { readLiveHistory, writeLiveHistory } from './live-history-test-helper';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -41,7 +42,7 @@ async function waitFor(engine: Engine, predicate: (snapshot: LiveSnapshot) => bo
   while (Date.now() < deadline) { const snapshot = await engine.snapshot(); if (predicate(snapshot)) return snapshot; await new Promise(resolve => setTimeout(resolve, 10)); }
   throw new Error('engine deadline exceeded');
 }
-async function fixture(executeOverride?: (input: ExecuteRequest, options: { signal: AbortSignal }, standard: () => Promise<ModelResult>) => Promise<ModelResult>, fileSystem?: Record<string, unknown>) {
+async function fixture(executeOverride?: (input: ExecuteRequest, options: { signal: AbortSignal }, standard: () => Promise<ModelResult>) => Promise<ModelResult>, fileSystem?: Record<string, unknown>, archiveCover = false) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xuzuo-live-tests-'));
   const store = createArtifactStore({ directory: path.join(directory, 'artifacts'), loadModule: dependencies });
   const calls: ExecuteRequest[] = [];
@@ -50,7 +51,12 @@ async function fixture(executeOverride?: (input: ExecuteRequest, options: { sign
     const standard = async (): Promise<ModelResult> => input.kind === 'text' ? { text: '# 茶园项目\n这是真实测试服务返回的正文，不是内置示例。', artifacts: [await store.write({ name: '正文.txt', mimeType: 'text/plain', text: '# 茶园项目\n这是真实测试服务返回的正文，不是内置示例。', runId: input.runId, projectId: input.projectId })], usage: { inputTokens: 100, outputTokens: 50 } } : { text: '图像服务返回的实际图片', artifacts: [await store.write({ name: '配图.png', mimeType: 'image/png', buffer: PNG, runId: input.runId, projectId: input.projectId })], usage: { images: 1 } };
     return executeOverride ? executeOverride(input, options, standard) : standard();
   } };
-  const options = { directory, credentials: { list: async () => [{ id: 'credential', connectionId: 'connection', name: '测试凭证', enabled: true }] }, artifactStore: store, modelRuntime: runtime, ...(fileSystem ? { fileSystem } : {}) };
+  const options = { directory, credentials: { list: async () => [{ id: 'credential', connectionId: 'connection', name: '测试凭证', enabled: true }] }, artifactStore: store, modelRuntime: runtime, ...(fileSystem ? { fileSystem } : {}), ...(archiveCover ? {
+    archiveRedPacketCover: require('../../electron/red-packet-cover-export.cjs').createRedPacketCoverExporter({
+      readArtifact: store.read, writeDelivery: store.write, composeBitmap: async () => Buffer.alloc(957 * 1278 * 4),
+      nativeImage: { createFromBitmap: () => ({ isEmpty: () => false, toJPEG: () => require('./red-packet-cover-fixture.cjs') }) },
+    }).archive,
+  } : {}) };
   const engine = createLiveWorkflowEngine(options);
   return { directory, store, calls, engine, options };
 }
@@ -76,6 +82,35 @@ async function blockedByStepLimit(fileSystem?: Record<string, unknown>) {
   return { ...f, input, run, failed };
 }
 describe('真实工作流状态、传递、费用与交付', () => {
+  it('旧版红包工具、实际成品精修与明确重试沿用结构化用途，普通参考图保持通用', async () => {
+    const f = await fixture(undefined, undefined, true);
+    f.options.modelRuntime.supports = (_connection, kind) => ['image-generation', 'image-editing'].includes(kind);
+    const base = request(); base.project.kind = base.workflow.outputKind = 'image';
+    base.models[1].modelId = 'gpt-image-2.6-sunburst'; base.models[1].capabilities.push('image-editing');
+    base.workflow.id = 'quick-project-image-generation-red-packet-cover';
+    base.workflow.steps = [{ ...base.workflow.steps[1], inputSource: 'project', prompt: '重新排版为横向，按钮上写祝福',
+      count: 4, imageSize: '1536x1024', imageOutputFormat: 'gif', imageFrameCount: 9, imageBackground: 'transparent' }];
+    const first = await f.engine.start(base);
+    const done = await waitFor(f.engine, s => s.runs.some(run => run.id === first.id && run.status === 'complete'));
+    const source = done.runs.find(run => run.id === first.id)!.attempts[0].artifacts![0];
+    const file = await f.store.read(source.id);
+    const edit = structuredClone(base); edit.workflow.id = 'ordinary-edit'; edit.attachmentIds = [file.id];
+    edit.workflow.steps[0] = { ...edit.workflow.steps[0], kind: 'image-editing', count: 1, imageSize: 'auto', imageFrameCount: undefined, imageOutputFormat: 'png' };
+    edit.workflow.sourceArtifactTarget = { id: source.id, sha256: createHash('sha256').update(file.buffer).digest('hex') };
+    const edited = await f.engine.start(edit);
+    await waitFor(f.engine, s => s.runs.some(run => run.id === edited.id && run.status === 'complete'));
+    await f.engine.control({ id: edited.id, action: 'retry', stepId: edit.workflow.steps[0].id });
+    await waitFor(f.engine, s => s.runs.some(run => run.id === edited.id && run.status === 'complete' && run.attempts.length === 4));
+    expect(edited.snapshot.imagePreset).toBe('微信红包封面');
+    for (const call of f.calls) expect(call).toMatchObject({ imagePreset: '微信红包封面', options: { count: 1, size: '960x1280', background: 'opaque', outputFormat: 'png' } });
+    const ordinary = structuredClone(edit); delete ordinary.workflow.sourceArtifactTarget;
+    const poster = await f.engine.start(ordinary);
+    await waitFor(f.engine, s => s.runs.some(run => run.id === poster.id && run.status === 'complete'));
+    expect(f.calls.at(-1)).toMatchObject({ options: { size: 'auto', background: 'transparent' } });
+    expect(poster.snapshot.imagePreset).toBeUndefined(); expect(f.calls).toHaveLength(4);
+    await f.engine.shutdown();
+  });
+
   it('实际结果传到下游，人工确认后导出真正DOCX，重复快照不重复调用', async () => {
     const f = await fixture(); const run = await f.engine.start(request());
     const waiting = await waitFor(f.engine, snapshot => snapshot.runs[0]?.status === 'waiting-review');

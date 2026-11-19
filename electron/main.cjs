@@ -93,6 +93,15 @@ function registerRuntime(credentials) {
   let projectPurge, beadMarket, marketSessions, animationService, backupScheduler, foregroundBackupReads = 0;
   const foregroundBackupOperations = new Map();
   const artifactStore = createArtifactStore({ directory: path.join(app.getPath('userData'), 'artifacts-v1'), workspaceStorage, renderOffice: input => cpuTasks.run('office', input), fitWallpaper: (input, options) => cpuTasks.run('wallpaper', input, options), fitEngineering: (input, options) => cpuTasks.run('engineering', input, options), convertImage: buffer => { const image = nativeImage.createFromBuffer(buffer); if (image.isEmpty()) throw new Error('这张图像无法转换为 Office 所需的 PNG，请先检查原文件。'); return image.toPNG(); } });
+  const exportRedPacketCover = require('./red-packet-cover-export.cjs').createRedPacketCoverExporter({
+    readArtifact: id => artifactStore.read(id),
+    composeBitmap: input => cpuTasks.run('red-packet-cover-bitmap', input, { priority: 'interactive' }),
+    nativeImage,
+    readDeliveryProof: file => liveEngine.coverDeliveryProof(file),
+    writeDelivery: (input, sourceId) => artifactStore.writePreparedCover(input, sourceId),
+    chooseSave: options => dialog.showSaveDialog(mainWindow, options),
+    writeSave: writeDialogFile,
+  });
   const thumbnails = createImageThumbnails({ directory: path.join(app.getPath('userData'), 'thumbnail-cache-v1'), nativeImage });
   workspaceStorage.setArtifactMigrator((projectId, destination, options) => artifactStore.migrateProject(projectId, destination, options));
   const editorStore = createEditorStore({ workspaceStorage, artifactStore });
@@ -107,7 +116,7 @@ function registerRuntime(credentials) {
   const modelRuntime = createModelRuntime({ credentialStore: credentials, artifactStore, fetchImpl, normalizeRasterReference, directory: app.getPath('userData'), getAvailableRuns: async projectIds => (await liveEngine.snapshot(undefined, { summaryOnly: true, projectIds })).runs });
   const fxRates = createFxRateService({ directory: app.getPath('userData'), fetchImpl });
   chatService = require('./chat-service.cjs').createChatService({ directory: app.getPath('userData'), credentialStore: credentials, fetchImpl, fxRates, getQueuedBindings: async () => { const liveCredentials = await credentials.list(); return { ...await automationCenter.queuedBindings(), credentials: liveCredentials }; }, readAsset: async input => input.builtin ? builtinAssets.read({ id: input.assetId }) : assets.read({ workspaceId: input.workspaceId, id: input.assetId }), readArtifact: async input => { const location = await editorProject(input.projectId); if (location.workspaceId !== input.workspaceId) throw Error('文件不属于当前工作区。'); const file = await artifactStore.read(input.artifactId); if (file.projectId !== input.projectId) throw Error('文件不属于选定项目。'); return file; }, documentSourceForArtifact: async input => { const source = await documentArtifactPreview(input.artifact); return source ? { documentSource: source.text, sourceRevision: source.sourceRevision } : undefined; }, readRun: id => liveEngine.runDetail(id), extractText: file => cpuTasks.run('reference-text', { buffer: file.buffer, mimeType: file.mimeType, name: file.name }), ...require('./chat-project-attachments.cjs').createChatProjectAttachments(artifactStore), previewImage: file => thumbnails.getFrom(async () => ({ key: 'chat:' + file.sha256, artifact: { id: file.id, name: file.name, mimeType: file.mimeType, bytes: file.bytes, kind: 'image', createdAt: file.createdAt }, read: async () => file })), onChanged: value => { try { mainWindow?.webContents.send('chat:changed', value); } catch { /* Conversations persist independently of the renderer. */ } } });
-  liveEngine = createLiveWorkflowEngine({ directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, readReferenceText: file => cpuTasks.run('reference-text', { buffer: file.buffer, mimeType: file.mimeType, name: file.name }), readBeadDocument: projectId => beadStore.read({ projectId }), readAnimationDocument: projectId => animationStore.read({ projectId }), localAnimationStep: async input => animationService.executeWorkflowStep(input), localAnimationStatus: () => animationService.status(), assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
+  liveEngine = createLiveWorkflowEngine({ archiveRedPacketCover: exportRedPacketCover.archive, directory: app.getPath('userData'), credentials, artifactStore, modelRuntime, fxRates, readReferenceText: file => cpuTasks.run('reference-text', { buffer: file.buffer, mimeType: file.mimeType, name: file.name }), readBeadDocument: projectId => beadStore.read({ projectId }), readAnimationDocument: projectId => animationStore.read({ projectId }), localAnimationStep: async input => animationService.executeWorkflowStep(input), localAnimationStatus: () => animationService.status(), assertProjectAdmission: async projectId => { await workspaceStorage.assertNotPurged(projectId); if (relocatingProjects.has(projectId)) throw Error('项目目录正在处理，未开始请求。'); } });
   const documentArtifactPreview = createDocumentArtifactPreview({ liveEngine, editorStore, spreadsheetStore });
   const projectTemplates = require('./project-templates.cjs').createProjectTemplates({ directory: app.getPath('userData'), workspaceStorage, artifactStore, editorStore, spreadsheetStore, animationStore, commerceImages: () => commerceImages, readDocumentArtifact: artifact => documentArtifactPreview(artifact), onCopied: require('./creation-service-adapters.cjs').copiedDocumentExport({ liveEngine, editorStore, spreadsheetStore }) });
   automaticBilling = createAutomaticBilling({ needsRecalculation: async () => !runtimeClosing && pendingBilling([...(await liveEngine.snapshot(undefined, { summaryOnly: true })).ledger, ...await chatService.ledger()]), recalculate: async options => { await liveEngine.recalculateCosts(options); await chatService.recalculateCosts(options); } });
@@ -495,12 +504,10 @@ function registerRuntime(credentials) {
     await workspaceStorage.assertProject(projectId, location.workspaceId); return location;
   };
   for (const [name, method] of [['source', 'source'], ['read', 'read'], ['history', 'history'], ['restore', 'restore'], ['generate', 'generate'], ['save', 'save'], ['export', 'export'], ['import-palette', 'importPalette'], ['import-document', 'importDocument'], ['cancel', 'cancel'], ['export-recovery', 'exportRecovery']]) handle(`bead-${name}`, input => ['generate', 'save', 'restore', 'export', 'import-document'].includes(name) ? withProjectWrite(input?.projectId, () => beads[method](input)) : beads[method](input));
-  const exportRedPacketCover = require('./red-packet-cover-export.cjs').createRedPacketCoverExporter({
-    readArtifact: id => artifactStore.read(id),
-    cropPng: input => cpuTasks.run('red-packet-cover', input, { priority: 'interactive' }),
-    nativeImage,
-    chooseSave: options => dialog.showSaveDialog(mainWindow, options),
-    writeSave: writeDialogFile,
+  handle('prepare-red-packet-cover', async input => {
+    await editorProject(input?.projectId);
+    assertFilesReady({ project: { id: input.projectId }, attachmentIds: [input.sourceArtifactId] });
+    return exportRedPacketCover.prepare(input);
   });
   handle('export-red-packet-cover', input => withProjectWrite(input?.projectId, async () => {
     await editorProject(input.projectId);

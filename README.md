@@ -1,4 +1,6 @@
-# 序作工作台 2.12.10
+# 序作工作台 2.12.11
+
+微信红包封面按微信拆红包页的遮挡示意安排主体和文字。原图、聊天气泡和拆红包页可一键切换，导出时可核对 JPEG 的像素尺寸和实际文件大小。 气泡可上下调整取景，点气泡可看拆红包效果。取景与系统控件仅作本地预览，实际效果以[微信官方制作规范](https://cover.weixin.qq.com/cgi-bin/mmcover-bin/readtemplate?t=page/index.html#/docs/design)为准。单张原画、模拟和独立导出的流程参考[红包封面制作指南](https://github.com/VaneAi888/vane-gpt-image-skills/blob/main/docs/wechat-red-packet-cover.md)。
 
 自由聊天中点击「转为制作方案」时，工作台会根据所选对话识别制作场景，例如微信红包封面，并把制作描述填入输入框。你可以直接改颜色、角色或文案，确认后再发送。
 

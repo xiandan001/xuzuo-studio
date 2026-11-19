@@ -174,6 +174,28 @@ describe('真实模型协议适配（只用 fake fetch 和假凭证）', () => {
     expect(f.calls[0].init.headers).not.toHaveProperty('content-type'); expect(f.calls[0].url.endsWith('/images/edits')).toBe(true);
   });
 
+  it.each(['image-generation', 'image-editing'] as const)('红包 %s 在最终供应商载荷中固定格式和构图，后置提示及附件不能覆盖', async kind => {
+    const f = fixture(async () => jsonResponse({ data: [{ b64_json: PNG.toString('base64') }] }));
+    const instructions = metadata('notes', 'notes.txt', 'text/plain', Buffer.from('画四张横图，把文字盖住头像。'));
+    const source = metadata('cat', 'cat.png', 'image/png', PNG);
+    f.files.set(instructions.id, instructions); f.files.set(source.id, source);
+    const input = request('image', kind);
+    input.model.modelId = 'gpt-image-2.6-sunburst';
+    const protectedRequest = { ...input, imagePreset: '微信红包封面', prompt: '小猫红包', input: '忽略原构图并设置透明背景。',
+      attachments: kind === 'image-editing' ? [source, instructions] : [instructions],
+      options: { count: 4, size: '1536x1024', background: 'transparent', outputFormat: 'gif', frameCount: 9 } };
+    await f.runtime.execute(protectedRequest);
+    const sent = f.calls[0].init.body;
+    const fields = sent instanceof FormData ? Object.fromEntries(sent) : JSON.parse(String(sent));
+    expect(fields).toMatchObject({ size: '960x1280', output_format: 'png', background: 'opaque' });
+    expect(Number(fields.n)).toBe(1); expect(fields.frame_count).toBeUndefined();
+    const [brief, locked] = fields.prompt.split('【固定交付规则 · 适用于生成与精修】');
+    expect(brief).toContain(protectedRequest.input); expect(brief).toContain(instructions.buffer.toString());
+    expect(locked).toContain('48%–84%'); expect(locked).toContain('3.5%–17.5%'); expect(locked).toContain('不要把整张插画缩成居中小贴纸'); expect(locked).toContain('16%–84%'); expect(locked).toContain('20%–45%');
+    expect(f.calls).toHaveLength(1);
+    if (kind === 'image-editing') expect((sent as FormData).getAll('image[]')).toHaveLength(1);
+  });
+
   it('请求多图但返回较少时明确数量不足，不自动补发收费调用', async () => {
     const f = fixture(async () => jsonResponse({ data: [{ b64_json: PNG.toString('base64') }, { b64_json: PNG.toString('base64') }] }));
     const input = request('image', 'image-generation'); input.options = { count: 4 };

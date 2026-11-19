@@ -207,7 +207,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
     return serial(async () => (await loadManifest()).filter(entry => entry.trashedAt).map(entry => metadata(entry, root)).sort((a, b) => b.trashedAt.localeCompare(a.trashedAt)));
   }
 
-  async function write(input) {
+  async function write(input, coverSourceId) {
     const active = () => { if (input?.signal?.aborted) throw Object.assign(new Error('文件保存已取消，原文件与费用保留。'), { name: 'AbortError' }); };
     active();
     // Resolve pending workspace transitions before entering the artifact queue.
@@ -224,10 +224,21 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       if (buffer.length > MAX_FILE_BYTES) throw new Error('单个产物最大支持 100 MB，请缩小内容或拆分文件。');
       const provenance = assetProvenance(input.provenance);
       const entries = await loadManifest();
+      const sha256 = createHash('sha256').update(buffer).digest('hex');
+      if (coverSourceId) {
+        if (!validId(coverSourceId) || !validId(input.runId) || !validId(input.projectId) || input.mimeType !== 'image/jpeg') throw Error('红包成品缺少原图或运行归属。');
+        // Reuse only verified identical bytes, including recovery after writing
+        // the artifact but before the workflow checkpoint was persisted.
+        const previous = entries.findLast(entry => entry.sourceArtifactId === coverSourceId && entry.runId === input.runId && entry.projectId === input.projectId && entry.sha256 === sha256 && !entry.trashedAt);
+        if (previous) {
+          const current = await (await managedFor(previous)).inspect('files', previous.fileName);
+          if (current?.stat.size === buffer.length && buffer.equals(await fs.readFile(current.filename))) return metadata(previous, root);
+        }
+      }
       const id = randomUUID();
       const originalName = safeName(input.preserveOriginalName === true ? input.name : stripSavedTimestamp(input.name), input.mimeType);
       const name = input.preserveOriginalName === true ? originalName : timestampedFilename(originalName);
-      const entry = { id, name, mimeType: input.mimeType, bytes: buffer.length, sha256: createHash('sha256').update(buffer).digest('hex'), kind: kindFor(input.mimeType), createdAt: new Date().toISOString(), fileName: `${id}-${name}`, ...(input.runId ? { runId: String(input.runId) } : {}), ...(input.projectId ? { projectId: String(input.projectId) } : {}), ...(storageDirectory ? { storageDirectory } : {}), ...(provenance ? { provenance } : {}) };
+      const entry = { id, name, mimeType: input.mimeType, bytes: buffer.length, sha256, kind: kindFor(input.mimeType), createdAt: new Date().toISOString(), fileName: `${id}-${name}`, ...(input.runId ? { runId: String(input.runId) } : {}), ...(input.projectId ? { projectId: String(input.projectId) } : {}), ...(storageDirectory ? { storageDirectory } : {}), ...(provenance ? { provenance } : {}), ...(coverSourceId ? { sourceArtifactId: coverSourceId } : {}) };
       const location = await managedFor(entry);
       await location.ensureArea('files', true);
       active();
@@ -384,7 +395,7 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
   }); }
 
   const operations = createOperationTracker();
-  const api = { write, read, inspectImageArtifact, thumbnailSource, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
+  const api = { write: input => write(input), writePreparedCover: write, read, inspectImageArtifact, thumbnailSource, list, listProject, importPaths, preview, exportOffice, trash, restore, listTrash, migrateProject, backupEntries, importEntries };
   return { ...Object.fromEntries(Object.entries(api).map(([name, action]) => [name, (...args) => operations.track(() => action(...args))])), drain: operations.drain, flush: operations.flush };
 }
 

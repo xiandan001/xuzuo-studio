@@ -4,6 +4,7 @@ const { executeText } = require('./provider-text.cjs');
 const { executeImages, executeAudio } = require('./provider-media.cjs');
 const { executeVideo, VIDEO_TIMEOUT_MS } = require('./provider-video.cjs');
 const { createModelReceipts } = require('./model-receipts.cjs');
+const { WECHAT_RED_PACKET_COVER, redPacketCoverGenerationSize } = require('./wechat-red-packet-cover.cjs');
 const { imageOptionsError } = require('./image-output-options.cjs');
 const { imageType, rasterDimensions, validateMarkup } = require('./image-output-formats.cjs');
 const { reasoningRequestFields } = require('./reasoning-options.cjs');
@@ -33,7 +34,12 @@ function validateRequest(request) {
   if (url.search) throw failure('INVALID_ENDPOINT', 'Base URL 不能包含查询参数或 API Key。');
   for (const value of [request.prompt, request.input]) if (value !== undefined && (typeof value !== 'string' || value.length > 200_000)) throw failure('INVALID_INPUT', '模型输入需要是长度不超过 200000 字符的文字。');
   if (request.attachments !== undefined && (!Array.isArray(request.attachments) || request.attachments.length > 16)) throw failure('INVALID_ATTACHMENTS', '一次模型步骤最多使用 16 份附件。');
-  const options = request.options || {};
+  const supplied = request.options || {};
+  const cover = request.imagePreset === WECHAT_RED_PACKET_COVER && ['image-generation', 'image-editing'].includes(request.kind);
+  const options = cover ? {
+    size: redPacketCoverGenerationSize(request.model.modelId), count: 1, background: 'opaque', outputFormat: 'png',
+    quality: supplied.quality, complexity: supplied.complexity, markupArtifactId: supplied.markupArtifactId,
+  } : supplied;
   if (options.reasoningEffort !== undefined) {
     if (!['text', 'vision', 'video-understanding'].includes(request.kind)) throw failure('INVALID_OPTIONS', '推理强度仅用于文字或图像理解步骤。');
     try { reasoningRequestFields(request.connection, request.model, options.reasoningEffort); } catch (cause) { throw failure('INVALID_OPTIONS', cause.message); }

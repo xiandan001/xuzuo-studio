@@ -44,6 +44,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund
       - name: Prepare locked native Electron runtime
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/prepare-ci-electron.mjs
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
