@@ -180,14 +180,14 @@ function composeCover(source) {
     paint(data, source, motifs ? full : placeScene(source, full), background);
   } else {
     if (motifs.bounds[3]) paint(data, source, full, background, motifs, 3);
-    const hero = motifs.heroRegion || motifs.bounds[1], top = height * (identity.bottom + 0.008);
+    const ink = motifs.bounds[1], hero = motifs.heroRegion || ink, top = height * (identity.bottom + 0.008);
     const foot = height * button.centerY - width * button.diameterRatio / 2 - height * 0.02;
     const heroScale = Math.min(width / (hero.right - hero.left), (foot - top) / (hero.bottom - hero.top));
     let heroPlacement = transform(hero, heroScale, width * 0.5, (top + foot) / 2);
     // Try the side gutters before reducing a tall illustration to a small stamp.
     // Never silently cut a face or glyph off to make a larger variant fit.
-    if (!motifs.heroRegion && heroScale < full.scale * 0.68 && hero.bottom - hero.top > source.height * 0.6) {
-      const larger = largeMotifPlacement(motifs, full);
+    if (heroScale < full.scale * 0.68 && ink.bottom - ink.top > source.height * 0.6) {
+      const larger = !motifs.heroRegion && largeMotifPlacement(motifs, full);
       if (!larger) throw coverLayoutError('完整保留这张图会把主体缩得过小。请在源图中将脸和题字错开排布，再导出封面。');
       heroPlacement = larger;
     }

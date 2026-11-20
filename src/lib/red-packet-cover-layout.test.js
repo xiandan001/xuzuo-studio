@@ -74,3 +74,10 @@ it('不能安全地摆放的大幅密集前景不会被悄悄清除或挤成小�
   input.rect(7, 7, 143, 193, [30, 60, 120, 255]);
   expect(() => composeCover(input)).toThrow(/主体缩得过小/);
 });
+
+it('独立题字不能绕过过高主体的最小尺寸检查', () => {
+  const input = artwork(300, 400);
+  input.rect(80, 18, 220, 44, [181, 0, 0, 255]);
+  input.rect(35, 103, 265, 393, [2, 1, 180, 255]);
+  expect(() => composeCover(input)).toThrow(expect.objectContaining({ code: 'COVER_LAYOUT_REJECTED' }));
+});
