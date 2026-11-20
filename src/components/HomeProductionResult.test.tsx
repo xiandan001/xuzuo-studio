@@ -75,6 +75,7 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
     Object.assign(file, { name: 'cover.png', kind: 'image', mimeType: 'image/png' });
     data.props.workflowRunner.previewArtifact = vi.fn(async () => ({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,aQ==' }));
     data.props.onOpenTask = vi.fn();
+    const discuss = vi.fn(); data.props.onDiscussArtifact = discuss;
     const complete = { ...data.run, status: 'complete', updatedAt: '2026-11-20T00:00:01.000Z' };
     data.run.updatedAt = '2026-11-20T00:00:00.000Z';
     let submit: (() => void) | undefined;
@@ -89,6 +90,9 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
       const confirm = [...host.querySelectorAll('button')].find(button => button.textContent === '确认验收')!;
       expect(confirm.disabled).toBe(false);
       expect(host.querySelector('.creation-result-preview img')?.getAttribute('alt')).toBe('cover.png');
+      await act(async () => host.querySelector<HTMLButtonElement>('.home-result-discuss')!.click());
+      expect(discuss).toHaveBeenCalledExactlyOnceWith(file, 'image');
+      expect(control).not.toHaveBeenCalled();
       await act(async () => { confirm.click(); confirm.click(); });
       expect(control).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'run', action: 'resume', manualReviewAttemptId: 'manual-1', reviewedArtifactId: 'body' }));
       expect(data.props.onOpenTask).not.toHaveBeenCalled();

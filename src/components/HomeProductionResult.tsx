@@ -156,7 +156,7 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
       <footer>
         <span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span>
         <div className="home-result-primary-actions">
-          {!documentSource && !approvalId && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}
+          {!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}
           <button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>
           {reviewState === 'manual' && <button type="button" className="text-button" onClick={openSteps}>验收详情<ArrowRight size={13} /></button>}
           {approvalId ? <HomeManualReview key={`${run.id}/${approvalId}/${file.id}`} run={actual} project={project} attemptId={approvalId} artifactId={file.id} ready={cover ? !!preparation.file : previewId === file.id} props={props} onRead={setDetail} />
