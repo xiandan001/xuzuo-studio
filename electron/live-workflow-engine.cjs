@@ -408,6 +408,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     if (exporter.contentSourceStepIds) exporter.contentSourceStepIds = ids.map((id, index) => index === slot ? edit.id : id);
     else exporter.contentSourceStepId = edit.id;
     gate.repairStepId = edit.id;
+    if (explicit) gate.maxRepairs = Math.min(gate.maxRepairs, count + 1);
     steps.splice(reviewIndex, 0, edit); run.stepIndex = reviewIndex;
     run.repairCounts = { ...run.repairCounts, [reviewer.id]: count + 1 };
   }

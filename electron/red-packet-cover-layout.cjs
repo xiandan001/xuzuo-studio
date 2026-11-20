@@ -186,7 +186,11 @@ function composeCover(source) {
     let heroPlacement = transform(hero, heroScale, width * 0.5, (top + foot) / 2);
     // Try the side gutters before reducing a tall illustration to a small stamp.
     // Never silently cut a face or glyph off to make a larger variant fit.
-    if (heroScale < full.scale * 0.68 && ink.bottom - ink.top > source.height * 0.6) {
+    // For a detached title, ignore the extra paper and disconnected accents.
+    const tallSubject = motifs.heroRegion
+      ? motifs.mainHeight > source.height * 0.65
+      : ink.bottom - ink.top > source.height * 0.6;
+    if (heroScale < full.scale * 0.68 && tallSubject) {
       const larger = !motifs.heroRegion && largeMotifPlacement(motifs, full);
       if (!larger) throw coverLayoutError('完整保留这张图会把主体缩得过小。请在源图中将脸和题字错开排布，再导出封面。');
       heroPlacement = larger;

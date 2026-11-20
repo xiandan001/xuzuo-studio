@@ -69,6 +69,6 @@ function coverMotifs(source, background) {
     top: Math.max(bounds[2].bottom + unit * 2, bounds[1].top - source.height * 0.16),
     bottom: Math.min(source.height, bounds[1].bottom + source.height * 0.025),
   } : undefined;
-  return { unit, width, labels, roles, bounds, heroRegion };
+  return { unit, width, labels, roles, bounds, heroRegion, mainHeight: (main.y1 - main.y0) * unit };
 }
 module.exports = { coverMotifs };

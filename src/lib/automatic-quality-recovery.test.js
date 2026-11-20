@@ -81,6 +81,21 @@ it('用户授权后的真实构图问题自动精修当前样稿并复检，按�
   }finally{await f.dispose()}
 }, 20000);
 
+it('导出受预算限制后手动继续，只授权本次精修和复检', async () => {
+  const composeBitmap = vi.fn().mockRejectedValue(Object.assign(Error('封面主体过小。'), { code: 'COVER_LAYOUT_REJECTED' }));
+  const f = await setup([passed, failed('主体仍需调整')], { cover: true, composeBitmap, max: 3, budget: 12 });
+  try {
+    const before = await f.terminal();
+    expect(before.status, before.error).toBe('failed');
+    expect(f.execute.mock.calls.map(([task]) => task.kind)).toEqual(['image-generation', 'vision']);
+    await f.engine.control({ id: f.id, action: 'continue', project: { ...f.input.project, budgetCents: 100 } });
+    const after = await f.terminal();
+    expect(after.snapshot.steps[after.stepIndex].id).toBe('check');
+    expect(after.status).toBe('waiting-review');
+    expect(f.execute.mock.calls.map(([task]) => task.kind)).toEqual(['image-generation', 'vision', 'image-editing', 'vision']);
+  } finally { await f.dispose(); }
+}, 20000);
+
 it('旧9:16误判不随打开触发：一次明确授权，先重检原图、再按真问题精修、重新质检后交付', async()=>{
   const f=await setup([failed('小熊应改成9:16全屏'),failed('无需9:16，画面实际绘入了金色“开”按钮，请移除，题字有错别字。'),passed],{cover:true,max:0,editBinding:null});
   try{
