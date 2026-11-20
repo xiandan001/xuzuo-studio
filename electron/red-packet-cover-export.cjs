@@ -101,7 +101,8 @@ function createRedPacketCoverExporter({ readArtifact, composeBitmap, nativeImage
     if (preparing.has(key)) return preparing.get(key);
     // Queued calls retain only IDs. At most one decoded source is in flight.
     const task = tail.then(async () => {
-      const source = await readSource(readArtifact, input), sourceSha256 = source.sha256 || digest(source.buffer);
+      const read = input.recoverLocal ? id => input.recoverLocal(() => readArtifact(id)) : readArtifact;
+      const source = await readSource(read, input), sourceSha256 = source.sha256 || digest(source.buffer);
       const proof = source.mimeType === 'image/jpeg' && source.runId && await readDeliveryProof?.(source);
       const previous = cached.get(key);
       if (previous?.sourceSha256 === sourceSha256 && previous.proofSha256 === proof?.sha256) return previous;
@@ -152,7 +153,7 @@ function createRedPacketCoverExporter({ readArtifact, composeBitmap, nativeImage
     const result = await bytesFor(input);
     if (result.runId !== input.runId || result.sourceType !== 'image/png') throw Error('红包交付需要当前运行实际制作的 PNG 原图。');
     input.signal?.throwIfAborted();
-    const artifact = await writeDelivery({ name: `${input.title || '微信红包封面'}-上传用.jpg`, mimeType: 'image/jpeg', buffer: result.jpeg, projectId: input.projectId, runId: input.runId }, input.sourceArtifactId);
+    const artifact = await writeDelivery({ name: `${input.title || '微信红包封面'}-上传用.jpg`, mimeType: 'image/jpeg', buffer: result.jpeg, projectId: input.projectId, runId: input.runId, signal: input.signal, ...(input.recoverLocal ? { recoverLocal: input.recoverLocal } : {}) }, input.sourceArtifactId);
     return { artifact, proof: { recipe: COVER_RECIPE, artifactId: artifact.id, sha256: result.sha256, bytes: result.jpeg.length, sourceArtifactId: input.sourceArtifactId, sourceSha256: result.sourceSha256 } };
   }
   return Object.assign(exportRedPacketCover, { prepare, archive });

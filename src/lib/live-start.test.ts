@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LiveCheckedStartResult, LiveRuntimeBridge, LiveStartRequest } from '../live-types';
+import { createRequire } from 'node:module';
+import type { LiveCheckedStartResult, LiveRuntimeBridge, LiveStartLookup, LiveStartRequest } from '../live-types';
 import type { WorkflowRun } from '../configuration-types';
 import { createLiveStartCoordinator } from './live-start';
 
+const backend = createRequire(import.meta.url)('../../electron/live-start.cjs');
 const request = (): LiveStartRequest => ({ project: { id: 'project', workspaceId: 'workspace', name: '隔离精修', kind: 'image', description: '', status: 'review', costCents: 10, version: 1, updatedAt: '', accent: 'blue' }, workflow: { id: 'quick-edit', workspaceId: 'workspace', name: '精修', outputKind: 'image', description: '', updatedAt: '', steps: [{ id: 'edit', name: '精修原图', kind: 'image-editing', prompt: '补齐品牌，移除联系方式', inputSource: 'project', enabled: true, modelConfigId: 'model', credentialId: 'key-id', count: 1 }] }, models: [{ id: 'model', name: '隔离模型', modelId: 'fixture', connectionId: 'connection', capabilities: ['image-editing'], enabled: true, pricing: { unit: 'image', currency: 'CNY', input: '0', output: '1' } }], connections: [{ id: 'connection', name: '隔离连接', providerId: 'custom', protocol: 'image', baseUrl: 'http://127.0.0.1:9000/v1', enabled: true, status: 'configured' }], input: '保留原图主体，只修改品牌文字', variables: {}, attachmentIds: ['source'], acknowledgePaidCalls: true, acknowledgeUnknownCost: true });
 function fixture() {
   const values = new Map<string, string>(), payloads: LiveStartRequest[] = [], records = new Map<string, WorkflowRun>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
   const admit = (input: LiveStartRequest) => { const previous = records.get(input.dispatchKey!); if (previous) return previous; const run: WorkflowRun = { id: `run-${records.size + 1}`, mode: 'live', workspaceId: input.project.workspaceId, projectId: input.project.id, workflowId: input.workflow.id, workflowName: input.workflow.name, dispatchKey: input.dispatchKey, snapshot: input.workflow, status: 'running', stepIndex: 0, attempts: [], variables: input.variables, input: input.input, createdAt: '', updatedAt: '' }; records.set(input.dispatchKey!, run); return run; };
   const startChecked = vi.fn(async (input: LiveStartRequest): Promise<LiveCheckedStartResult> => { payloads.push(structuredClone(input)); expect(values.size).toBe(1); return { status: 'started', run: admit(input) }; });
-  const lookupStart = vi.fn(async (input: { dispatchKey: string }): Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }> => { const run = records.get(input.dispatchKey); return run ? { status: 'started', run } : { status: 'unknown' }; });
+  const lookupStart = vi.fn(async (input: LiveStartLookup): Promise<{ status: 'started'; run: WorkflowRun } | { status: 'not-found' } | { status: 'unknown' }> => {
+    const run = input.dispatchKey ? records.get(input.dispatchKey) : [...records.values()].find(row => row.workflowId === input.workflowId && row.workspaceId === input.workspaceId && row.projectId === input.projectId);
+    return run ? { status: 'started', run } : { status: 'unknown' };
+  });
   const bridge = { startChecked, lookupStart, snapshot: vi.fn(async () => ({ runs: [...records.values()], ledger: [] })) } as unknown as LiveRuntimeBridge;
   const onRun = vi.fn();
   const coordinator = () => createLiveStartCoordinator({ storage: () => storage, bridge: () => bridge, onRun, timeoutMs: 20 });
@@ -92,6 +97,42 @@ describe('真实启动回执与冻结请求', () => {
     const f = fixture(); f.startChecked.mockRejectedValue(Error('Owned never-received transport')); expect((await f.coordinator().start(request())).status).toBe('unknown');
     f.lookupStart.mockResolvedValue({ status: 'not-found' });
     expect(await f.coordinator().read('project')).toMatchObject({ status: 'rejected', code: 'START_NOT_FOUND' }); expect(f.values.size).toBe(0); expect(f.startChecked).toHaveBeenCalledTimes(2); expect(f.records.size).toBe(0);
+  });
+
+  it('重新打开对话只核对本方案，找回已清除回执的原运行且保留同项目另一份待确认请求', async () => {
+    const f = fixture(), start = f.coordinator(), first = request();
+    expect(await start.start(first)).toMatchObject({ status: 'started', runId: 'run-1' });
+    expect(f.values.size).toBe(0);
+    f.startChecked.mockRejectedValue(Error('Lost ACK for different workflow'));
+    const second = request(); second.workflow.id = 'unrelated-workflow';
+    expect(await start.start(second)).toMatchObject({ status: 'unknown' });
+    const pending = [...f.values.values()][0], calls = f.startChecked.mock.calls.length;
+    const resumed = await f.coordinator().read(first.project.id, { workspaceId: first.project.workspaceId, workflowId: first.workflow.id });
+    expect(resumed).toMatchObject({ status: 'started', runId: 'run-1', run: { workflowId: first.workflow.id } });
+    expect(f.lookupStart).toHaveBeenLastCalledWith({ projectId: first.project.id, workspaceId: first.project.workspaceId, workflowId: first.workflow.id });
+    expect([...f.values.values()]).toEqual([pending]);
+    expect(f.startChecked).toHaveBeenCalledTimes(calls);
+  });
+
+  it('按方案核对等待同项目正在受理的派单，再匹配工作区和方案', async () => {
+    const f = fixture(), input = request();
+    input.dispatchKey = 'a'.repeat(64);
+    const snapshot = vi.fn(async () => ({ runs: [...f.records.values()] }));
+    const engine = { snapshot, runDetail: vi.fn(async () => [...f.records.values()][0]) };
+    let finishAdmission!: () => void;
+    const gate = new Promise<void>(resolve => { finishAdmission = resolve; });
+    const start = backend.startChecked(engine, async () => { await gate; return f.admit(input); }, input);
+    const selector = { projectId: input.project.id, workspaceId: input.project.workspaceId, workflowId: input.workflow.id };
+    const lookup = backend.lookupStart(engine, selector);
+    await Promise.resolve();
+    expect(snapshot).not.toHaveBeenCalled();
+    finishAdmission();
+    expect(await start).toMatchObject({ status: 'started' });
+    expect(await lookup).toMatchObject({ status: 'started', run: { id: 'run-1' } });
+    expect(snapshot).toHaveBeenCalledWith(undefined, { projectIds: [input.project.id], summaryOnly: true });
+    expect(await backend.lookupStart(engine, { ...selector, workflowId: 'other-workflow' })).toEqual({ status: 'not-found' });
+    expect(await backend.lookupStart(engine, { ...selector, workspaceId: 'other-workspace' })).toEqual({ status: 'not-found' });
+    expect(engine.runDetail).toHaveBeenCalledTimes(1);
   });
 
   it('重开后改变需求，仅在权威旧请求未受理时直接开始当前新需求', async () => {

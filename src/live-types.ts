@@ -14,9 +14,9 @@ export interface ModelUsage {
   usageSource?: string;
 }
 export type CostState = 'simulation' | 'calculated' | 'manual' | 'unknown' | 'not-incurred';
-export type LiveStartResult = { status: 'started'; runId: string; recovered?: boolean } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
+export type LiveStartResult = { status: 'started'; runId: string; recovered?: boolean; run?: WorkflowRun } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
 export type LiveCheckedStartResult = { status: 'started'; run: WorkflowRun; recovered?: boolean } | { status: 'rejected'; error: string; code?: string } | { status: 'unknown'; error: string; dispatchKey: string };
-export interface LiveStartLookup { projectId: string; workspaceId: string; dispatchKey: string; }
+export type LiveStartLookup = { projectId: string; workspaceId: string } & ({ dispatchKey: string; workflowId?: never } | { workflowId: string; dispatchKey?: never });
 export interface LiveStartRequest {
   purpose?: 'automation-plan' | 'business-assist';
   workflow: WorkflowDefinition;
@@ -81,7 +81,7 @@ export interface LiveRuntimeBridge {
   snapshot: () => Promise<LiveSnapshot>;
   pollSnapshot?: (afterRevision: number) => Promise<LiveSnapshot | null>;
   runDetail?: (id: string) => Promise<WorkflowRun>;
-  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue' | 'recheck-quality' | 'refine-quality' | 'auto-quality'; reviewAttemptId?: string; reviewBinding?: { modelConfigId: string; credentialId: string }; refinement?: { sourceArtifactId: string; instruction: string; modelConfigId: string; credentialId: string }; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; imageExportSize?: { width: number; height: number }; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
+  control: (input: { id: string; action: 'pause' | 'resume' | 'cancel' | 'retry' | 'continue' | 'recheck-quality' | 'refine-quality' | 'auto-quality' | 'recover-receipt'; expectedAttemptId?: string; manualReviewAttemptId?: string; reviewedArtifactId?: string; stepBinding?: { stepId: string; modelConfigId: string; credentialId: string }; reviewAttemptId?: string; reviewBinding?: { modelConfigId: string; credentialId: string }; refinement?: { sourceArtifactId: string; instruction: string; modelConfigId: string; credentialId: string }; stepId?: string; stepBudgetCents?: number | null; stepMaxOutputTokens?: number; imageExportSize?: { width: number; height: number }; project?: Project; connections?: ModelConnection[]; models?: ModelConfiguration[] }) => Promise<void>;
   reconcile: (input: { entryId: string; costCents: number }) => Promise<void>;
   recalculateCosts?: () => Promise<{ updated: number }>;
   importFiles: (projectId?: string) => Promise<ArtifactMetadata[]>;

@@ -34,7 +34,7 @@ const plan = { version: 1 as const, name: '产品合作说明书', objective: '�
 const turn: ChatTurn = { id: 'plan-turn', userText: '制作完整合作说明书', text: JSON.stringify(plan), mode: 'plan', plan, status: 'complete', modelName: '已选择的文字模型', modelId: 'gpt-6.1-terra', modelConfigId: 'text-model', credentialId: 'account-metadata', reasoningEffort: 'high', costCents: 3, costState: 'calculated', createdAt: timestamp, updatedAt: timestamp };
 const makeProject = (id = 'new-project'): Project => ({ id, workspaceId: 'workspace', name: plan.name, kind: 'word', description: plan.objective, costCents: 0, status: 'draft', version: 0, accent: 'blue', updatedAt: timestamp });
 
-async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false, cover = false, imageChoices = false, conversationId = 'conversation', workspaceId = 'workspace', unavailableAccount = '' }: { imageChoices?: boolean; conversationId?: string; workspaceId?: string; unavailableAccount?: string; withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean; cover?: boolean } = {}) {
+async function fixture({ withProject = false, missing = '', staleRule = false, attachments = false, delayReferences = false, copyFails = false, cover = false, imageChoices = false, conversationId = 'conversation', workspaceId = 'workspace', unavailableAccount = '', requiredImages = 0, question = '' }: { imageChoices?: boolean; conversationId?: string; workspaceId?: string; unavailableAccount?: string; withProject?: boolean; missing?: 'key' | 'model' | ''; staleRule?: boolean; attachments?: boolean; delayReferences?: boolean; copyFails?: boolean; cover?: boolean; requiredImages?: number; question?: string } = {}) {
   const planner = { modelConfigId: turn.modelConfigId, credentialId: turn.credentialId, reasoningEffort: 'high' as const };
   const connection = { id: 'connection', name: 'OpenAI', providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', enabled: true, status: 'configured' };
   const model = { id: 'text-model', name: '已选择的文字模型', modelId: turn.modelId, connectionId: connection.id, capabilities: ['text', 'vision'], enabled: true, pricing: { unit: 'million-tokens', currency: 'USD', input: '1', output: '5' } };
@@ -55,7 +55,7 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
   });
   const planningStart = vi.fn(async () => { throw Error('A saved chat plan must not be planned or billed again'); });
   const source = { id: 'prior-chat-image', name: '上轮参考图.png', mimeType: 'image/png', kind: 'image' as const, bytes: 123, sha256: 'a'.repeat(64), createdAt: timestamp };
-  const activeTurn: ChatTurn = attachments ? { ...turn, attachments: [], contextAttachments: [source] } : { ...turn };
+  const activeTurn: ChatTurn = { ...turn, ...(attachments ? { attachments: [], contextAttachments: [source] } : {}), plan: { ...plan, ...(requiredImages ? { illustrations: { mode: 'references', count: requiredImages } } : {}), questions: question ? [question] : [] } };
   if (cover) {
     model.capabilities.push('image-generation');
     activeTurn.imagePreset = '微信红包封面';
@@ -75,7 +75,8 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
   }
   const startLive = vi.fn(async (workflow: WorkflowDefinition, projectId: string): Promise<LiveStartResult> => ({ status: 'started', runId: addRun(workflow, projectId).id }));
   const readStartResult = vi.fn(async (): Promise<LiveStartResult> => ({ status: 'rejected', code: 'NO_PENDING_START', error: '没有待确认的启动' }));
-  const desktop = { chat: { attachToProject }, runtime: { snapshot: async () => ({ runs }) }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
+  const importAttachments = vi.fn(async () => [{ ...source, id: 'inline-source' }]);
+  const desktop = { chat: { attachToProject, importAttachments }, runtime: { snapshot: async () => ({ runs }) }, automation: { snapshot, syncContext, saveRule, trigger, onChanged(listener: () => void) { changed.add(listener); return () => changed.delete(listener); } }, automationPlanning: { list: vi.fn(async () => []), start: planningStart } };
   Object.defineProperty(window, 'desktop', { configurable: true, value: desktop });
   const directoryRequests = vi.fn<PageProps['onCreateProject']>(), preflight = vi.fn<PageProps['workflowRunner']['preflight']>(async () => ({ ok: true, errors: [], warnings: [], steps: [], unknownCost: false }));
   const ledger = Object.freeze([{ id: 'prior-cost', projectId: 'trashed-project', projectName: '旧项目', action: '初次生成', model: '已调用的模型', costCents: 27, costState: 'calculated', billingMode: 'live', time: timestamp, status: 'complete' }]) as unknown as LedgerEntry[];
@@ -107,7 +108,7 @@ async function fixture({ withProject = false, missing = '', staleRule = false, a
     await act(async () => { updateProjects([project]); options!.onCreated!(project); });
   }
   async function releaseReferences() { expect(pendingReferences).toBeTruthy(); const value = pendingReferences!; pendingReferences = undefined; await act(async () => applyProjectChanges(value.id, value.changes)); }
-  return { key, directoryRequests, preflight, startLive, readStartResult, addRun, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, attachToProject, updateProject, releaseReferences, readRules: () => rules, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
+  return { key, directoryRequests, preflight, startLive, readStartResult, addRun, saveWorkflow, saveRule, trigger, planningStart, syncContext, created, snapshot, oldRule, oldWorkflow, attachToProject, importAttachments, updateProject, releaseReferences, readRules: () => rules, readWorkflows: () => savedWorkflows, verifyLedger: () => expect(JSON.stringify(ledger)).toBe(savedLedger) };
 }
 
 describe('聊天方案通过真实session创建和运行生产流程', () => {
@@ -151,7 +152,7 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     const consent = host.querySelector<HTMLInputElement>('.image-quality-repair-option input')!;
     expect(consent.checked).toBe(true); expect(consent.parentElement?.parentElement?.textContent).toContain('每轮另计一次原图精修和一次复检');
     expect(f.startLive).not.toHaveBeenCalled();
-    await click('执行方案'); await f.created({ ...makeProject(), kind: 'image' });
+    await click('开始制作'); await f.created({ ...makeProject(), kind: 'image' });
     await until(() => f.startLive.mock.calls.length === 1, 'red packet cover dispatch');
     const workflow = f.startLive.mock.calls[0][0];
     expect(workflow.imagePreset).toBe('微信红包封面');
@@ -164,12 +165,12 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     await act(async () => host.querySelector<HTMLInputElement>('.image-quality-repair-option input')!.click());
     expect(JSON.parse(localStorage.getItem(f.key)!).repairAfterFailedReview).toBe(false);
     expect(f.startLive).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled();
-    await click('执行方案'); await f.created({ ...makeProject(), kind: 'image' });
+    await click('开始制作'); await f.created({ ...makeProject(), kind: 'image' });
     await until(() => f.startLive.mock.calls.length === 1, 'direct dispatch with opt-out');
     expect(f.startLive.mock.calls[0][0].steps.find(step => step.qualityGate)?.qualityGate?.maxRepairs).toBe(0); f.verifyLedger();
   });
   it('上轮聊天材料先复制成真实项目引用，等props回显后才预检派发', async () => {
-    const f = await fixture({ attachments: true, delayReferences: true }); await click('执行方案'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
+    const f = await fixture({ attachments: true, delayReferences: true }); await click('开始制作'); expect(f.attachToProject).not.toHaveBeenCalled(); await f.created();
     await until(() => f.updateProject.mock.calls.length === 1, 'copied references waiting for parent echo');
     expect(f.attachToProject).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation', projectId: 'new-project', attachmentIds: ['prior-chat-image'] });
     expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
@@ -178,19 +179,23 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     expect(f.startLive).toHaveBeenCalledOnce(); expect(f.saveRule).not.toHaveBeenCalled();
   });
   it('材料复制失败不触发付费流程，重试成功后只派发一次且旧费用保留', async () => {
-    const f = await fixture({ withProject: true, attachments: true, copyFails: true }); await click('执行方案');
+    const f = await fixture({ withProject: true, attachments: true, copyFails: true }); await click('开始制作');
     await until(() => host.textContent!.includes('参考材料复制失败'), 'copy failure shown'); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
-    await click('执行方案'); await until(() => f.startLive.mock.calls.length === 1, 'retry material preparation'); expect(f.attachToProject).toHaveBeenCalledTimes(2); expect(f.preflight).toHaveBeenCalledOnce(); f.verifyLedger();
+    await click('开始制作'); await until(() => f.startLive.mock.calls.length === 1, 'retry material preparation'); expect(f.attachToProject).toHaveBeenCalledTimes(2); expect(f.preflight).toHaveBeenCalledOnce(); f.verifyLedger();
     expect(f.startLive).toHaveBeenCalledOnce(); expect(f.saveRule).not.toHaveBeenCalled();
   });
   it('仅保存带附件的方案不复制、不付费，实际开始时再带入材料', async () => {
     const f = await fixture({ withProject: true, attachments: true }); await click('仅保存为自动化'); await until(() => f.readRules().length === 1, 'saved material plan');
     expect(f.attachToProject).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await click('执行方案'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
+    await click('开始制作'); await until(() => f.trigger.mock.calls.length === 1, 'run saved material plan'); expect(f.attachToProject).toHaveBeenCalledOnce(); expect(f.preflight.mock.calls[0][4]).toContain('copied-reference'); f.verifyLedger();
   });
   it('无项目先保留完整方案，明确制作并完成项目回调后才预检和派发一次', async () => {
     const f = await fixture(); expect(host.textContent).toContain(plan.name); expect(host.textContent).toContain('开始制作时创建项目'); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
-    await click('执行方案'); expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
+    expect(host.querySelector('.home-plan-primary')!.textContent).not.toContain('还需补充');
+    expect(host.querySelector('.home-plan-primary')!.textContent).not.toContain('仅保存为自动化');
+    const start = host.querySelector<HTMLButtonElement>('.home-plan-primary .btn-primary')!;
+    await act(async () => { start.click(); start.click(); });
+    expect(f.directoryRequests).toHaveBeenCalledOnce(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled();
     await f.created(); await until(() => f.startLive.mock.calls.length === 1, 'new project production dispatch');
     expect(f.saveWorkflow).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); expect(f.preflight).toHaveBeenCalledOnce();
     const [workflow, target] = f.startLive.mock.calls[0]; expect(target).toBe('new-project');
@@ -198,33 +203,56 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
     expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution).toEqual({ workflowId: workflow.id, runId: 'direct-run' });
   });
   it.each(['key', 'model'] as const)('缺少%s时不会保存或派发任何生产调用', async missing => {
-    const f = await fixture({ withProject: true, missing }); await click('执行方案');
+    const f = await fixture({ missing }); await click('补充制作设置');
     expect(f.directoryRequests).not.toHaveBeenCalled(); expect(f.saveWorkflow).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
+    expect(host.querySelector<HTMLDetailsElement>('.chat-plan-models')!.open).toBe(true);
+  });
+  it('必需参考图在卡片内补齐，确认开始后才建项目并向模型传已复制的真实文件', async () => {
+    const f = await fixture({ requiredImages: 1 });
+    expect(host.querySelector('.home-plan-primary')!.textContent).toContain('补参考图');
+    await click('补参考图');
+    expect(f.importAttachments).toHaveBeenCalledWith({ workspaceId: 'workspace', conversationId: 'conversation' });
+    expect(f.directoryRequests).not.toHaveBeenCalled(); expect(f.startLive).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(f.key)!).chatProductionReferences).toMatchObject([{ id: 'inline-source', kind: 'image' }]);
+    await act(async () => root!.unmount()); root = undefined;
+    const reopened = await fixture({ requiredImages: 1 });
+    expect(reopened.importAttachments).not.toHaveBeenCalled(); expect(reopened.startLive).not.toHaveBeenCalled();
+    await click('开始制作'); await reopened.created();
+    await until(() => reopened.startLive.mock.calls.length === 1, 'start after source is copied');
+    expect(reopened.attachToProject).toHaveBeenCalledWith(expect.objectContaining({ attachmentIds: ['inline-source'] }));
+    expect(reopened.preflight.mock.calls[0][4]).toEqual(['copied-reference']);
+  });
+  it('旧方案要求的真实资料仍在同一张卡填写，未填不创建项目或调用模型', async () => {
+    const f = await fixture({ question: '真实商品价格是多少？' });
+    await click('补充必要资料');
+    expect(host.querySelector('[aria-label="制作资料回答 1"]')).not.toBeNull();
+    expect(f.directoryRequests).not.toHaveBeenCalled(); expect(f.startLive).not.toHaveBeenCalled();
   });
   it('项目选择取消后保留方案，重新点击仍只打开项目选择且不提前付费', async () => {
-    const f = await fixture(); await click('执行方案'); await act(async () => f.directoryRequests.mock.calls[0][1]!.onCancelled!());
-    expect(host.textContent).toContain(plan.name); await click('执行方案'); expect(f.directoryRequests).toHaveBeenCalledTimes(2); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
+    const f = await fixture(); await click('开始制作'); await act(async () => f.directoryRequests.mock.calls[0][1]!.onCancelled!());
+    expect(host.textContent).toContain(plan.name); await click('开始制作'); expect(f.directoryRequests).toHaveBeenCalledTimes(2); expect(f.saveRule).not.toHaveBeenCalled(); expect(f.trigger).not.toHaveBeenCalled(); f.verifyLedger();
   });
   it('只保存流程使用真实保存链，但不会预检、运行或重新调用规划AI', async () => {
     const f = await fixture({ withProject: true }); await click('仅保存为自动化'); await until(() => f.readRules().length === 1, 'saved workflow rule');
     expect(f.saveWorkflow).toHaveBeenCalledOnce(); expect(f.readRules()[0].enabled).toBe(false); expect(f.trigger).not.toHaveBeenCalled(); expect(f.preflight).not.toHaveBeenCalled(); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
+    expect(f.readWorkflows()[0].automaticRecovery).toBe(true);
   });
   it('预检明确失败时在原对话显示原因，不保存自动化也不派发', async () => {
     const f = await fixture({ withProject: true });
     f.preflight.mockResolvedValueOnce({ ok: false, errors: ['保存目录不可用'], warnings: [], steps: [], unknownCost: false });
-    await click('执行方案');
+    await click('开始制作');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('保存目录不可用');
     expect(f.startLive).not.toHaveBeenCalled(); expect(f.saveRule).not.toHaveBeenCalled();
-    await click('执行方案'); expect(f.startLive).toHaveBeenCalledOnce();
+    await click('开始制作'); expect(f.startLive).toHaveBeenCalledOnce();
   });
   it('启动回执丢失时只能读取原任务，读取成功后在方案下显示进度', async () => {
     const f = await fixture({ withProject: true });
     f.startLive.mockResolvedValueOnce({ status: 'unknown', dispatchKey: 'd'.repeat(64), error: '启动结果尚未确认' });
-    await click('执行方案');
+    await click('开始制作');
     const [workflow, projectId] = f.startLive.mock.calls[0];
     expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution).toEqual({ workflowId: workflow.id });
-    expect([...host.querySelectorAll('button')].some(button => button.textContent?.trim() === '执行方案')).toBe(false);
-    f.readStartResult.mockImplementationOnce(async () => ({ status: 'started', runId: f.addRun(workflow, projectId).id, recovered: true }));
+    expect([...host.querySelectorAll('button')].some(button => button.textContent?.trim() === '开始制作')).toBe(false);
+    f.readStartResult.mockImplementationOnce(async () => { const run = f.addRun(workflow, projectId); return { status: 'started', runId: run.id, run, recovered: true }; });
     await click('读取任务状态');
     expect(JSON.parse(localStorage.getItem(f.key)!).chatExecution.runId).toBe('direct-run');
     expect(host.querySelector('[aria-label="当前方案制作结果"]')).not.toBeNull();
@@ -232,7 +260,7 @@ describe('聊天方案通过真实session创建和运行生产流程', () => {
   });
   it('旧规则目标失效后直接执行到新项目，保留旧流程、规则和费用', async () => {
     const f = await fixture({ staleRule: true }), oldRule = JSON.stringify(f.oldRule), oldWorkflow = JSON.stringify(f.oldWorkflow);
-    await click('执行方案'); expect(f.trigger).not.toHaveBeenCalled(); await f.created(makeProject('replacement-project')); await until(() => f.startLive.mock.calls.length === 1, 'replacement project production dispatch');
+    await click('开始制作'); expect(f.trigger).not.toHaveBeenCalled(); await f.created(makeProject('replacement-project')); await until(() => f.startLive.mock.calls.length === 1, 'replacement project production dispatch');
     expect(f.startLive.mock.calls[0][1]).toBe('replacement-project'); expect(f.saveRule).not.toHaveBeenCalled();
     expect(JSON.stringify(f.readRules().find(rule => rule.id === 'old-rule'))).toBe(oldRule); expect(JSON.stringify(f.readWorkflows().find(workflow => workflow.id === 'old-workflow'))).toBe(oldWorkflow); expect(f.readWorkflows()).toHaveLength(1); expect(f.planningStart).not.toHaveBeenCalled(); f.verifyLedger();
     const draft = JSON.parse(localStorage.getItem(f.key)!); expect(draft.projectId).toBe('replacement-project'); expect(draft.ruleId).toBeUndefined(); expect(draft.chatExecution.runId).toBe('direct-run'); expect(draft.creationKey).not.toBe('original-creation');

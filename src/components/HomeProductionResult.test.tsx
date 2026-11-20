@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowRun } from '../configuration-types';
 import type { PageProps, ProjectKind } from '../types';
 import { HomeProductionResult } from './HomeProductionResult';
@@ -63,5 +66,41 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
     expect(html).toContain('当前样稿');
     expect(html).not.toContain('检查并交付');
     expect(html).not.toContain('文稿已生成 · 尚未导出');
+  });
+  it('从实际成品预览确认最后验收，连续点击只提交原尝试和原文件一次', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const data = fixture('image'), file = data.run.attempts[0].artifacts![0];
+    Object.assign(data.run.snapshot.steps[0], { kind: 'export' });
+    Object.assign(data.run.attempts[1], { id: 'manual-1' });
+    Object.assign(file, { name: 'cover.png', kind: 'image', mimeType: 'image/png' });
+    data.props.workflowRunner.previewArtifact = vi.fn(async () => ({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,aQ==' }));
+    data.props.onOpenTask = vi.fn();
+    const complete = { ...data.run, status: 'complete', updatedAt: '2026-11-20T00:00:01.000Z' };
+    data.run.updatedAt = '2026-11-20T00:00:00.000Z';
+    let submit: (() => void) | undefined;
+    const control = vi.fn(() => new Promise<void>(resolve => { submit = resolve; }));
+    const runDetail = vi.fn(async () => complete);
+    const previous = Object.getOwnPropertyDescriptor(window, 'desktop');
+    const host = document.createElement('div'), root = createRoot(host);
+    document.body.append(host);
+    Object.defineProperty(window, 'desktop', { configurable: true, value: { runtime: { control, runDetail } } });
+    try {
+      await act(async () => root.render(<HomeProductionResult {...data} kind="image" />));
+      const confirm = [...host.querySelectorAll('button')].find(button => button.textContent === '确认验收')!;
+      expect(confirm.disabled).toBe(false);
+      expect(host.querySelector('.creation-result-preview img')?.getAttribute('alt')).toBe('cover.png');
+      await act(async () => { confirm.click(); confirm.click(); });
+      expect(control).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'run', action: 'resume', manualReviewAttemptId: 'manual-1', reviewedArtifactId: 'body' }));
+      expect(data.props.onOpenTask).not.toHaveBeenCalled();
+      expect(host.textContent).toContain('待人工验收');
+      await act(async () => { submit!(); });
+      expect(host.textContent).not.toContain('待人工验收');
+      expect(host.textContent).toContain('导出图片');
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      if (previous) Object.defineProperty(window, 'desktop', previous); else delete window.desktop;
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -57,7 +57,11 @@ describe('真实引擎内的自然语言规划', () => {
     expect(result.modelConfigId).toBe(input.modelConfigId); expect(result.credentialId).toBe(input.credentialId); expect(result).not.toHaveProperty('fingerprint'); expect(result).not.toHaveProperty('dispatchKey');
     const snapshot = await f.engine.snapshot(); expect(snapshot.runs[0].purpose).toBe('automation-plan'); expect(snapshot.ledger).toHaveLength(1); expect(snapshot.ledger[0].costState).toBe('calculated'); expect(snapshot.ledger[0].costCents).toBe(15);
     expect(snapshot.runs[0].snapshot.steps).toHaveLength(1); expect(snapshot.runs[0].snapshot.steps[0].role).toBe('planner');
-    expect(snapshot.runs[0].snapshot.steps[0].prompt).toContain('"trigger":{"type":"manual"}'); expect(snapshot.runs[0].snapshot.steps[0].prompt).not.toContain('"intervalMinutes":60'); expect(snapshot.runs[0].snapshot.steps[0].prompt).toContain('暂缺品牌名、产品图');
+    const prompt = snapshot.runs[0].snapshot.steps[0].prompt;
+    expect(prompt).toContain('"trigger":{"type":"manual"}'); expect(prompt).not.toContain('"intervalMinutes":60');
+    expect(prompt).toContain('questions只列必须用文字确认的缺项');
+    expect(prompt).toContain('风格、配色、构图等创意偏好直接在steps或constraints中给出可修改的默认值');
+    expect(prompt).toContain('界面会检查并提示补图，不再为附件添加文字问题');
     expect((await f.center.snapshot('workspace')).rules).toEqual([]);
     const reopened = createAutomationPlanning(f.options); services.push(reopened); expect((await reopened.start(input)).runId).toBe(result.runId); expect((await reopened.list('workspace'))[0].resultText).toBeUndefined(); expect((await reopened.read(input)).resultText).toBe(result.resultText); expect(f.calls).toHaveLength(1);
     await expect(reopened.start({ ...input, input: '改需求但复用编号' })).rejects.toThrow('已经变化'); await expect(reopened.read({ ...input, workspaceId: 'other' })).rejects.toThrow('不属于');

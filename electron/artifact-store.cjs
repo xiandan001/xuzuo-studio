@@ -94,12 +94,13 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
     return recoverMove(entries);
   }
 
-  async function persistManifest(artifacts) {
+  async function persistManifest(artifacts, recoverLocal) {
     const temporary = `${manifestFile}.${randomUUID()}.tmp`;
     try {
       await managed.controlPath('manifest-v1.json', true);
       await fs.writeFile(temporary, `${JSON.stringify({ version: 1, artifacts }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
-      await fs.rename(temporary, manifestFile);
+      if (recoverLocal) await recoverLocal(() => fs.rename(temporary, manifestFile));
+      else await fs.rename(temporary, manifestFile);
     } catch {
       try { await fs.unlink(temporary); } catch { /* The failed write may not have created a file. */ }
       throw new Error('无法保存产物登记表，已有产物未被覆盖。');
@@ -237,14 +238,32 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
       }
       const id = randomUUID();
       const originalName = safeName(input.preserveOriginalName === true ? input.name : stripSavedTimestamp(input.name), input.mimeType);
+      if (input.reuseOfficeReport === true && input.mimeType === 'application/json' && validId(input.runId) && validId(input.projectId)) {
+        const previous = entries.findLast(entry => entry.runId === input.runId && entry.projectId === input.projectId && !entry.trashedAt &&
+          entry.mimeType === input.mimeType && entry.sha256 === sha256 && stripSavedTimestamp(entry.name) === originalName);
+        if (previous) {
+          const current = await (await managedFor(previous)).inspect('files', previous.fileName);
+          if (current?.stat.size === buffer.length && buffer.equals(await fs.readFile(current.filename))) return metadata(previous, root);
+        }
+      }
       const name = input.preserveOriginalName === true ? originalName : timestampedFilename(originalName);
       const entry = { id, name, mimeType: input.mimeType, bytes: buffer.length, sha256, kind: kindFor(input.mimeType), createdAt: new Date().toISOString(), fileName: `${id}-${name}`, ...(input.runId ? { runId: String(input.runId) } : {}), ...(input.projectId ? { projectId: String(input.projectId) } : {}), ...(storageDirectory ? { storageDirectory } : {}), ...(provenance ? { provenance } : {}), ...(coverSourceId ? { sourceArtifactId: coverSourceId } : {}) };
       const location = await managedFor(entry);
       await location.ensureArea('files', true);
       active();
       const filename = path.join(storageDirectory ? path.join(storageDirectory, 'files') : filesDirectory, entry.fileName);
-      await fs.writeFile(filename, buffer, { flag: 'wx' });
-      try { await persistManifest([...entries, entry]); }
+      const recoverLocal = typeof input.recoverLocal === 'function' ? input.recoverLocal : undefined;
+      if (recoverLocal) {
+        // Retry an open that has not written anything, never the whole export.
+        const file = await recoverLocal(() => fs.open(filename, 'wx'));
+        try {
+          try { await file.writeFile(buffer); } finally { await file.close(); }
+        } catch (error) {
+          await fs.unlink(filename).catch(() => undefined);
+          throw error;
+        }
+      } else await fs.writeFile(filename, buffer, { flag: 'wx' });
+      try { await persistManifest([...entries, entry], recoverLocal); }
       catch (error) { try { await fs.unlink(filename); } catch { /* Only this unregistered new file is removed. */ } throw error; }
       return metadata(entry, root);
     });
@@ -354,7 +373,12 @@ function createArtifactStore({ directory, loadModule = require, convertImage, re
 
   async function exportOffice(input) {
     const { createOfficeExporter } = require('./office-export.cjs');
-    return createOfficeExporter({ writeArtifact: write, readArtifact: read, loadModule, convertImage, renderOffice, fitWallpaper, fitEngineering })(input);
+    const recoverLocal = typeof input?.recoverLocal === 'function' ? input.recoverLocal : undefined;
+    return createOfficeExporter({
+      writeArtifact: recoverLocal ? value => write({ ...value, signal: input.signal, recoverLocal }) : write,
+      readArtifact: recoverLocal ? id => recoverLocal(() => read(id)) : read,
+      loadModule, convertImage, renderOffice, fitWallpaper, fitEngineering,
+    })(input);
   }
 
   function migrateProject(projectId, destination, { rebase = false } = {}) {

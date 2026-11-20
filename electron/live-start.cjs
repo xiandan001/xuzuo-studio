@@ -17,8 +17,18 @@ function checkLookup(input) {
   return input;
 }
 async function lookupStart(liveEngine, input) {
-  checkLookup(input);
+  const byWorkflow = input?.workflowId !== undefined;
+  if (byWorkflow) {
+    if (!validId(input.projectId) || !validId(input.workspaceId) || !validId(input.workflowId) || input.dispatchKey !== undefined) throw Error('方案查询归属或编号无效。');
+  } else checkLookup(input);
   while (true) { const pending = admissions.get(liveEngine)?.get(input.projectId); if (!pending?.size) break; await Promise.allSettled([...pending]); }
+  if (byWorkflow) {
+    const { runs } = await liveEngine.snapshot(undefined, { projectIds: [input.projectId], summaryOnly: true });
+    const matches = runs.filter(run => run.mode === 'live' && run.projectId === input.projectId && run.workspaceId === input.workspaceId && run.workflowId === input.workflowId);
+    if (!matches.length) return { status: 'not-found' };
+    if (matches.length !== 1) return { status: 'unknown' };
+    return { status: 'started', run: await liveEngine.runDetail(matches[0].id) };
+  }
   const run = await liveEngine.lookupStart(input);
   return run ? { status: 'started', run } : { status: 'not-found' };
 }

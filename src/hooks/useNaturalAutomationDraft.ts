@@ -7,12 +7,16 @@ import { useRecoveryDraft } from './useRecoveryDraft';
 import { writeRecoveryDraft } from '../lib/recovery-draft';
 import { downloadFile } from '../lib/files';
 import { normalizeNaturalBindings, readProductionPreferences } from '../lib/natural-model-bindings';
+import type { ProjectReference } from '../asset-types';
+
+export const CHAT_PRODUCTION_REFERENCE_LIMIT = 16;
 
 export interface NaturalAutomationDraft {
   version: 1; workspaceId: string; projectId: string; input: string; planner: NaturalBinding;
   requestId?: string; plan?: NaturalAutomationPlan; bindings: NaturalAutomationBindings;
   workflowId?: string; creationKey?: string; workflowSaved?: boolean; ruleId?: string;
   chatExecution?: { workflowId: string; runId?: string };
+  chatProductionReferences?: ProjectReference[];
   imagePreset?: '微信红包封面'; repairAfterFailedReview?: boolean;
   planningProjectId?: string; preparationAnswers?: Record<string, string>; calendarResolved?: boolean; needsSetup?: boolean;
   acceptedRequestId?: string; acceptedInput?: string; acceptedPlanningProjectId?: string; requestedCalendarResolved?: boolean; cancelledRequestId?: string;
@@ -49,6 +53,7 @@ export function readNaturalAutomationDraft(key: string, fallback: NaturalAutomat
     if (value.repairAfterFailedReview !== undefined && typeof value.repairAfterFailedReview !== 'boolean') throw Error('invalid image review policy');
     if (value.plan && !editablePlan(value.plan)) throw Error('plan format');
     if (value.chatExecution !== undefined && (!value.chatExecution || !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.workflowId || '') || value.chatExecution.runId !== undefined && !/^[a-z0-9-]{1,160}$/i.test(value.chatExecution.runId))) throw Error('execution format');
+    if (value.chatProductionReferences !== undefined && (!Array.isArray(value.chatProductionReferences) || value.chatProductionReferences.length > CHAT_PRODUCTION_REFERENCE_LIMIT || !value.chatProductionReferences.every((file: ProjectReference) => file && /^[a-z0-9-]{1,160}$/i.test(file.id) && typeof file.name === 'string' && file.name.length <= 255 && typeof file.mimeType === 'string' && file.mimeType.length <= 120 && file.kind === 'image' && Number.isSafeInteger(file.bytes) && file.bytes > 0))) throw Error('production references format');
     if (!value.chatExecution && !value.workflowId && !value.ruleId && !value.workflowSaved) {
       value.bindings = { ...readProductionPreferences(fallback.workspaceId, store), ...value.bindings };
     }

@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import type { WorkflowDefinition } from '../configuration-types';
+import type { WorkflowDefinition, WorkflowRun } from '../configuration-types';
 import type { PageProps } from '../types';
 import type { AutomationActionResult } from '../lib/automation-dispatch';
 import { naturalPreparationMissing, naturalRuleInput } from '../lib/natural-automation-composer-state';
 import type { NaturalAutomationSession } from './useNaturalAutomationSession';
 
+const receiptReadDelays = [300, 1500, 2500];
+
 export function useChatPlanExecution(props: PageProps, session: NaturalAutomationSession) {
   const [busy, setBusy] = useState(false);
+  const [readProgress, setReadProgress] = useState({ scope: '', count: 0 });
+  const [recoveredRun, setRecoveredRun] = useState<WorkflowRun>();
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const latest = useRef({ props, session });
@@ -14,9 +18,12 @@ export function useChatPlanExecution(props: PageProps, session: NaturalAutomatio
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const { chatExecution, projectId } = session.draft;
-  const run = chatExecution && props.workflowRunner.runs.find(item => item.mode === 'live' &&
+  const matches = (item: WorkflowRun | undefined, receipt = chatExecution) => item && receipt && item.mode === 'live' &&
     item.workspaceId === props.workspaceId && item.projectId === projectId &&
-    item.workflowId === chatExecution.workflowId && (!chatExecution.runId || item.id === chatExecution.runId));
+    item.workflowId === receipt.workflowId && (!receipt.runId || item.id === receipt.runId);
+  const run = chatExecution && (props.workflowRunner.runs.find(item => matches(item)) || (matches(recoveredRun) ? recoveredRun : undefined));
+  const pending = Boolean(chatExecution && !run);
+  const scope = `${props.workspaceId}/${projectId}/${chatExecution?.workflowId || ''}`;
 
   async function execute(): Promise<AutomationActionResult> {
     const { props, session } = latest.current;
@@ -34,7 +41,7 @@ export function useChatPlanExecution(props: PageProps, session: NaturalAutomatio
     if (!project || project.id !== projectId || project.kind !== plan.outputKind) return { status: 'needs-input' };
     const current = () => mounted.current && latest.current.props.workspaceId === props.workspaceId &&
       latest.current.session.store.current.current.projectId === projectId;
-    const workflow: WorkflowDefinition = { ...compiled.workflow, id: crypto.randomUUID(), workspaceId: props.workspaceId, updatedAt: new Date().toISOString() };
+    const workflow: WorkflowDefinition = { ...compiled.workflow, automaticRecovery: true, id: crypto.randomUUID(), workspaceId: props.workspaceId, updatedAt: new Date().toISOString() };
     const input = naturalRuleInput(plan, compiled.rule.input, answers);
     const attachmentIds = (project.referenceFiles || []).map(file => file.id);
     const persist = (receipt?: typeof chatExecution) => {
@@ -72,7 +79,7 @@ export function useChatPlanExecution(props: PageProps, session: NaturalAutomatio
     }
   }
 
-  async function read() {
+  async function read(showPending = true) {
     const { props, session } = latest.current;
     const { chatExecution: receipt, projectId } = session.store.current.current;
     if (!receipt || inFlight.current) return;
@@ -82,31 +89,44 @@ export function useChatPlanExecution(props: PageProps, session: NaturalAutomatio
     inFlight.current = true;
     setBusy(true);
     try {
-      const result = await props.workflowRunner.readStartResult(projectId);
+      const result = await props.workflowRunner.readStartResult(projectId, { workspaceId: props.workspaceId, workflowId: receipt.workflowId });
       if (!current()) return;
-      const bridge = window.desktop?.runtime;
-      if (!bridge) throw Error('桌面任务服务暂不可用，请稍后读取状态。');
-      const snapshot = await bridge.snapshot();
-      if (!current()) return;
-      const found = snapshot.runs.find(item => item.mode === 'live' && item.projectId === projectId &&
-        item.workspaceId === props.workspaceId && item.workflowId === receipt.workflowId && (!receipt.runId || item.id === receipt.runId));
+      let found: WorkflowRun | undefined;
+      if (result.status === 'started') {
+        found = result.run || latest.current.props.workflowRunner.runs.find(item => item.id === result.runId);
+        if (!found) found = await window.desktop?.runtime?.runDetail?.(result.runId);
+        if (!current()) return;
+      }
       const store = latest.current.session.store;
-      if (found) {
+      if (found && matches(found, receipt)) {
         store.persist({ ...store.current.current, chatExecution: { ...receipt, runId: found.id } });
+        setRecoveredRun(found);
         session.setError('');
-      } else if (!receipt.runId && result.status === 'rejected' && ['START_NOT_FOUND', 'NO_PENDING_START'].includes(result.code || '')) {
+      } else if (!receipt.runId && result.status === 'rejected' && result.code === 'START_NOT_FOUND') {
         store.persist({ ...store.current.current, chatExecution: undefined });
         session.setError('已确认此方案还未开始，可以重新执行。');
-      } else {
-        session.setError('暂未读取到此方案的任务，请稍后再次读取状态。');
+      } else if (showPending) {
+        session.setError('暂时无法确认原任务。再次读取状态不会重复开始制作。');
       }
     } catch (cause) {
-      if (current()) session.setError(cause instanceof Error ? cause.message : '暂时无法读取任务状态。');
+      if (current() && showPending) session.setError(cause instanceof Error ? cause.message : '暂时无法读取任务状态。');
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
     }
   }
 
-  return { busy, run, pending: Boolean(chatExecution && !run), execute, read };
+  useEffect(() => {
+    if (!pending || busy || !projectId || !window.desktop?.runtime) return;
+    const count = readProgress.scope === scope ? readProgress.count : 0;
+    if (count >= receiptReadDelays.length) return;
+    const timer = window.setTimeout(() => {
+      if (inFlight.current) return;
+      setReadProgress({ scope, count: count + 1 });
+      void read(count + 1 === receiptReadDelays.length);
+    }, receiptReadDelays[count]);
+    return () => window.clearTimeout(timer);
+  }, [pending, busy, projectId, scope, readProgress]);
+
+  return { busy, run, pending, execute, read: () => read() };
 }

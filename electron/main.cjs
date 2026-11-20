@@ -432,8 +432,10 @@ function registerRuntime(credentials) {
   handle('poll-snapshot', afterRevision => liveEngine.snapshot(afterRevision, { summaryOnly: true, delta: true }));
   handle('run-detail', id => liveEngine.runDetail(id));
   handle('control', async input => {
-    if (['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality', 'auto-quality'].includes(input?.action)) {
-      const run = (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.find(item => item.id === input.id);
+    if (['resume', 'continue', 'retry', 'recheck-quality', 'refine-quality', 'auto-quality', 'recover-receipt'].includes(input?.action)) {
+      const run = input.action === 'recover-receipt'
+        ? await liveEngine.runDetail(input.id)
+        : (await liveEngine.snapshot(undefined, { summaryOnly: true })).runs.find(item => item.id === input.id);
       if (run) return withProjectWrite(run.projectId, async () => {
         await assertProjectReady({ project: { id: run.projectId, workspaceId: input.project?.workspaceId || run.workspaceId }, attachmentIds: [...(run.attachmentIds || []), ...run.attempts.flatMap(attempt => (attempt.artifacts || []).map(artifact => artifact.id))] });
         return liveEngine.control(input);

@@ -56,6 +56,7 @@ async function preflight(request, { credentials, modelRuntime, artifactStore, qu
     if (!helper?.available) addError(helper?.reason || '本地动画工具尚不可用，未开始收费生成。', 'inputSource', enabled.find(step => step.kind === 'animation-compose').id);
   }
   if (request.purpose !== undefined && !['automation-plan', 'business-assist'].includes(request.purpose)) addError('任务用途不受支持，未开始模型请求。');
+  if (workflow.automaticRecovery !== undefined && (typeof workflow.automaticRecovery !== 'boolean' || request.purpose !== undefined)) addError('仅制作任务可使用自动恢复设置。');
   if (request.purpose === 'automation-plan' && (workflow.steps.length !== 1 || enabled.length !== 1 || enabled[0].kind !== 'text' || enabled[0].role !== 'planner' || request.attachmentIds.length)) addError('AI规划只能执行一个无附件的文字规划步骤，不能混入制作、导出或其他操作。');
   if (request.purpose === 'business-assist' && (workflow.steps.length !== 1 || enabled.length !== 1 || !['text', 'vision'].includes(enabled[0].kind) || enabled[0].role !== 'planner')) addError('业务辅助只执行一个资料文字或识读步骤，不执行制作、导出或任意工具。');
   if (request.purpose !== undefined && (request.replaceWaitingReviewRunId !== undefined || request.replaceWaitingReviewAttemptId !== undefined || request.refinementFork !== undefined)) addError('辅助资料任务不会替代或取消已有制作任务。');

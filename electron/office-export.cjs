@@ -1,11 +1,24 @@
 const { parseContent, normalizeOfficeDocument, officeMissingInputs, imageDimensions } = require('./office-content.cjs');
 const { renderOffice: defaultRenderOffice } = require('./office-render.cjs');
+const { createHash } = require('node:crypto');
 
 const OFFICE_MIME = {
   ppt: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   word: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   excel: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+const OFFICE_EXTENSIONS = { ppt: 'pptx', word: 'docx', excel: 'xlsx' };
+const digest = value => createHash('sha256').update(value).digest('hex');
+
+async function officeCheckpointFile(input, readArtifact, sourceSha256) {
+  const checkpoint = input.officeCheckpoint;
+  if (checkpoint.sourceSha256 !== sourceSha256 || typeof checkpoint.reportText !== 'string') throw Error('原交付资料已变化，请先核对已生成的 Office 文件。');
+  const file = await readArtifact(checkpoint.artifactId);
+  if (file.projectId !== input.projectId || file.runId !== input.runId || file.mimeType !== OFFICE_MIME[input.kind] ||
+      digest(file.buffer) !== checkpoint.artifactSha256) throw Error('已生成的 Office 文件内容或归属已变化，请先核对原文件。');
+  const { buffer, ...metadata } = file;
+  return metadata;
+}
 
 async function collectAssets(assets, readArtifact, convertImage) {
   if (!Array.isArray(assets) || assets.length > 20) throw new Error('单次导出最多附加 20 份产物。');
@@ -53,6 +66,16 @@ function createOfficeExporter({ writeArtifact, readArtifact, loadModule = requir
     if (typeof raw !== 'string' || !raw.trim()) throw new Error('没有可导出的正文或明确编辑源，请先完成内容并指定插图位置。');
     const document = normalizeOfficeDocument(input.kind, raw, input.title);
     const collected = await collectAssets(input.assets ?? [], readArtifact, convertImage), referencedImages = usedImageIds(document);
+    const scope = { runId: input.runId, projectId: input.projectId };
+    const remember = typeof input.rememberOfficeCheckpoint === 'function' ? input.rememberOfficeCheckpoint : undefined;
+    const sourceSha256 = remember && digest(JSON.stringify([input.projectId, input.runId, input.stepId, input.kind, input.title, raw,
+      collected.sources.map(source => [source.id, source.name, source.mimeType, digest(source.buffer)])]));
+    const writeReport = reportText => writeArtifact({ ...scope, name: `${document.title}-检查报告.json`, mimeType: 'application/json', text: reportText, ...(remember ? { reuseOfficeReport: true } : {}) });
+    if (remember && input.officeCheckpoint) {
+      const file = await officeCheckpointFile(input, readArtifact, sourceSha256);
+      await remember(input.officeCheckpoint, file);
+      return [file, await writeReport(input.officeCheckpoint.reportText)];
+    }
     const unplacedImages = collected.images.filter(image => !referencedImages.includes(image.id));
     const report = { type: 'xuzuo-office-export-check', version: 2, title: document.title, format: input.kind, generatedAt: new Date().toISOString(), status: 'requires-human-review', contentEditable: true, sourceStructure: document.kind === 'excel' ? 'canonical-workbook' : 'canonical-editor', normalizedWithWorkbench: true, embeddedImages: collected.images.filter(image => referencedImages.includes(image.id)).length, unplacedImageIds: unplacedImages.map(image => image.id), sources: collected.sources.map(source => ({ id: source.id, name: source.name, mimeType: source.mimeType })), warnings: [], missingInputs: officeMissingInputs(document), formulas: { count: 0, cells: [], recalculated: false, resultsVerified: false }, rendered: false, originalLayoutPreserved: false, manualChecks: ['逐页检查文字、版式、分页和图片比例。', '核对事实、数字、人物与商品一致性。', '同一编辑结构导出不等于已经完成视觉验收，不承诺输入原稿动画、宏或特殊图表无损保留。'] };
     if (unplacedImages.length) report.warnings.push(`有 ${unplacedImages.length} 份图片没有在编辑内容中指定位置，未擅自追加页面、段落或工作表；原始图片仍保留在项目产物中。`);
@@ -60,10 +83,10 @@ function createOfficeExporter({ writeArtifact, readArtifact, loadModule = requir
     if (report.missingInputs.length) report.warnings.push('仍有待补充资料，已保留独立资料说明；请补全并人工检查后再交付。');
     const rendered = await (renderOffice ? renderOffice({ document, images: collected.images, report }) : defaultRenderOffice({ document, images: collected.images, report }, loadModule));
     const buffer = Buffer.from(rendered.buffer); Object.assign(report, rendered.report);
-    const scope = { runId: input.runId, projectId: input.projectId }, extensions = { ppt: 'pptx', word: 'docx', excel: 'xlsx' };
-    const file = await writeArtifact({ ...scope, name: `${document.title}.${extensions[input.kind]}`, mimeType: OFFICE_MIME[input.kind], buffer });
-    const check = await writeArtifact({ ...scope, name: `${document.title}-检查报告.json`, mimeType: 'application/json', text: `${JSON.stringify(report, null, 2)}\n` });
-    return [file, check];
+    const file = await writeArtifact({ ...scope, name: `${document.title}.${OFFICE_EXTENSIONS[input.kind]}`, mimeType: OFFICE_MIME[input.kind], buffer });
+    const reportText = `${JSON.stringify(report, null, 2)}\n`;
+    if (remember) await remember({ artifactId: file.id, artifactSha256: digest(buffer), sourceSha256, reportText }, file);
+    return [file, await writeReport(reportText)];
   };
 }
 module.exports = { createOfficeExporter };

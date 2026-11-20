@@ -44,15 +44,15 @@ describe('首页方案只突出当前用户主动作', () => {
   });
   it('聊天一次性执行在启动前允许另存，受理未知时只允许读取，已有产物直接显示', () => {
     const ready = html({ direct: 'ready' });
-    expect(ready).toContain('执行方案');
+    expect(ready).toContain('开始制作');
     expect(ready).toContain('仅保存为自动化');
     const pending = html({ direct: 'pending' });
     expect(pending).toContain('读取任务状态');
-    expect(pending).not.toContain('>执行方案<');
+    expect(pending).not.toContain('>开始制作<');
     expect(pending).not.toContain('仅保存为自动化');
     const started = html({ direct: 'run', job: true, artifact: true });
     expect(started).toContain('真实结果.png');
-    expect(started).not.toContain('>执行方案<');
+    expect(started).not.toContain('>开始制作<');
   });
   it('实际有成品的已完成job原位显示真实结果和导出；完成但无成品只看步骤，不伪造成品', () => { const ready = html({ created: true, job: true, artifact: true }); expect(ready).toContain('作品已生成'); expect(ready).toContain('真实结果.png'); expect(ready).toContain('打开编辑器'); expect(ready).toContain('导出图片'); const empty = html({ created: true, job: true }); expect(empty).toContain('查看结果与步骤'); expect(empty).not.toContain('>导出图片<'); });
   it('等待人工检查时保留实际作品和人工验收状态，打开或导出不冒充已交付', () => { const view = html({ created: true, job: true, artifact: true, waiting: true }); expect(view).toContain('作品已生成'); expect(view).toContain('待人工验收'); expect(view).not.toContain('当前版本已交付'); expect(html({ created: true, job: true, waiting: true })).toContain('查看结果与步骤'); });

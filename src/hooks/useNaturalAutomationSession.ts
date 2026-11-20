@@ -13,8 +13,10 @@ import { naturalEffectiveBindings, naturalPreparationMissing } from '../lib/natu
 import { naturalModelSelection } from '../components/NaturalAutomationModels';
 import { normalizeNaturalBinding, normalizeNaturalBindings, rememberProductionBinding, replaceNaturalProductionBinding, type NaturalModelBinding, type NaturalProductionCapability } from '../lib/natural-model-bindings';
 import { automationProjectAvailability } from '../lib/automation-project-availability';
+import type { ProjectReference } from '../asset-types';
+import type { Project } from '../types';
 
-export interface NaturalAutomationSessionOptions { onClose?: () => void; onSaved?: () => void; draftOptions?: NaturalAutomationDraftOptions; }
+export interface NaturalAutomationSessionOptions { onClose?: () => void; onSaved?: () => void; draftOptions?: NaturalAutomationDraftOptions; chatReferences?: ProjectReference[]; }
 
 export function useNaturalAutomationSession(props: PageProps, options: NaturalAutomationSessionOptions = {}) {
   const onClose = () => options.onClose?.(), onSaved = () => options.onSaved?.();
@@ -44,11 +46,24 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
   const project = props.projects.find(item => item.id === draft.projectId && !item.purgedAt && !item.trashedAt);
   const selected = naturalModelSelection(props.configuration, 'text', draft.planner);
   const bindings = useMemo(() => naturalEffectiveBindings(props.configuration, draft.bindings, selected.model && selected.credentialId ? { ...draft.planner, modelConfigId: selected.model.id, credentialId: selected.credentialId } : draft.planner), [draft.bindings, draft.planner, selected.model?.id, selected.credentialId, props.configuration.models, props.configuration.connections, props.configuration.credentials]);
-  const result = useMemo(() => {
-    if (!draft.plan || !project) return {};
-    try { const plan = { ...normalizedNaturalDraftPlan(draft.plan), unsupported: [...new Set([...draft.plan.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || planning.record?.input || draft.input)])] }; return { compiled: compileNaturalAutomationPlan(plan, project, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset, repairAfterFailedReview: repairAfterReviewEnabled(draft.acceptedInput || draft.input, draft.repairAfterFailedReview) }) }; }
-    catch (cause) { return { error: cause instanceof Error ? cause.message : '方案还需要调整。' }; }
-  }, [draft.plan, bindings, draft.input, draft.acceptedInput, draft.calendarResolved, draft.imagePreset, draft.repairAfterFailedReview, planning.record?.input, project?.id, project?.kind, project?.referenceFiles, props.configuration.models, props.configuration.connections, props.configuration.credentials, props.configuration.workflows]);
+  const { result, preparation } = useMemo(() => {
+    function compile(target: Project | undefined) {
+      if (!draft.plan || !target) return {};
+      try { const plan = { ...normalizedNaturalDraftPlan(draft.plan), unsupported: [...new Set([...draft.plan.unsupported, ...naturalAutomationRequestIssues(draft.acceptedInput || planning.record?.input || draft.input)])] }; return { compiled: compileNaturalAutomationPlan(plan, target, props.configuration, bindings, { allowPreparationQuestions: true, calendarResolved: draft.calendarResolved, imagePreset: draft.imagePreset, repairAfterFailedReview: repairAfterReviewEnabled(draft.acceptedInput || draft.input, draft.repairAfterFailedReview) }) }; }
+      catch (cause) { return { error: cause instanceof Error ? cause.message : '方案还需要调整。' }; }
+    }
+    const result = compile(project);
+    if (!draft.plan || !options.chatReferences || draft.chatExecution) return { result };
+    const matches = project?.kind === draft.plan.outputKind;
+    const references = [...options.chatReferences, ...(draft.chatProductionReferences || [])];
+    if (matches && !references.length) return { result, preparation: result };
+    // Preview checks only. Project and file ownership are still checked again with real IDs before dispatch.
+    const target: Project = matches ? project : { id: 'chat-production-preview', workspaceId: props.workspaceId, name: draft.plan.name, description: draft.plan.objective, kind: draft.plan.outputKind, status: 'draft', costCents: 0, version: 0, updatedAt: '', accent: 'blue' };
+    const preview = { ...target, referenceFiles: [...new Map([...(target.referenceFiles || []), ...references].map(file => [file.id, file])).values()] };
+    const preparation = compile(preview);
+    // Copies may already exist under different IDs. Final compilation uses the deduplicated project files.
+    return { result, preparation: preparation.error && result.compiled && !result.compiled.missingReferenceImages ? result : preparation };
+  }, [draft.plan, bindings, draft.input, draft.acceptedInput, draft.calendarResolved, draft.imagePreset, draft.repairAfterFailedReview, draft.chatExecution, draft.chatProductionReferences, options.chatReferences, planning.record?.input, project?.id, project?.kind, project?.referenceFiles, props.workspaceId, props.configuration.models, props.configuration.connections, props.configuration.credentials, props.configuration.workflows]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => registerEditorSession({ id: `natural-automation-${props.workspaceId}`, projectId: draft.projectId, label: '一句话自动化方案', getState: () => ({ dirty: true, pending: saving.current, persistenceError: latest.current.store.issue || latest.current.store.recovery.error || undefined }), save: async () => latest.current.store.recovery.retry(), exportRecovery: () => latest.current.store.recovery.exportDraft(), flushRecovery: () => latest.current.store.recovery.retry() }), [props.workspaceId, draft.projectId]);
   useEffect(() => { const id = draft.ruleId; if (!id) return; void window.desktop?.automation?.snapshot(props.workspaceId).then(snapshot => { if (mounted.current && latest.current.store.current.current.ruleId === id) setSavedRule(snapshot.rules.find(rule => rule.id === id)); }).catch(() => undefined); }, [draft.ruleId, props.workspaceId]);
@@ -147,6 +162,6 @@ export function useNaturalAutomationSession(props: PageProps, options: NaturalAu
     } catch (cause) { setError(cause instanceof Error ? cause.message : '已有方案未能恢复，原记录和费用保留。'); return false; }
   }
   const requestPreparation = () => setPreparationRequest(value => value + 1);
-  return { store, draft, setDraft, project, selected, bindings, result, planning, error, setError, busy, locked, frozen, savedRule: currentRule, setSavedRule, readiness, entries, ownerId, targetPurged, billingOwnerPurged, save, ensureCreated, createAndRun, runBusy, preparationRequest, requestPreparation, newDraft, changeProject, setProductionBinding, adoptDraft, existingFlow, savedWorkflow };
+  return { store, draft, setDraft, project, selected, bindings, result, preparation, planning, error, setError, busy, locked, frozen, savedRule: currentRule, setSavedRule, readiness, entries, ownerId, targetPurged, billingOwnerPurged, save, ensureCreated, createAndRun, runBusy, preparationRequest, requestPreparation, newDraft, changeProject, setProductionBinding, adoptDraft, existingFlow, savedWorkflow };
 }
 export type NaturalAutomationSession = ReturnType<typeof useNaturalAutomationSession>;

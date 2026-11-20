@@ -4,11 +4,12 @@ import type { LiveCheckedStartResult, LiveRuntimeBridge, LiveStartRequest, LiveS
 interface StartStorage { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 interface Receipt { version: 1; signature: string; payloadSignature?: string; payload: LiveStartRequest; }
 interface Options { storage: () => StartStorage; bridge: () => LiveRuntimeBridge | undefined; onRun: (run: WorkflowRun) => void; timeoutMs?: number; }
+interface WorkflowScope { workspaceId: string; workflowId: string; }
 const keyFor = (projectId: string) => `xuzuo-live-start-v1:${projectId}`;
 const pick = <T extends object>(value: T, keys: string[]): T => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key as keyof T]])) as T;
 function cleanRequest(input: LiveStartRequest): LiveStartRequest {
   const steps = input.workflow.steps.map(step => ({ ...pick(step, ['id', 'name', 'kind', 'prompt', 'promptTemplateId', 'modelConfigId', 'credentialId', 'inputSource', 'budgetCents', 'enabled', 'maxOutputTokens', 'imageSize', 'imageBackground', 'imageOutputFormat', 'imageQuality', 'imageComplexity', 'imageFrameCount', 'imageFrameDurationMs', 'imageCompression', 'imageMarkupId', 'imageSvgModel', 'imageSvgReasoningEffort', 'voice', 'count', 'contentSourceStepId', 'contentSourceStepIds', 'documentImageSource', 'documentImageStepIds', 'imageSourceStepId', 'role', 'referenceArtifactIds', 'engineeringReferenceId', 'wallpaperTarget', 'reasoningEffort', 'animation', 'beadBaseRequestId']), ...(step.qualityGate ? { qualityGate: { ...pick(step.qualityGate, ['repairStepId', 'maxRepairs', 'minScore']), ...(step.qualityGate.imageRepairBinding ? { imageRepairBinding: pick(step.qualityGate.imageRepairBinding, ['modelConfigId', 'credentialId']) } : {}) } } : {}) }));
-  return structuredClone({ ...pick(input, ['purpose', 'input', 'variables', 'attachmentIds', 'dispatchKey', 'acknowledgePaidCalls', 'acknowledgeUnknownCost', 'replaceWaitingReviewRunId', 'replaceWaitingReviewAttemptId', 'refinementFork']), project: pick(input.project, ['id', 'workspaceId', 'name', 'kind', 'description', 'status', 'costCents', 'budgetCents', 'version', 'updatedAt', 'accent', 'referenceFiles', 'businessCategoryId']), workflow: { ...pick(input.workflow, ['id', 'workspaceId', 'name', 'description', 'outputKind', 'businessCategoryId', 'updatedAt', 'goalBrief', 'foundationVersion', 'imagePreset', 'sourceArtifactTarget', 'sourceChat']), steps }, connections: input.connections.map(connection => pick(connection, ['id', 'name', 'providerId', 'protocol', 'baseUrl', 'enabled', 'status', 'demo'])), models: input.models.map(model => ({ ...pick(model, ['id', 'name', 'modelId', 'connectionId', 'capabilities', 'enabled', 'demo']), pricing: pick(model.pricing, ['unit', 'currency', 'input', 'output', 'exchangeRate', 'referenceOnly', 'referenceNote', 'officialUrl', 'verifiedAt']) })) });
+  return structuredClone({ ...pick(input, ['purpose', 'input', 'variables', 'attachmentIds', 'dispatchKey', 'acknowledgePaidCalls', 'acknowledgeUnknownCost', 'replaceWaitingReviewRunId', 'replaceWaitingReviewAttemptId', 'refinementFork']), project: pick(input.project, ['id', 'workspaceId', 'name', 'kind', 'description', 'status', 'costCents', 'budgetCents', 'version', 'updatedAt', 'accent', 'referenceFiles', 'businessCategoryId']), workflow: { ...pick(input.workflow, ['id', 'workspaceId', 'name', 'description', 'outputKind', 'businessCategoryId', 'updatedAt', 'goalBrief', 'foundationVersion', 'automaticRecovery', 'imagePreset', 'sourceArtifactTarget', 'sourceChat']), steps }, connections: input.connections.map(connection => pick(connection, ['id', 'name', 'providerId', 'protocol', 'baseUrl', 'enabled', 'status', 'demo'])), models: input.models.map(model => ({ ...pick(model, ['id', 'name', 'modelId', 'connectionId', 'capabilities', 'enabled', 'demo']), pricing: pick(model.pricing, ['unit', 'currency', 'input', 'output', 'exchangeRate', 'referenceOnly', 'referenceNote', 'officialUrl', 'verifiedAt']) })) });
 }
 function signature(input: LiveStartRequest): string {
   const payload = cleanRequest(input);
@@ -31,7 +32,7 @@ export function createLiveStartCoordinator(options: Options) {
     try { const current = load(receipt.payload.project.id); if (current?.payload.dispatchKey === receipt.payload.dispatchKey) options.storage().removeItem(keyFor(receipt.payload.project.id)); } catch { /* An unreadable receipt must not be overwritten. */ }
   }
   function accepted(receipt: Receipt, run: WorkflowRun, recovered = false): LiveStartResult {
-    if (run.projectId !== receipt.payload.project.id || run.workspaceId !== receipt.payload.project.workspaceId || run.dispatchKey !== receipt.payload.dispatchKey) return unknown(receipt.payload.dispatchKey!, '启动回执归属不匹配，原记录保留，请查看当前任务。');
+    if (run.projectId !== receipt.payload.project.id || run.workspaceId !== receipt.payload.project.workspaceId || run.workflowId !== receipt.payload.workflow.id || run.dispatchKey !== receipt.payload.dispatchKey) return unknown(receipt.payload.dispatchKey!, '启动回执归属不匹配，原记录保留，请查看当前任务。');
     clear(receipt); try { options.onRun(run); } catch { /* An admitted task stays started even if local state refresh fails. */ } return { status: 'started', runId: run.id, ...(recovered ? { recovered: true } : {}) };
   }
   async function lookup(receipt: Receipt): Promise<Lookup> {
@@ -40,6 +41,17 @@ export function createLiveStartCoordinator(options: Options) {
     const snapshot = await bounded(bridge.snapshot(), options.timeoutMs || 2500);
     const run = snapshot.runs.find(run => run.projectId === receipt.payload.project.id && run.workspaceId === receipt.payload.project.workspaceId && run.dispatchKey === receipt.payload.dispatchKey);
     return run ? { status: 'started', run } : { status: 'unknown' };
+  }
+  async function readWorkflow(projectId: string, scope: WorkflowScope): Promise<LiveStartResult> {
+    const bridge = options.bridge();
+    if (!bridge?.lookupStart) return unknown('');
+    const result = await bounded(bridge.lookupStart({ projectId, ...scope }), options.timeoutMs || 2500);
+    if (result.status === 'not-found') return absent();
+    if (result.status !== 'started') return unknown('');
+    const { run } = result;
+    if (run.mode !== 'live' || run.projectId !== projectId || run.workspaceId !== scope.workspaceId || run.workflowId !== scope.workflowId) return unknown('', '启动回执归属不匹配，原记录保留。');
+    try { options.onRun(run); } catch { /* Status is still known even if the list cannot refresh. */ }
+    return { status: 'started', runId: run.id, run, recovered: true };
   }
   async function submit(receipt: Receipt, retry = true, current: () => boolean = () => true): Promise<LiveStartResult> {
     const bridge = options.bridge(); if (!bridge) return unknown(receipt.payload.dispatchKey!);
@@ -77,10 +89,21 @@ export function createLiveStartCoordinator(options: Options) {
       if (prior) return prior.signature === identity ? prior.task : Promise.resolve({ status: 'rejected', code: 'START_IN_PROGRESS', error: '上一轮启动仍在核对，本次修改尚未提交。' });
       const task = perform(frozen, prepare, current).finally(() => { if (flights.get(frozen.project.id)?.task === task) flights.delete(frozen.project.id); }); flights.set(frozen.project.id, { signature: identity, task }); return task;
     },
-    async read(projectId: string): Promise<LiveStartResult> {
-      let receipt: Receipt | undefined; try { receipt = load(projectId); } catch (error) { return unknown('', error instanceof Error ? error.message : undefined); }
-      if (!receipt) return { status: 'rejected', code: 'NO_PENDING_START', error: '没有待确认的启动记录，请查看当前项目任务。' };
-      try { const found = await lookup(receipt); if (found.status === 'started') return accepted(receipt, found.run, true); if (found.status === 'not-found') { clear(receipt); return absent(); } return unknown(receipt.payload.dispatchKey!); } catch { return unknown(receipt.payload.dispatchKey!); }
+    async read(projectId: string, scope?: WorkflowScope): Promise<LiveStartResult> {
+      let receipt: Receipt | undefined;
+      try { receipt = load(projectId); } catch (error) { return unknown('', error instanceof Error ? error.message : undefined); }
+      try {
+        if (scope && flights.has(projectId)) return unknown('');
+        if (scope && (receipt?.payload.workflow.id !== scope.workflowId || receipt?.payload.project.workspaceId !== scope.workspaceId)) return await readWorkflow(projectId, scope);
+        if (!receipt) return { status: 'rejected', code: 'NO_PENDING_START', error: '没有待确认的启动记录，请查看当前项目任务。' };
+        const found = await lookup(receipt);
+        if (found.status === 'started') {
+          const result = accepted(receipt, found.run, true);
+          return scope && result.status === 'started' ? { ...result, run: found.run } : result;
+        }
+        if (found.status === 'not-found') { clear(receipt); return absent(); }
+        return unknown(receipt.payload.dispatchKey!);
+      } catch { return unknown(receipt?.payload.dispatchKey || ''); }
     },
   };
 }

@@ -7,7 +7,7 @@ const { preflight, replaceVariables, modelStep } = require('./live-validation.cj
 const { extractReferenceText } = require('./reference-text.cjs');
 const { finishEditedReview } = require('./edited-delivery.cjs');
 const { illustrationAssets, composeDocumentImages } = require('./document-illustrations.cjs');
-const { createRunHistoryStore, validateRecords, runSummary } = require('./run-history-store.cjs');
+const { createRunHistoryStore, validateRecords, runSummary, publicRun } = require('./run-history-store.cjs');
 const { evaluateQuality, repairInput, reviewVerdict } = require('./automation-quality.cjs');
 const { normalizeReasoningEffort } = require('./reasoning-options.cjs');
 const { qualityRecoveryDecision } = require('./quality-recovery-policy.cjs');
@@ -22,12 +22,23 @@ const { coverProof, coverSources, sourceStepIds: coverSourceStepIds } = require(
 const { assertArtifactRefinementTarget } = require('./artifact-refinement-target.cjs');
 const { isFinalManualReview } = require('./workflow-final-review.cjs');
 const { ModelRuntimeError } = require('./provider-http.cjs');
+const { createLocalExportRetry } = require('./local-export-retry.cjs');
 
 const ACTIVE = new Set(['running', 'paused', 'waiting-review']);
 const TEXT_OUTPUT_STEPS = new Set(['text', 'vision', 'video-understanding']);
 const DEFAULT_STEP_OUTPUT_TOKENS = 2048;
 const now = () => new Date().toISOString();
 const cnyKnown = cost => cost.costState === 'calculated' && (!cost.calculation || cost.calculation.cnyAmount !== undefined);
+const responseIsUncertain = error => error.requestStarted !== false &&
+  (!Number.isInteger(error.httpStatus) || error.httpStatus === 408 || error.httpStatus >= 500) &&
+  !error.usage && !error.artifacts?.length && !error.partialText && error.code !== 'INCOMPLETE_OUTPUT';
+
+function isDeliveryArtifact(file, kind) {
+  const types = { word: 'wordprocessingml.document', ppt: 'presentationml.presentation', excel: 'spreadsheetml.sheet' };
+  return file && file.bytes > 0 && !file.trashedAt && !file.unavailable && (kind === 'image'
+    ? file.kind === 'image' && file.mimeType?.startsWith('image/')
+    : file.kind === 'office' && file.mimeType === 'application/vnd.openxmlformats-officedocument.' + types[kind]);
+}
 function failedStepOutputLimit(run) {
   const step = run.snapshot.steps[run.stepIndex];
   if (run.status !== 'failed' || !step?.enabled || !TEXT_OUTPUT_STEPS.has(step.kind)) return;
@@ -170,7 +181,11 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
       if (recoverInterrupted && record.run.status === 'running') {
         mark(record);
         record.run.status = 'interrupted'; record.run.error = '应用关闭或重启导致中断；继续执行可能再次调用模型并产生费用。';
-        for (const attempt of record.run.attempts) if (attempt.status === 'running') { attempt.status = 'cancelled'; attempt.summary = '执行中断，远端可能已经处理请求，请检查保存的用量和产物。'; }
+        for (const attempt of record.run.attempts) if (attempt.status === 'running') {
+          attempt.status = 'cancelled'; attempt.summary = '执行中断，远端可能已经处理请求，请检查保存的用量和产物。';
+          const entry = ledgerFor(record, attempt);
+          if (record.run.snapshot.automaticRecovery === true && entry?.status === 'processing' && !entry.queryOnly) attempt.requestOutcomeUnknown = true;
+        }
         for (const entry of record.ledger) if (entry.status === 'processing') { entry.status = 'cancelled'; entry.costState = 'unknown'; }
       }
       records.set(record.run.id, record);
@@ -210,6 +225,15 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
   const projectCost = record => Math.max(0, ...[...records.values()].filter(item => item.run.projectId === record.run.projectId).map(item => item.legacyBaseCostCents || 0)) + projectLedgerCost(record.run.projectId);
   const update = (record, changes) => { mark(record); return Object.assign(record.run, changes, { updatedAt: now() }); };
   function ledgerFor(record, attempt) { return record.ledger.find(entry => entry.workflowAttemptId === attempt.id); }
+  async function receiptFor(record, step, attempt) {
+    if (!step?.enabled || !modelStep(step) || !attempt || !modelRuntime.recoverReceipt) return;
+    const { run } = record, entry = ledgerFor(record, attempt);
+    if (attempt.stepId !== step.id || !entry || entry.queryOnly || entry.projectId !== run.projectId ||
+        entry.workflowRunId !== run.id || entry.workflowStepId !== step.id) return;
+    const result = await modelRuntime.recoverReceipt({ requestId: attempt.id, runId: run.id, projectId: run.projectId });
+    if (result && (!Array.isArray(result.artifacts) || result.artifacts.some(file => file.projectId !== run.projectId || file.runId !== run.id || file.trashedAt || file.unavailable))) throw Error('原请求的成品不属于这次制作，未重新发送模型请求。');
+    return result;
+  }
   async function billingContext(record, entry, attempt) {
     const step = record.run.snapshot.steps.find(item => item.id === entry.workflowStepId);
     // A resumed run may replace request configuration: it cannot prove an old endpoint.
@@ -301,7 +325,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     attempt.status = cancelled ? 'cancelled' : 'failed';
     attempt.error = typeof error.publicMessage === 'string' ? error.publicMessage.slice(0, 500) : error.name === 'ModelRuntimeError' || (!modelStep(record.run.snapshot.steps[record.run.stepIndex]) && /[\u3400-\u9fff]/.test(error.message || '')) ? error.message.slice(0, 500) : '当前步骤未完成，请检查连接、凭证、模型权限或服务状态。';
     delete attempt.errorCode;
-    if (error.code === 'COVER_LAYOUT_REJECTED' && record.run.snapshot.steps[record.run.stepIndex]?.kind === 'export') attempt.errorCode = error.code;
+    if (error.code === 'WORKFLOW_BUDGET_LIMIT' || (error.code === 'COVER_LAYOUT_REJECTED' && record.run.snapshot.steps[record.run.stepIndex]?.kind === 'export')) attempt.errorCode = error.code;
     delete attempt.incompleteReason;
     delete attempt.httpStatus;
     if (error instanceof ModelRuntimeError && typeof error.code === 'string' && /^[A-Z][A-Z_0-9]{0,63}$/.test(error.code)) {
@@ -312,6 +336,13 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     attempt.summary = error.partialText ? `${attempt.error}\n\n已收到的部分实际结果：\n${String(error.partialText).slice(0, 100000)}` : attempt.error;
     if (Array.isArray(error.artifacts)) attempt.artifacts = error.artifacts;
     const entry = ledgerFor(record, attempt);
+    if (record.run.snapshot.automaticRecovery === true && entry && !entry.queryOnly) {
+      attempt.requestOutcomeUnknown = entry.status === 'processing' && responseIsUncertain(error);
+      if (attempt.requestOutcomeUnknown) {
+        attempt.error = '模型请求的结果尚未确认。工作台会优先核对原请求和已有产物，避免重复计费。';
+        attempt.summary = attempt.error;
+      }
+    }
     if (entry) {
       if (error.usage && !entry.queryOnly) {
         if (error.billingRequestSnapshot) { entry.billingRequestSnapshot = structuredClone(error.billingRequestSnapshot); attempt.billingRequestSnapshot = structuredClone(error.billingRequestSnapshot); }
@@ -438,7 +469,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     return { scheduled: true };
   }
 
-  async function pump(id) {
+  async function pump(id, receipt) {
     if (controllers.has(id)) return;
     const record = records.get(id);
     const controller = new AbortController(); controllers.set(id, controller);
@@ -451,17 +482,33 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         if (!step.enabled) { run.stepIndex++; continue; }
         const lastStepAttempt = run.attempts.findLast(attempt => attempt.stepId === step.id);
         const previousAttempt = !run.retryStepOnly && modelStep(step) && modelRuntime.recoverReceipt && lastStepAttempt && ['cancelled', 'failed'].includes(lastStepAttempt.status) && ledgerFor(record, lastStepAttempt) ? lastStepAttempt : undefined;
+        const reconciledReceipt = previousAttempt && receipt?.attemptId === previousAttempt.id;
         let recovered;
-        try { if (previousAttempt) recovered = await modelRuntime.recoverReceipt({ requestId: previousAttempt.id, runId: run.id, projectId: run.projectId }); }
-        catch (error) { update(record, { status: 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
+        try {
+          if (previousAttempt) recovered = reconciledReceipt ? receipt.result : await modelRuntime.recoverReceipt({ requestId: previousAttempt.id, runId: run.id, projectId: run.projectId });
+          if (!recovered && previousAttempt?.requestOutcomeUnknown && run.snapshot.automaticRecovery === true) {
+            update(record, { status: 'failed', error: '尚未确认原请求的结果，未发送新的模型请求。' }); await persist(); break;
+          }
+        }
+        catch (error) { update(record, { status: run.snapshot.automaticRecovery === true ? 'failed' : 'waiting-review', error: error.message }); controllers.delete(id); await persist(); break; }
+        receipt = undefined;
         const attempt = recovered ? previousAttempt : { id: randomUUID(), stepId: step.id, stepName: step.name, modelLabel: '人工步骤', status: 'running', costCents: 0, costState: 'not-incurred', summary: '正在执行。', input: '', prompt: replaceVariables(step.prompt || '', run.variables).content, action: actionFor(step, run.retryStepOnly || run.repairContext?.stepId === step.id), artifacts: [], startedAt: now() };
+        if (run.snapshot.automaticRecovery === true && step.kind === 'export' && lastStepAttempt?.officeCheckpoint) {
+          attempt.officeCheckpoint = lastStepAttempt.officeCheckpoint;
+          attempt.artifacts = lastStepAttempt.artifacts;
+        }
         const coverRun = isRedPacketCoverWorkflow(run.snapshot, run.projectId);
         const coverReview = !recovered && coverRun && step.kind === 'vision';
         if (coverReview) attempt.prompt = [coverCreativeText(attempt.prompt), coverReviewRules].filter(Boolean).join('\n\n');
         if (!recovered) run.attempts.push(attempt); else { attempt.recoveredFromReceiptAt = now(); attempt.recoveredError = attempt.error; attempt.status = 'running'; }
         update(record, { error: undefined }); await persist();
+        const recoverLocal = step.kind === 'export' && run.snapshot.automaticRecovery === true ? createLocalExportRetry(controller.signal, () => {
+          attempt.summary = '文件暂时被占用，正在恢复本地导出。'; update(record, {});
+        }) : undefined;
         try {
-          const context = await inputFor(record, step, run.stepIndex);
+          const context = reconciledReceipt && !step.documentImageStepIds?.length
+            ? { input: attempt.input, attachments: [], illustrations: [] }
+            : await inputFor(record, step, run.stepIndex);
           if (coverReview) context.input = coverCreativeText(context.input);
           if (!recovered) attempt.input = context.input;
           if (step.kind === 'manual-review') { attempt.status = 'waiting-review'; attempt.summary = '请检查上一步实际结果，确认后继续。'; update(record, { status: 'waiting-review' }); controllers.delete(id); await persist(); break; }
@@ -489,7 +536,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             attempt.modelLabel = '本地红包封面排版'; attempt.action = '本地导出';
             for (const source of sources) {
               controller.signal.throwIfAborted();
-              const { artifact, proof } = await archiveRedPacketCover({ projectId: run.projectId, runId: run.id, title: run.projectName || record.request.project.name, sourceArtifactId: source.id, signal: controller.signal });
+              const { artifact, proof } = await archiveRedPacketCover({ projectId: run.projectId, runId: run.id, title: run.projectName || record.request.project.name, sourceArtifactId: source.id, signal: controller.signal, ...(recoverLocal ? { recoverLocal } : {}) });
               attempt.artifacts.push(artifact); attempt.coverFiles.push(proof);
             }
             attempt.summary = `已在项目中保存 ${attempt.artifacts.length} 张 957 × 1278 红包封面 JPEG。原图保留。`;
@@ -507,8 +554,19 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             if (record.request.project.kind === 'image' && step.contentSourceStepId && !assets.length) throw Error('所选最终图片步骤没有可交付的实际图片，未改用历史初稿。');
             const body = record.request.project.kind === 'image' ? `图像交付：${record.request.project.name}。实际图片见本项目已生成产物；交付前核对尺寸、文字和使用范围。` : step.contentSourceStepId ? textResult?.summary || '' : step.inputSource === 'project' ? context.input : textResult?.summary || context.input;
             const media = results.flatMap(item => item.artifacts || []).filter(item => ['audio', 'video'].includes(item.kind));
-            if (record.request.project.kind === 'image' && !assets.length) attempt.artifacts = [await artifactStore.write({ name: `${record.request.project.name}-实际结果.md`, mimeType: 'text/markdown', text: body, runId: run.id, projectId: run.projectId }), ...media];
-            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId, ...(step.wallpaperTarget !== undefined ? { wallpaperTarget: step.wallpaperTarget, signal: controller.signal } : {}), ...(step.imageExportSize !== undefined ? { imageExportSize: step.imageExportSize, signal: controller.signal } : {}), ...(step.engineeringReferenceId !== undefined ? { engineeringReferenceId: step.engineeringReferenceId, engineeringSource: attempt.engineeringSource, attachmentIds: record.request.attachmentIds, signal: controller.signal } : {}) }), ...media];
+            const officeCheckpoint = recoverLocal && record.request.project.kind !== 'image' ? {
+              stepId: step.id, officeCheckpoint: attempt.officeCheckpoint,
+              rememberOfficeCheckpoint: async (checkpoint, file) => {
+                attempt.officeCheckpoint = checkpoint;
+                attempt.artifacts = [file]; mark(record); await persist();
+              },
+            } : undefined;
+            if (record.request.project.kind === 'image' && !assets.length) attempt.artifacts = [await artifactStore.write({ name: `${record.request.project.name}-实际结果.md`, mimeType: 'text/markdown', text: body, runId: run.id, projectId: run.projectId, ...(recoverLocal ? { recoverLocal, signal: controller.signal } : {}) }), ...media];
+            else attempt.artifacts = [...await artifactStore.exportOffice({ kind: record.request.project.kind, title: record.request.project.name, text: body, assets, runId: run.id, projectId: run.projectId, ...officeCheckpoint, ...(recoverLocal ? { recoverLocal, signal: controller.signal } : {}), ...(step.wallpaperTarget !== undefined ? { wallpaperTarget: step.wallpaperTarget, signal: controller.signal } : {}), ...(step.imageExportSize !== undefined ? { imageExportSize: step.imageExportSize, signal: controller.signal } : {}), ...(step.engineeringReferenceId !== undefined ? { engineeringReferenceId: step.engineeringReferenceId, engineeringSource: attempt.engineeringSource, attachmentIds: record.request.attachmentIds, signal: controller.signal } : {}) }), ...media];
+            if (attempt.officeCheckpoint) {
+              const artifactId = attempt.officeCheckpoint.artifactId;
+              for (const previous of run.attempts) if (previous.officeCheckpoint?.artifactId === artifactId) delete previous.officeCheckpoint;
+            }
             if (!attempt.artifacts.length) throw new Error('交付步骤没有产生文件。');
             attempt.summary = attempt.engineeringSource ? `已按主原图 ${attempt.engineeringSource.width} × ${attempt.engineeringSource.height} 保存 ${attempt.artifacts.length} 张工程图片，原图和付费编辑结果保留；请对照检查细节。` : step.wallpaperTarget ? `已在本地适配 ${attempt.artifacts.length} 张 ${step.wallpaperTarget.width} × ${step.wallpaperTarget.height} PNG壁纸，原图与调用费用保留。` : `已生成 ${attempt.artifacts.length} 份实际交付文件，请打开检查。`;
             if (step.imageExportSize !== undefined) attempt.summary = `已在本地保存 ${step.imageExportSize.width} × ${step.imageExportSize.height} PNG，保留原图和已有费用，请检查尺寸、画面和透明边缘。`;
@@ -517,12 +575,12 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             const model = record.request.models.find(item => item.id === step.modelConfigId);
             const connection = record.request.connections.find(item => item.id === model?.connectionId);
             const recoveringQuery = recovered && ledgerFor(record, attempt)?.queryOnly;
-            const previousTask = (!recovered || recoveringQuery) && step.kind === 'video-generation' && connection.providerId === 'siliconflow' && !run.retryStepOnly ? run.attempts.filter(item => item.id !== attempt.id).findLast(item => item.stepId === step.id && item.providerRequestId && ['failed', 'cancelled'].includes(item.status) && !ledgerFor(record, item)?.queryOnly) : undefined;
+            const previousTask = (!recovered || recoveringQuery) && step.kind === 'video-generation' && connection?.providerId === 'siliconflow' && !run.retryStepOnly ? run.attempts.filter(item => item.id !== attempt.id).findLast(item => item.stepId === step.id && item.providerRequestId && ['failed', 'cancelled'].includes(item.status) && !ledgerFor(record, item)?.queryOnly) : undefined;
             const engineeringReferenceId = step.kind === 'image-editing' && typeof record.request.attachmentIds[0] === 'string' && run.snapshot.steps.some(item => item.enabled && item.kind === 'export' && item.engineeringReferenceId === record.request.attachmentIds[0] && item.contentSourceStepIds?.includes(step.id)) ? record.request.attachmentIds[0] : undefined;
             if (recoveringQuery && !previousTask) throw Object.assign(new Error('原视频计费记录缺失'), { publicMessage: '无法核对原视频任务的计费记录，未重新生成；请先检查原任务与费用。', requestStarted: false });
-            const fx = await fxRates?.get(attempt.startedAt);
-            const estimate = estimateCost(model, step, `${attempt.prompt}\n${context.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt, fx });
-            if (!recovered && !previousTask && (cnyKnown(estimate) && (step.budgetCents != null && estimate.costCents > step.budgetCents || record.request.project.budgetCents != null && projectCost(record) + estimate.costCents > record.request.project.budgetCents) || !cnyKnown(estimate) && (step.budgetCents === 0 || record.request.project.budgetCents === 0))) throw Object.assign(new Error('预算不足'), { publicMessage: '当前步骤估算超过已设置的上限，或零元上限下费用无法确定，未发送新请求。', requestStarted: false });
+            const fx = !recovered ? await fxRates?.get(attempt.startedAt) : undefined;
+            const estimate = !recovered && estimateCost(model, step, `${attempt.prompt}\n${context.input}`, { modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt, fx });
+            if (!recovered && !previousTask && (cnyKnown(estimate) && (step.budgetCents != null && estimate.costCents > step.budgetCents || record.request.project.budgetCents != null && projectCost(record) + estimate.costCents > record.request.project.budgetCents) || !cnyKnown(estimate) && (step.budgetCents === 0 || record.request.project.budgetCents === 0))) throw Object.assign(new Error('预算不足'), { code: 'WORKFLOW_BUDGET_LIMIT', publicMessage: '当前步骤估算超过已设置的上限，或零元上限下费用无法确定，未发送新请求。', requestStarted: false });
             if (!recovered) attempt.modelLabel = `${model.name} · ${model.modelId}`;
             const entry = recovered ? ledgerFor(record, attempt) : { id: randomUUID(), projectId: run.projectId, projectName: record.request.project.name, action: attempt.action, model: `${step.name} / ${attempt.modelLabel}`, costCents: 0, costState: 'unknown', billingMode: 'live', time: now(), status: 'processing', quantity: step.count || 1, workflowRunId: run.id, workflowStepId: step.id, workflowAttemptId: attempt.id, pricingSnapshot: structuredClone(model.pricing), modelId: model.modelId, operation: step.kind, billingConnectionSnapshot: structuredClone(connection), fxSnapshot: fx, billingRuleSnapshot: resolveOfficialBillingRule({ modelId: model.modelId, connection, operation: step.kind, startedAt: attempt.startedAt }, model.pricing) };
             if (previousTask) { entry.queryOnly = true; entry.costState = 'not-incurred'; attempt.costState = 'not-incurred'; }
@@ -541,7 +599,9 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             attempt.artifacts = result.artifacts || []; attempt.usage = usage; attempt.providerRequestId = result.providerRequestId;
             if (result.billingRequestSnapshot) { entry.billingRequestSnapshot = structuredClone(result.billingRequestSnapshot); attempt.billingRequestSnapshot = structuredClone(result.billingRequestSnapshot); }
             const original = previousTask && ledgerFor(record, previousTask);
-            const cost = await costFor(record, original || entry, previousTask || attempt, usage);
+            const cost = recovered && !previousTask && entry.costState === 'manual'
+              ? { costCents: entry.costCents, costState: entry.costState, calculation: entry.calculation, usage, reason: entry.costReason }
+              : await costFor(record, original || entry, previousTask || attempt, usage);
             attempt.costCents = cost.costCents; attempt.costState = cost.costState; attempt.calculation = cost.calculation; attempt.usage = cost.usage;
             Object.assign(entry, { costCents: cost.costCents, costState: cost.costState, calculation: cost.calculation, costReason: cost.reason, usage: cost.usage, status: 'complete' });
             if (previousTask) {
@@ -559,7 +619,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
             }
           }
           attempt.status = 'complete'; attempt.completedAt = now(); delete attempt.error;
-          delete attempt.errorCode; delete attempt.incompleteReason; delete attempt.httpStatus;
+          delete attempt.errorCode; delete attempt.incompleteReason; delete attempt.httpStatus; delete attempt.requestOutcomeUnknown;
           if (run.status === 'cancelled') { await persist(); break; }
           if (run.repairContext?.stepId === step.id) delete run.repairContext;
           let quality;
@@ -582,12 +642,27 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           const retryExport = run.retryStepOnly && isRedPacketCoverWorkflow(run.snapshot, run.projectId) && ['image-generation', 'image-editing'].includes(step.kind)
             ? run.snapshot.steps.findIndex((item, index) => index > run.stepIndex && item.enabled && item.kind === 'export' && coverSourceStepIds(run, item).includes(step.id)) : -1;
           run.stepIndex = retryExport >= 0 ? retryExport : run.retryStepOnly ? run.snapshot.steps.length : run.stepIndex + 1;
+          if (reconciledReceipt && !run.pauseRequested && run.status === 'running' && run.snapshot.steps.slice(run.stepIndex).some(item => item.enabled && modelStep(item))) {
+            try { await checkRemaining(record, run, record.request, record.legacyBaseCostCents || 0, true); }
+            catch (error) {
+              if (run.status !== 'running') break;
+              update(record, { status: 'paused', error: '已找回原结果。' + error.message }); await persist(); break;
+            }
+          }
+          if (run.status !== 'running') { await persist(); break; }
           const paused = !!run.pauseRequested;
           if (paused) { update(record, { status: 'paused', pauseRequested: false }); controllers.delete(id); }
           else update(record, {});
           await persist();
           if (paused) break;
         } catch (error) {
+          if (run.snapshot.automaticRecovery === true && modelStep(step) && !recovered && run.status === 'running' &&
+              !run.pauseRequested && !shuttingDown && !controller.signal.aborted && run.snapshot.steps[run.stepIndex]?.id === step.id) {
+            const saved = await receiptFor(record, step, attempt).catch(() => undefined);
+            if (saved && run.status === 'running' && !run.pauseRequested && !shuttingDown && !controller.signal.aborted) {
+              attempt.status = 'failed'; receipt = { attemptId: attempt.id, result: saved }; continue;
+            }
+          }
           if (step.kind === 'export' && error.code === 'COVER_LAYOUT_REJECTED' && isRedPacketCoverWorkflow(run.snapshot, run.projectId)) {
             const recovery = await automaticQuality(record, step, attempt, controller, error);
             if (recovery.scheduled) continue;
@@ -598,10 +673,23 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
       }
     } finally { if (controllers.get(id) === controller) controllers.delete(id); }
   }
-  function launchPump(id) {
-    const task = Promise.resolve().then(() => pump(id)).catch(async () => {
+  function launchPump(id, receipt) {
+    const task = Promise.resolve().then(() => pump(id, receipt)).catch(async () => {
       const record = records.get(id);
-      if (record) update(record, { status: shuttingDown ? 'interrupted' : 'failed', error: '运行记录无法保存，已停止后续步骤。' });
+      if (record && record.run.status !== 'cancelled') {
+        const { run } = record, step = run.snapshot.steps[run.stepIndex];
+        if (run.snapshot.automaticRecovery === true) {
+          const attempt = run.attempts.findLast(item => item.stepId === step?.id);
+          if (attempt?.status === 'running') {
+            attempt.status = 'failed';
+            const entry = ledgerFor(record, attempt);
+            if (entry?.status === 'processing' && !entry.queryOnly) {
+              attempt.requestOutcomeUnknown = true; entry.status = 'failed';
+            }
+          }
+        }
+        update(record, { status: shuttingDown ? 'interrupted' : 'failed', error: '运行记录无法保存，已停止后续步骤。' });
+      }
       await persist().catch(() => undefined);
     });
     pumps.set(id, task);
@@ -699,7 +787,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
       const partial = delta && Number.isSafeInteger(afterRevision) && afterRevision >= 0;
       const scope = Array.isArray(projectIds) ? new Set(projectIds) : undefined;
       const selected = [...records.values()].filter(item => (!scope || scope.has(item.run.projectId)) && (!partial || (changedAt.get(item.run.id) || 0) > afterRevision));
-      return structuredClone({ revision, ...(partial ? { delta: true } : {}), runs: selected.map(item => summaryOnly ? { ...runSummary(item.run), detailVersion: detailVersions.get(item.run.id) || 0 } : item.run).reverse(), ledger: selected.flatMap(item => item.ledger).sort((a, b) => b.time.localeCompare(a.time)) });
+      return structuredClone({ revision, ...(partial ? { delta: true } : {}), runs: selected.map(item => summaryOnly ? { ...runSummary(item.run), detailVersion: detailVersions.get(item.run.id) || 0 } : publicRun(item.run)).reverse(), ledger: selected.flatMap(item => item.ledger).sort((a, b) => b.time.localeCompare(a.time)) });
     },
     async lookupStart({ dispatchKey, projectId, workspaceId }) {
       return mutateProject(projectId, async () => {
@@ -707,7 +795,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         const record = [...records.values()].find(item => item.request.dispatchKey === dispatchKey);
         if (!record) return;
         if (record.run.projectId !== projectId || record.run.workspaceId !== workspaceId) throw Error('启动记录不属于当前项目或工作区。');
-        return structuredClone(record.run);
+        return structuredClone(publicRun(record.run));
       });
     },
     async coverDeliveryProof(file) {
@@ -716,7 +804,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
       const attempt = run?.attempts.findLast(item => item.artifacts?.some(artifact => artifact.id === file.id));
       return attempt && coverProof(run, attempt, file);
     },
-    async runDetail(id) { await ready; const record = records.get(id); if (!record) throw new Error('运行记录不存在。'); return structuredClone({ ...record.run, detailVersion: detailVersions.get(id) || 0 }); },
+    async runDetail(id) { await ready; const record = records.get(id); if (!record) throw new Error('运行记录不存在。'); return structuredClone({ ...publicRun(record.run), detailVersion: detailVersions.get(id) || 0 }); },
     async recoverPlanningReceipt(id) {
       await ready; const known = records.get(id); if (!known) throw Error('规划运行记录不存在。');
       return mutateProject(known.run.projectId, async () => {
@@ -812,7 +900,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         return structuredClone(run);
       });
     },
-    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, imageExportSize, project, connections, models, reviewAttemptId, reviewBinding, refinement }) {
+    async control({ id, action, stepId, stepBudgetCents, stepMaxOutputTokens, imageExportSize, project, connections, models, reviewAttemptId, reviewBinding, refinement, expectedAttemptId, manualReviewAttemptId, reviewedArtifactId, stepBinding }) {
       await ready;
       const target = records.get(id); if (!target) throw new Error('运行记录不存在。');
       return mutateProject(target.run.projectId, async () => {
@@ -821,6 +909,16 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         const record = records.get(id); if (!record) throw new Error('运行记录不存在。');
         if (record.run.hiddenAt || record.run.trashedAt) throw new Error('请先恢复这条任务记录，再继续执行。');
         const run = record.run;
+        const step = run.snapshot.steps[run.stepIndex], latestAttempt = run.attempts.findLast(item => item.stepId === step?.id);
+        if (expectedAttemptId !== undefined && (!['continue', 'resume', 'recover-receipt'].includes(action) || !latestAttempt || latestAttempt.id !== expectedAttemptId)) throw Error('当前步骤已变化，请先读取最新状态。');
+        if (manualReviewAttemptId !== undefined || reviewedArtifactId !== undefined) {
+          if (action !== 'resume' || project?.id !== run.projectId || project.workspaceId !== run.workspaceId || project.kind !== run.snapshot.outputKind || run.referenceIssue || !isFinalManualReview(run) ||
+              !latestAttempt || latestAttempt.id !== manualReviewAttemptId) throw Error('验收对象已变化，请先读取最新成品。');
+          const delivery = run.attempts.findLast(item => item.status === 'complete' && item.artifacts?.some(file => isDeliveryArtifact(file, project.kind)));
+          if (!delivery?.artifacts.some(file => file.id === reviewedArtifactId && isDeliveryArtifact(file, project.kind))) throw Error('当前没有可验收的正式成品。');
+          const file = await artifactStore.read(reviewedArtifactId);
+          if (!isDeliveryArtifact(file, project.kind) || file.projectId !== run.projectId || file.runId !== run.id) throw Error('成品已变化，请先读取最新成品。');
+        }
         if (stepBudgetCents !== undefined) {
           if (!['resume', 'continue'].includes(action) || !['paused', 'failed', 'interrupted', 'waiting-review'].includes(run.status)) throw new Error('只能在暂停、失败、中断或人工确认阶段调整当前步骤金额上限。');
           if (stepBudgetCents !== null && (!Number.isSafeInteger(stepBudgetCents) || stepBudgetCents < 0)) throw new Error('当前步骤金额上限无效，请填写非负金额或留空。');
@@ -849,12 +947,30 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         if (project && (project.id !== run.projectId || project.kind !== run.snapshot.outputKind)) throw new Error('续跑项目与原运行不匹配。');
         const nextRequest = safeRequest({ ...record.request, project: project || record.request.project, connections: connections || record.request.connections, models: models || record.request.models });
         const nextRun = structuredClone(run);
+        let recovered;
+        if (stepBinding !== undefined) {
+          if (action !== 'continue' || !['failed', 'interrupted'].includes(run.status) || !step?.enabled || !modelStep(step) ||
+              !expectedAttemptId || stepBinding?.stepId !== step.id || typeof stepBinding.modelConfigId !== 'string' || typeof stepBinding.credentialId !== 'string' ||
+              run.supersededByRunId || project?.workspaceId !== run.workspaceId) throw Error('模型设置已变化，请先读取当前失败步骤。');
+          const replacement = nextRun.snapshot.steps[nextRun.stepIndex];
+          Object.assign(replacement, { modelConfigId: stepBinding.modelConfigId, credentialId: stepBinding.credentialId });
+          if (replacement.reasoningEffort !== undefined) {
+            const model = nextRequest.models.find(item => item.id === replacement.modelConfigId);
+            replacement.reasoningEffort = normalizeReasoningEffort(nextRequest.connections.find(item => item.id === model?.connectionId), model, replacement.reasoningEffort);
+          }
+        }
         let coverRepair = false;
         if (resize) nextRun.snapshot.steps[resize.exportIndex].imageExportSize = { width: imageExportSize.width, height: imageExportSize.height };
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
         if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
         if (project && project.workspaceId !== run.workspaceId) { nextRun.originWorkspaceId ||= run.workspaceId; nextRun.workspaceId = project.workspaceId; nextRun.snapshot.workspaceId = project.workspaceId; nextRequest.workflow = nextRun.snapshot; }
-        if (action === 'auto-quality') {
+        if (action === 'recover-receipt') {
+          if (project?.workspaceId !== run.workspaceId) throw Error('原请求不属于当前工作区，未继续制作。');
+          if (!['failed', 'interrupted'].includes(run.status) || run.supersededByRunId || run.retryStepOnly ||
+              !['failed', 'cancelled'].includes(latestAttempt?.status)) return;
+          recovered = await receiptFor(record, step, latestAttempt);
+          if (!recovered) return;
+        } else if (action === 'auto-quality') {
           if (run.status !== 'waiting-review' || run.hiddenAt || run.trashedAt || run.supersededByRunId || project?.workspaceId !== run.workspaceId) throw Error('原任务或质检状态已变化，未提交自动处理。');
           await prepareAutomaticQuality(nextRun, nextRequest, reviewAttemptId, reviewBinding, refinement, true);
         } else if (action === 'recheck-quality' || action === 'refine-quality') {
@@ -869,10 +985,12 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           if (ACTIVE.has(run.status)) throw new Error('请先完成或取消当前运行。');
           const index = nextRun.snapshot.steps.findIndex(step => step.id === stepId && (modelStep(step) || step.kind === 'animation-compose'));
           if (index < 0) throw new Error('请选择可重试的模型或本地动画步骤。');
+          if (run.attempts.findLast(item => item.stepId === stepId)?.requestOutcomeUnknown) throw Error('原模型请求结果尚未确认，请先核对原任务，避免重复计费。');
           nextRun.stepIndex = index; nextRun.retryStepOnly = true;
         } else {
           const current = nextRun.snapshot.steps[nextRun.stepIndex];
           const failed = nextRun.attempts.findLast(item => item.stepId === current?.id);
+          if (['continue', 'resume'].includes(action) && failed?.requestOutcomeUnknown) throw Error('原模型请求结果尚未确认，请先核对原任务，避免重复计费。');
           if (action === 'continue' && run.status === 'failed' && current?.kind === 'export' && failed?.errorCode === 'COVER_LAYOUT_REJECTED') {
             await prepareCoverRepair(nextRun, failed, true); coverRepair = true;
           }
@@ -884,10 +1002,10 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           return (ACTIVE.has(item.run.status) || controllers.has(item.run.id) || pumps.has(item.run.id)) && !settledFinalReview(item, nextRequest.project);
         });
         if (busy) throw new Error('项目已有其它真实任务。');
-        nextRun.snapshot = await prepareWorkflow({ ...nextRequest, workflow: nextRun.snapshot });
+        if (!recovered) nextRun.snapshot = await prepareWorkflow({ ...nextRequest, workflow: nextRun.snapshot });
         nextRequest.workflow = nextRun.snapshot;
         const nextBaseline = project ? Math.max(record.legacyBaseCostCents || 0, project.costCents - projectLedgerCost(project.id)) : record.legacyBaseCostCents || 0;
-        await checkRemaining(record, nextRun, nextRequest, nextBaseline, action === 'auto-quality' || coverRepair);
+        if (!recovered) await checkRemaining(record, nextRun, nextRequest, nextBaseline, action === 'auto-quality' || coverRepair);
         const previous = { run: structuredClone(run), request: record.request, legacyBaseCostCents: record.legacyBaseCostCents };
         record.request = nextRequest; record.legacyBaseCostCents = nextBaseline;
         Object.assign(run, nextRun); update(record, { status: 'running', error: undefined, referenceIssue: undefined, pauseRequested: false });
@@ -898,7 +1016,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           try { await persist(); } catch { /* Preserve the last durable record when storage remains unavailable. */ }
           throw new Error('续跑状态无法保存，未开始新请求；原有步骤参数和费用保留。');
         }
-        launchPump(id);
+        launchPump(id, recovered ? { attemptId: latestAttempt.id, result: recovered } : undefined);
       });
     },
     async reconcile({ entryId, costCents }) {

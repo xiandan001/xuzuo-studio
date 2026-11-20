@@ -13,7 +13,12 @@ function validateRecords(records) {
   return records;
 }
 function runSummary(run) {
-  return { ...run, contentTruncated: true, input: '', variables: {}, snapshot: { ...run.snapshot, description: '', steps: run.snapshot.steps.map(step => ({ ...step, prompt: '' })) }, attempts: run.attempts.map(attempt => ({ ...attempt, input: '', prompt: '', summary: '' })) };
+  return { ...run, contentTruncated: true, input: '', variables: {}, snapshot: { ...run.snapshot, description: '', steps: run.snapshot.steps.map(step => ({ ...step, prompt: '' })) }, attempts: run.attempts.map(({ officeCheckpoint, ...attempt }) => ({ ...attempt, input: '', prompt: '', summary: '' })) };
+}
+function publicRun(run) {
+  return run.attempts.some(attempt => attempt.officeCheckpoint)
+    ? { ...run, attempts: run.attempts.map(({ officeCheckpoint, ...attempt }) => attempt) }
+    : run;
 }
 function createRunHistoryStore({ directory, fileSystem: fs }) {
   const root = path.join(directory, 'live-runs-v2'), indexFile = path.join(root, 'index-v2.json'), legacyFile = path.join(directory, 'live-workflows-v1.json');
@@ -74,4 +79,4 @@ function createRunHistoryStore({ directory, fileSystem: fs }) {
   }
   return { load, save };
 }
-module.exports = { createRunHistoryStore, validateRecords, runSummary };
+module.exports = { createRunHistoryStore, validateRecords, runSummary, publicRun };

@@ -37,6 +37,16 @@
 .creation-production-stage{font-size:12px;font-weight:600;color:var(--ui-fg-secondary);margin-bottom:5px}
 
 .home-result-recovery{margin:0 20px 18px;padding:14px 16px;border:1px solid var(--ui-border-strong);border-radius:10px;background:var(--ui-surface-subtle);display:flex;flex-wrap:wrap;align-items:center;gap:10px}.home-result-recovery>p{flex-basis:100%;font-size:13px;line-height:1.75;margin:0;color:var(--ui-fg-secondary)}.home-result-recovery .btn{font-size:13px;min-height:36px}.home-result-recovery .home-plan-error{margin:0}
+.home-recovery-details{flex:1 1 100%;font-size:12px;color:var(--ui-fg-secondary)}
+.home-recovery-details>summary{cursor:pointer;width:fit-content;padding-block:4px}
+.home-recovery-details>div{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center}
+.home-recovery-details .text-button,.home-result-primary-actions>.text-button{display:inline-flex;align-items:center;gap:4px}
+.home-recovery-fields{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:8px 12px;align-items:end;min-width:0}
+.home-recovery-fields>label{display:grid;gap:4px;font-size:12px}
+.home-recovery-fields>label>input{width:125px}
+.home-recovery-fields .natural-model-row{width:100%}
+.home-inline-review{display:grid;gap:5px;justify-items:end}
+.home-inline-review>.home-plan-error{margin:0;max-width:250px;font-size:12px}
 
 .creation-production>footer>.home-result-primary-actions{gap:7px;flex-wrap:wrap;justify-content:flex-end}
 .home-result-discuss{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:transparent;color:var(--ui-accent);padding:8px 9px;font:inherit;font-size:13px;font-weight:600;min-height:38px;cursor:pointer;white-space:nowrap}

@@ -394,6 +394,14 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     if (wallpaperRequested && !wallpaperTarget)
         missing.add(`壁纸尺寸：${wallpaperParsed && 'message' in wallpaperParsed ? wallpaperParsed.message : '请选择明确的机型或填写宽×高像素。'}`);
     const references = (project.referenceFiles || []).filter(file => file.kind === 'image' && usableReference(file));
+    let missingReferenceImages = 0;
+    function requireImages(count, message) {
+        const deficit = count - references.length;
+        if (deficit <= 0)
+            return;
+        missingReferenceImages = Math.max(missingReferenceImages, deficit);
+        missing.add(message);
+    }
     const animationMode = !redPacketCover && project.kind === 'image' ? (0, animation_workflow_1.animationRequestMode)(plan.objective) : undefined;
     if (animationMode) {
         if (references.length > 12 || references.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType)))
@@ -411,9 +419,9 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
             previous = editId;
         }
         steps.push({ ...compose, imageSourceStepId: previous }, draft.steps[2]);
-        const workflow = { ...draft, name: `${plan.name} · 单个样片`, description: appendNaturalPreparationNotes(`${draft.description}\nGIF/图集由本地受限合成步骤产出，不依赖模型直接返回GIF；自动步骤不代表视觉或授权已验收。`, preparationNotes), steps };
+        const workflow = { ...draft, automaticRecovery: true, name: `${plan.name} · 单个样片`, description: appendNaturalPreparationNotes(`${draft.description}\nGIF/图集由本地受限合成步骤产出，不依赖模型直接返回GIF；自动步骤不代表视觉或授权已验收。`, preparationNotes), steps };
         const { type, ...triggerDetails } = plan.trigger;
-        return { workflow, missing: [...missing], preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, `验收要求：${plan.acceptance.join('；')}`, ...plan.constraints].join('\n'), variables: {} }, stepsSummary: steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'animation-compose' ? '（本地，不调用模型）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
+        return { workflow, missing: [...missing], missingReferenceImages, preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, `验收要求：${plan.acceptance.join('；')}`, ...plan.constraints].join('\n'), variables: {} }, stepsSummary: steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'animation-compose' ? '（本地，不调用模型）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
     }
     const base = (0, automation_recipes_1.automationRecipe)(project.kind, plan.name, { objective: plan.objective, deliverables: [project.kind], acceptance: plan.acceptance, constraints: plan.constraints, knownInputs: (project.referenceFiles || []).filter(usableReference).map(file => file.name) }, configuration, plan.maxRepairs);
     const planner = { ...base.steps[0], ...select('text') }, steps = [planner];
@@ -428,8 +436,8 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
     const imageStep = (kind, name, instruction) => {
         if (kind === 'image-editing' && latestImage && steps.at(-1)?.kind !== 'vision')
             opinion();
-        if (kind === 'image-editing' && !latestImage && !references.length)
-            missing.add('图片精修：请为项目添加实际参考图片');
+        if (kind === 'image-editing' && !latestImage)
+            requireImages(1, '图片精修：请为项目添加实际参考图片');
         const selection = select(kind), modelId = configuration.models.find(model => model.id === selection.modelConfigId)?.modelId;
         const instructions = `${instruction}\n\n目标：${plan.objective}\n验收：${plan.acceptance.join('；')}\n约束：${plan.constraints.join('；')}${wallpaperTarget ? `\n\n${(0, wallpaper_target_1.wallpaperPrompt)(wallpaperTarget)}` : ''}`;
         const imageSize = redPacketCover ? (0, wechat_red_packet_cover_1.redPacketCoverGenerationSize)(modelId) : wallpaperTarget ? (0, wallpaper_target_1.wallpaperGenerationSize)(wallpaperTarget, modelId) : 'auto';
@@ -460,8 +468,8 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         if (proposed.kind === 'image-generation' || proposed.kind === 'image-editing')
             imageStep(proposed.kind, proposed.name, proposed.instruction);
         else if (proposed.kind === 'vision') {
-            if (!latestImage && !references.length)
-                missing.add('图片检查：请添加参考图片或先生成实际图片');
+            if (!latestImage)
+                requireImages(1, '图片检查：请添加参考图片或先生成实际图片');
             reviewImage(proposed.name, proposed.instruction);
         }
         else {
@@ -484,8 +492,7 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         if (plan.illustrations.mode === 'references') {
             if (imageOutputs.length)
                 throw Error('参考配图与图片制作步骤同时存在，请明确使用哪种文档配图方式。');
-            if (references.length < plan.illustrations.count)
-                missing.add(`文档配图：请添加至少${plan.illustrations.count}张项目参考图片`);
+            requireImages(plan.illustrations.count, `文档配图：请添加至少${plan.illustrations.count}张项目参考图片`);
             if (references.length > document_illustrations_1.DOCUMENT_REFERENCE_IMAGE_LIMIT)
                 throw Error(`参考配图最多支持${document_illustrations_1.DOCUMENT_REFERENCE_IMAGE_LIMIT}张，请调整项目参考图片。`);
             lastText.documentImageSource = 'references';
@@ -526,9 +533,9 @@ function compileNaturalAutomationPlan(input, project, configuration, bindings = 
         missing.add(`方案仍有未填变量“${name}”，请在目标或步骤要求里改成真实内容`);
     const description = project.kind === 'image' ? workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, `计划内精修${plan.maxRepairs}轮。${conditional ? '最终质检不通过时，最多再精修当前图片并复检1轮，按实际调用计费。' : '最终质检不通过时暂停。'}`) : workflow.description.replace(/最多 \d 轮自动修订，人工确认后交付。$/, qualityRepairs ? `质检不通过时最多修订正文并复检${qualityRepairs}轮，按实际调用计费。` : '质检不通过时暂停。');
     const calendarNote = calendarResolved ? `执行时机已确认改为${plan.trigger.type === 'manual' ? '手动运行' : `应用运行期间每隔${plan.trigger.intervalMinutes}分钟运行`}；原描述的固定日历时间不再作为执行要求。` : '';
-    const draft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, ...(redPacketCover ? { imagePreset: wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
+    const draft = { name: workflow.name, description: appendNaturalPreparationNotes([description, calendarNote].filter(Boolean).join('\n'), preparationNotes), outputKind: workflow.outputKind, automaticRecovery: true, ...(redPacketCover ? { imagePreset: wechat_red_packet_cover_1.WECHAT_RED_PACKET_COVER } : {}), steps: workflow.steps, goalBrief: workflow.goalBrief, foundationVersion: workflow.foundationVersion };
     const { type, ...triggerDetails } = plan.trigger;
-    return { workflow: draft, missing: [...missing], preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, ...(calendarNote ? [calendarNote] : []), `验收要求：${plan.acceptance.join('；')}`, ...(plan.constraints.length ? [`约束：${plan.constraints.join('；')}`] : [])].join('\n'), variables: {} }, stepsSummary: workflow.steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'image-editing' ? '（使用实际原图）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
+    return { workflow: draft, missing: [...missing], missingReferenceImages, preparationNotes, rule: { trigger: type, ...triggerDetails, name: plan.name, input: [plan.objective, ...(calendarNote ? [calendarNote] : []), `验收要求：${plan.acceptance.join('；')}`, ...(plan.constraints.length ? [`约束：${plan.constraints.join('；')}`] : [])].join('\n'), variables: {} }, stepsSummary: workflow.steps.map((step, index) => `${index + 1}. ${step.name}${step.kind === 'image-editing' ? '（使用实际原图）' : step.kind === 'manual-review' ? '（等待你确认）' : ''}`) };
 }
 
 },

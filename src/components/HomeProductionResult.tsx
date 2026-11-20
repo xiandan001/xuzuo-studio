@@ -16,6 +16,7 @@ import { CostTotal } from './CostAmount';
 import { HomeResultFilePicker } from './HomeResultFilePicker';
 import { HomeQualityRecovery } from './HomeQualityRecovery';
 import { HomeProductionRecovery } from './HomeProductionRecovery';
+import { HomeManualReview } from './HomeManualReview';
 import { ProjectTemplateActions } from './ProjectTemplateActions';
 import { CustomerOrderLink } from './CustomerOrderLink';
 import { ClientProofingDialog } from './ClientProofingDialog';
@@ -50,7 +51,7 @@ function HomeResultMoreActions({ props, project, file }: { props: PageProps; pro
   return <><button ref={trigger} type="button" className="btn-icon home-result-more-trigger" aria-label="成品更多操作" aria-haspopup="menu" aria-expanded={open} title="更多：模板、交付和客户校样" onClick={() => { setMounted(true); setOpen(value => !value); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMounted(true); setOpen(true); } }}><MoreHorizontal size={19} /></button>{mounted && <ModalPortal><div ref={popup} className="home-result-more-menu" role="menu" aria-label="成品更多操作菜单" hidden={!open} style={{ ...position, visibility: position ? 'visible' : 'hidden' }} onKeyDown={keyboard} onClickCapture={event => { if (event.target instanceof Element && popup.current?.contains(event.target) && event.target.closest('button')) { setOpen(false); trigger.current?.focus({ preventScroll: true }); } }}><button type="button" className="btn btn-secondary" role="menuitem" onClick={() => props.navigate('project', project.id)}><FolderOpen size={15} />项目概览与采用版本</button><ProjectTemplateActions props={props} project={project} artifactId={file.id} /><CustomerOrderLink props={props} project={project} artifactIds={[file.id]} /><button type="button" className="btn btn-secondary" role="menuitem" onClick={() => setProofing(true)}><FileCheck2 size={15} />客户校样与反馈</button></div></ModalPortal>}{proofing && <ClientProofingDialog key={file.id} workspaceId={props.workspaceId} projectId={project.id} files={[file]} title={`${project.name}校样`.slice(0, 120)} onClose={() => setProofing(false)} onImported={result => props.notify(result.annotations ? `已导入 ${result.annotations} 条客户意见，可在业务制作中返修。` : '这些客户意见已导入，没有重复添加。')} />}</>;
 }
 
-function HomeArtifactPreview({ file, kind, props }: { file: ArtifactMetadata; kind: ProjectKind; props: PageProps }) {
+function HomeArtifactPreview({ file, kind, props, onReady }: { file: ArtifactMetadata; kind: ProjectKind; props: PageProps; onReady?: (id: string) => void }) {
   const host = useRef<HTMLDivElement>(null), runner = useRef(props.workflowRunner); runner.current = props.workflowRunner;
   const [visible, setVisible] = useState(false), [retry, setRetry] = useState(0);
   const [state, setState] = useState<{ id: string; preview?: ArtifactPreview; error?: string }>();
@@ -64,9 +65,13 @@ function HomeArtifactPreview({ file, kind, props }: { file: ArtifactMetadata; ki
     if (!visible) return;
     let current = true; setState({ id: file.id });
     const source = runner.current, read = kind === 'image' && source.thumbnailArtifact ? source.thumbnailArtifact : source.previewArtifact;
-    void read(file.id).then(preview => { if (current) setState({ id: file.id, preview }); }).catch(cause => { if (current) setState({ id: file.id, error: workflowPublicError(cause, '暂时无法读取这个结果，原文件未修改。') }); });
+    void read(file.id).then(preview => {
+      if (!current) return;
+      setState({ id: file.id, preview });
+      if (homeCreationPreviewUrl(preview.dataUrl) || kind !== 'image' && preview.text?.trim()) onReady?.(file.id);
+    }).catch(cause => { if (current) setState({ id: file.id, error: workflowPublicError(cause, '暂时无法读取这个结果，原文件未修改。') }); });
     return () => { current = false; };
-  }, [file.id, kind, visible, retry]);
+  }, [file.id, kind, visible, retry, onReady]);
   const current = state?.id === file.id ? state : undefined, url = homeCreationPreviewUrl(current?.preview?.dataUrl), documentProjectId = file.projectId;
   return <div ref={host} className={`creation-result-preview preview-${kind}`} aria-label="实际生成结果预览">
     {current?.error ? <div className="creation-preview-empty"><FileText size={28} /><p role="alert">{current.error}</p><button type="button" className="btn btn-secondary" onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} />重新读取 · 不调用 AI</button></div> : !visible || !current?.preview ? <div className="creation-preview-empty"><LoaderCircle size={23} className="spin" /><p>正在读取已保存的{names[kind]}结果…</p></div> : url ? <img src={url} alt={file.name} /> : current.preview.text ? kind === 'image' ? <p className="creation-preview-empty">图片未返回可展示的本地预览，可打开编辑器查看。</p> : <Suspense fallback={<div className="creation-preview-empty">正在打开文档内容…</div>}><DocumentArtifactPreview text={current.preview.text} title={file.name} hint={kind} imageContext={documentProjectId ? { scope: props.workspaceId + '/' + documentProjectId + '/' + file.id + '/' + (current.preview.sourceRevision || 0), projectId: documentProjectId, runner: props.workflowRunner, onEditUnit: props.onOpenDocumentUnit ? unitId => props.onOpenDocumentUnit?.({ workspaceId: props.workspaceId, projectId: documentProjectId, artifactId: file.id, unitId, kind: kind === 'ppt' ? 'ppt' : kind === 'excel' ? 'excel' : 'word', sourceRevision: current.preview?.sourceRevision }) : undefined } : undefined} /></Suspense> : <div className="creation-preview-empty"><FileText size={28} /><strong>{file.name}</strong><p>实际文件已保存，打开编辑器可查看内容和版式。</p></div>}
@@ -75,6 +80,7 @@ function HomeArtifactPreview({ file, kind, props }: { file: ArtifactMetadata; ki
 
 export function HomeProductionResult({ props, run, kind }: { props: PageProps; run: WorkflowRun; kind: ProjectKind }) {
   const [detail, setDetail] = useState<WorkflowRun>(), [selectedId, setSelectedId] = useState(''), [error, setError] = useState(''), [saving, setSaving] = useState(false);
+  const [previewId, setPreviewId] = useState('');
   const runner = useRef(props.workflowRunner); runner.current = props.workflowRunner;
   const scope = `${props.workspaceId}/${run.projectId}/${run.id}`, currentScope = useRef(scope), pending = useRef(false); currentScope.current = scope;
   const host = useRef<HTMLElement>(null), [visible, setVisible] = useState(false);
@@ -109,6 +115,10 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const blocked = reviewState === 'quality-failed' || reviewState === 'blocked';
   const needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
   const coverLayoutFailure = isCoverDeliveryLayoutFailure(actual);
+  const step = actual.snapshot.steps[actual.stepIndex], attempt = actual.attempts.filter(row => row.stepId === step?.id).at(-1);
+  const approvalId = reviewState === 'manual' && !actual.contentTruncated && !actual.referenceIssue && !actual.hiddenAt && !actual.trashedAt && !actual.supersededByRunId && !actual.retryStepOnly &&
+    !actual.snapshot.steps.slice(actual.stepIndex + 1).some(item => item.enabled) && file?.runId === actual.id && file.projectId === project.id && !documentSource ? attempt?.id : undefined;
+  const recovery = needsHelp || blocked && !!actual.referenceIssue;
   const openSteps = () => props.onOpenTask ? props.onOpenTask(actual.id, project.id) : props.navigate('activity', project.id);
   async function save() {
     if (!file || pending.current) return;
@@ -133,12 +143,28 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
       </div>
       <div className="creation-production-cost"><span>本次制作</span><CostTotal summary={summarizeCosts(runCostRecords(actual, props.ledger))} /></div>
     </header>
-    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div><button type="button" className={blocked && reviewState !== 'quality-failed' ? 'btn btn-primary' : 'text-button'} onClick={openSteps}>{reviewState === 'quality-failed' ? '查看质检原因' : needsHelp ? '查看步骤与恢复操作' : '查看步骤'}<ArrowRight size={13} /></button></div>}
-    {recoveryAttempt && <HomeQualityRecovery key={scope + '/' + recoveryAttempt.id} run={actual} project={project} props={props} onRead={setDetail} />}
-    {(needsHelp || blocked && actual.referenceIssue) && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
-    {reviewState === 'manual' && <div className="creation-production-progress"><button type="button" className="btn btn-primary" onClick={openSteps}>检查并交付<ArrowRight size={14} /></button></div>}
+    {!finished && <div className="creation-production-progress"><div><span>{progress.completed} / {progress.total} 步已完成</span><span>{actual.status === 'running' ? '可以继续浏览，完成后在这里查看' : '当前进度已保留'}</span></div><div role="progressbar" aria-label="实际制作步骤进度" aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress.percent}%` }} /></div>
+      {!recovery && !recoveryAttempt && <button type="button" className="text-button" onClick={openSteps}>查看步骤<ArrowRight size={13} /></button>}
+    </div>}
+    {recoveryAttempt && !recovery && <HomeQualityRecovery key={scope + '/' + recoveryAttempt.id} run={actual} project={project} props={props} onRead={setDetail} onOpenSteps={openSteps} />}
+    {recovery && <HomeProductionRecovery key={scope + '/' + (attempt?.id || '')} run={actual} project={project} props={props} onRead={setDetail} onOpenSteps={openSteps} visible={visible} />}
     {file && (blocked || coverLayoutFailure) && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
-    {file && finished && <>{cover ? <RedPacketCoverPreview key={file.id} preparation={preparation} original={coverOriginal && <HomeArtifactPreview file={coverOriginal} kind={kind} props={props} />} /> : <HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />}{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving || cover && !preparation.file} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出微信封面 JPG' : `导出${names[kind]}`}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}
+    {file && finished && <>
+      {cover ? <RedPacketCoverPreview key={file.id} preparation={preparation} original={coverOriginal && <HomeArtifactPreview file={coverOriginal} kind={kind} props={props} />} />
+        : <HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} onReady={approvalId ? setPreviewId : undefined} />}
+      {files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}
+      <footer>
+        <span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span>
+        <div className="home-result-primary-actions">
+          {!documentSource && !approvalId && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}
+          <button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>
+          {reviewState === 'manual' && <button type="button" className="text-button" onClick={openSteps}>验收详情<ArrowRight size={13} /></button>}
+          {approvalId ? <HomeManualReview key={`${run.id}/${approvalId}/${file.id}`} run={actual} project={project} attemptId={approvalId} artifactId={file.id} ready={cover ? !!preparation.file : previewId === file.id} props={props} onRead={setDetail} />
+            : !documentSource && <button type="button" className="btn btn-primary" disabled={saving || cover && !preparation.file} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出微信封面 JPG' : `导出${names[kind]}`}</button>}
+          {!documentSource && !approvalId && <HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} />}
+        </div>
+      </footer>
+    </>}
     {finished && !file && <div className="creation-production-empty"><p>这次制作尚无可用的{names[kind]}成品。已保存的步骤、源内容和费用仍保留。</p><button type="button" className="btn btn-secondary" onClick={() => props.navigate('activity', project.id)}>查看结果与步骤</button></div>}
     {error && <p className="home-plan-error" role="alert">{error}{cover && <button type="button" className="text-button" disabled={saving} onClick={() => { setError(''); preparation.retry(); }}>刷新封面</button>}</p>}
   </section>;

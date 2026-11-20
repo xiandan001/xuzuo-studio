@@ -236,7 +236,7 @@ export function useLiveWorkflowRunner(options: WorkflowRunnerOptions, simulation
         return result;
       } catch (error) { return { status: 'rejected', code: 'START_INPUT', error: error instanceof Error ? error.message : '真实流程未能开始。' }; }
     },
-    readStartResult: projectId => starts.read(projectId),
+    readStartResult: (projectId, scope) => starts.read(projectId, scope),
     pause(id) { if (liveRunsRef.current.some(run => run.id === id)) void liveControl(id, { action: 'pause' }); else simulation.pause(id); },
     resume(id, stepBudgetCents, stepMaxOutputTokens) {
       const run = liveRunsRef.current.find(item => item.id === id);
