@@ -2,6 +2,10 @@ const { canvas, identity, button, titleBand, cornerDepth } = require('./red-pack
 
 const { coverMotifs } = require('./red-packet-cover-motifs.cjs');
 
+function coverLayoutError(message) {
+  return Object.assign(new Error(message), { code: 'COVER_LAYOUT_REJECTED' });
+}
+
 function rgbOnWhite(data, index, channel) {
   const alpha = data[index + 3];
   return alpha === 255 ? data[index + channel] : 255 + (data[index + channel] - 255) * alpha / 255;
@@ -77,7 +81,8 @@ function sourceColor(source, x, y, out) {
 
 function paint(data, source, placement, background, motifs, role) {
   const { width, height } = canvas, { scale, left, top } = placement;
-  const box = role ? motifs.bounds[role] : { left: 0, right: source.width, top: 0, bottom: source.height };
+  const heroRegion = role === 1 && motifs.heroRegion;
+  const box = heroRegion || (role ? motifs.bounds[role] : { left: 0, right: source.width, top: 0, bottom: source.height });
   const startX = Math.max(0, Math.ceil(left + box.left * scale - 0.5)), endX = Math.min(width, Math.ceil(left + box.right * scale - 0.5));
   const startY = Math.max(0, Math.ceil(top + box.top * scale - 0.5)), endY = Math.min(height, Math.ceil(top + box.bottom * scale - 0.5));
   const color = [0, 0, 0];
@@ -87,10 +92,13 @@ function paint(data, source, placement, background, motifs, role) {
       const safe = clearance(x + 0.5, y + 0.5);
       if (safe <= 2) continue;
       const sx = Math.min(source.width - 1, Math.max(0, (x + 0.5 - left) / scale - 0.5));
-      if (role && motifs.roles[motifs.labels[Math.floor(sy / motifs.unit) * motifs.width + Math.floor(sx / motifs.unit)]] !== role) continue;
+      if (role && !heroRegion && motifs.roles[motifs.labels[Math.floor(sy / motifs.unit) * motifs.width + Math.floor(sx / motifs.unit)]] !== role) continue;
       sourceColor(source, sx, sy, color);
       let alpha = Math.min(1, (safe - 2) / (background.simple ? 8 : height * 0.11));
-      if (role) {
+      if (heroRegion) {
+        const edge = Math.min(sx - box.left, box.right - sx, sy - box.top, box.bottom - sy);
+        alpha *= Math.max(0, Math.min(1, edge / (motifs.unit * 3)));
+      } else if (role) {
         // Chroma-matte the existing paper away; keep the strokes, fur and type.
         const contrast = Math.max(Math.abs(color[0] - background.base[0]), Math.abs(color[1] - background.base[1]), Math.abs(color[2] - background.base[2]));
         alpha *= Math.max(0, Math.min(1, (contrast - 16) / 38));
@@ -158,7 +166,7 @@ function placeScene(source, full) {
     if (occupied > 0 && sharp / occupied > 0.25) continue;
     if (cost < minCost) { valid = true; minCost = cost; best = { ...full, top: full.top + dy }; }
   }
-  if (!valid) throw Error('这张图的头像昵称区或底部按钮区仍有密集细节。请调整源图构图，将脸和题字移到遮挡区外再导出。');
+  if (!valid) throw coverLayoutError('这张图的头像昵称区或底部按钮区仍有密集细节。请调整源图构图，将脸和题字移到遮挡区外再导出。');
   return best;
 }
 
@@ -172,15 +180,15 @@ function composeCover(source) {
     paint(data, source, motifs ? full : placeScene(source, full), background);
   } else {
     if (motifs.bounds[3]) paint(data, source, full, background, motifs, 3);
-    const hero = motifs.bounds[1], top = height * (identity.bottom + 0.008);
+    const hero = motifs.heroRegion || motifs.bounds[1], top = height * (identity.bottom + 0.008);
     const foot = height * button.centerY - width * button.diameterRatio / 2 - height * 0.02;
     const heroScale = Math.min(width / (hero.right - hero.left), (foot - top) / (hero.bottom - hero.top));
     let heroPlacement = transform(hero, heroScale, width * 0.5, (top + foot) / 2);
     // Try the side gutters before reducing a tall illustration to a small stamp.
     // Never silently cut a face or glyph off to make a larger variant fit.
-    if (heroScale < full.scale * 0.68 && hero.bottom - hero.top > source.height * 0.6) {
+    if (!motifs.heroRegion && heroScale < full.scale * 0.68 && hero.bottom - hero.top > source.height * 0.6) {
       const larger = largeMotifPlacement(motifs, full);
-      if (!larger) throw Error('完整保留这张图会把主体缩得过小。请在源图中将脸和题字错开排布，再导出封面。');
+      if (!larger) throw coverLayoutError('完整保留这张图会把主体缩得过小。请在源图中将脸和题字错开排布，再导出封面。');
       heroPlacement = larger;
     }
     paint(data, source, heroPlacement, background, motifs, 1);

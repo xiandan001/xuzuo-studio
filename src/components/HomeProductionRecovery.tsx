@@ -4,7 +4,7 @@ import type { WorkflowRun } from '../configuration-types';
 import type { PageProps, Project } from '../types';
 import { workflowPublicError } from '../lib/studio-run';
 import { workflowOutputRetryLimit } from '../lib/workflow-output-retry';
-import { canResumeLocalImageExport } from '../lib/local-image-export';
+import { canResumeLocalImageExport, isCoverDeliveryLayoutFailure } from '../lib/local-image-export';
 
 export function HomeProductionRecovery({ run, project, props, onRead }: { run: WorkflowRun; project: Project; props: PageProps; onRead: (run: WorkflowRun) => void }) {
   const [busy, setBusy] = useState(''), [error, setError] = useState('');
@@ -12,6 +12,7 @@ export function HomeProductionRecovery({ run, project, props, onRead }: { run: W
   const source = useRef(props); source.current = props;
   useEffect(() => () => { current.current = ''; }, []);
   const localExport = canResumeLocalImageExport(run);
+  const coverLayoutFailure = isCoverDeliveryLayoutFailure(run);
   const canContinue = (localExport || ['paused', 'failed', 'interrupted'].includes(run.status)) && !run.referenceIssue;
   const canCancel = ['running', 'paused', 'waiting-review'].includes(run.status);
   const step = run.snapshot?.steps[run.stepIndex];
@@ -55,12 +56,15 @@ export function HomeProductionRecovery({ run, project, props, onRead }: { run: W
     {run.referenceIssue || needsModel ? <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => props.navigate(run.referenceIssue ? project.kind === 'image' ? 'images' : 'documents' : 'models', project.id)}>
       修复{run.referenceIssue ? '参考资料' : '模型设置'}<ArrowRight size={14} />
     </button> : showContinue && <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => { void act('continue'); }}>
-      {busy === 'continue' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}{localExport ? '继续本地导出' : stepMaxOutputTokens === undefined ? '继续制作' : '继续当前步骤'}
+      {busy === 'continue' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}{coverLayoutFailure ? '修正构图并继续' : localExport ? '继续本地导出' : stepMaxOutputTokens === undefined ? '继续制作' : '继续当前步骤'}
+    </button>}
+    {coverLayoutFailure && <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => props.navigate('images', project.id)}>
+      打开图片工作台<ArrowRight size={14} />
     </button>}
     {canCancel && <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => { void act('cancel'); }}>
       {busy === 'cancel' ? <LoaderCircle size={14} className="spin" /> : <Square size={14} />}取消后续制作
     </button>}
-    <p>{localExport ? '继续保存已生成的图片；本地导出不调用模型。' : showContinue ? <>
+    <p>{coverLayoutFailure && showContinue ? (failed?.errorCode === 'COVER_LAYOUT_REJECTED' ? '本地排版未通过。点击后将用现有样稿精修一次，重新检查并导出；调用模型会新增费用。' : '先用现有样稿在本地重新排版。仍不合格时，按已设置的精修次数和预算处理；调用模型会新增费用。') : localExport ? '继续保存已生成的图片；本地导出不调用模型。' : showContinue ? <>
       {stepMaxOutputTokens !== undefined && `继续时将“${step?.name || '当前步骤'}”的输出上限从 ${originalLimit} 提高到 ${stepMaxOutputTokens} Token。`}
       从当前步骤继续，保留已完成内容。再次调用模型会新增费用。
     </> : '重新读取和修改设置不调用模型，已有结果和费用保留。'}</p>

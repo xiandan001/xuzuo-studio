@@ -38,6 +38,19 @@ describe('首页可直接进入尚未导出的生成文稿', () => {
     const trash = fixture('word'); trash.props.workflowRunner.trashedArtifacts = [trash.run.attempts[0].artifacts![0]];
     expect(renderToStaticMarkup(<HomeProductionResult {...trash} kind="word" />)).not.toContain('打开编辑器');
   });
+  it('红包封面交付检查失败时保留样稿、展示原因及修正入口', () => {
+    const data = fixture('image', { status: 'failed', error: '请将猫脸和题字错开排布' });
+    data.run.snapshot.imagePreset = '微信红包封面';
+    Object.assign(data.run.snapshot.steps[1], { kind: 'export' });
+    Object.assign(data.run.attempts[0].artifacts![0], { kind: 'image', mimeType: 'image/png' });
+    Object.assign(data.run.attempts[1], { status: 'failed', errorCode: 'COVER_LAYOUT_REJECTED' });
+    const html = renderToStaticMarkup(<HomeProductionResult {...data} kind="image" />);
+    expect(html).toContain('封面构图需要调整');
+    expect(html).toContain('请将猫脸和题字错开排布');
+    expect(html).toContain('修正构图并继续');
+    expect(html).toContain('当前样稿');
+    expect(html).not.toContain('导出微信封面 JPG');
+  });
   it('未通过质检时显示原因和样稿，保留进度与进入任务的入口', () => {
     const data = fixture('word', { error: '原稿未满足范围', qualityReviews: [{ passed: false, issues: ['范围缺失'], summary: '未通过', stepId: 'accept', attemptId: 'check', reviewedAt: '' }] });
     Object.assign(data.run.snapshot.steps[1], { kind: 'text', role: 'reviewer', qualityGate: {} });

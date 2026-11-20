@@ -301,6 +301,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     attempt.status = cancelled ? 'cancelled' : 'failed';
     attempt.error = typeof error.publicMessage === 'string' ? error.publicMessage.slice(0, 500) : error.name === 'ModelRuntimeError' || (!modelStep(record.run.snapshot.steps[record.run.stepIndex]) && /[\u3400-\u9fff]/.test(error.message || '')) ? error.message.slice(0, 500) : '当前步骤未完成，请检查连接、凭证、模型权限或服务状态。';
     delete attempt.errorCode;
+    if (error.code === 'COVER_LAYOUT_REJECTED' && record.run.snapshot.steps[record.run.stepIndex]?.kind === 'export') attempt.errorCode = error.code;
     delete attempt.incompleteReason;
     delete attempt.httpStatus;
     if (error instanceof ModelRuntimeError && typeof error.code === 'string' && /^[A-Z][A-Z_0-9]{0,63}$/.test(error.code)) {
@@ -387,13 +388,41 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
     run.qualityDispatchAttempts = { ...run.qualityDispatchAttempts, [step.id]: expectedId };
   }
 
-  async function automaticQuality(record, step, attempt, controller) {
+  async function prepareCoverRepair(run, attempt, explicit) {
+    const steps = run.snapshot.steps, exporter = steps[run.stepIndex];
+    if (exporter?.kind !== 'export' || !isRedPacketCoverWorkflow(run.snapshot, run.projectId) || run.mode !== 'live' || run.supersededByRunId || run.retryStepOnly) throw Error('当前任务不能自动重新排版。');
+    const sources = coverSources(run, exporter, validResults(run)), slot = attempt.coverFiles?.length ?? 0;
+    const ids = coverSourceStepIds(run, exporter), producer = steps.find(step => step.id === ids[slot]);
+    const reviewIndex = steps.findLastIndex((step, index) => index < run.stepIndex && step.enabled && step.kind === 'vision' && step.role === 'reviewer');
+    const reviewer = steps[reviewIndex], gate = reviewer?.qualityGate, binding = gate?.imageRepairBinding;
+    if (!producer || !sources[slot] || sources[slot].id !== attempt.sourceArtifactIds?.[slot] || latestBefore(run, reviewIndex)?.stepId !== producer.id || reviewer?.inputSource !== 'previous' || reviewer.referenceArtifactIds !== undefined || gate?.repairStepId !== producer.id || steps.slice(reviewIndex + 1, run.stepIndex).some(step => step.enabled)) throw Error('原图与复核步骤的关联已变化，请核对后再处理。');
+    const count = run.repairCounts?.[reviewer.id] ?? 0;
+    if (!Number.isSafeInteger(count) || count < 0 || !explicit && count >= (gate.maxRepairs || 0)) throw Error('已达本次自动精修上限。');
+    if (!binding?.modelConfigId || !binding.credentialId) throw Error('请先为图片精修选择模型与账户。');
+    if (steps.length >= 40) throw Error('当前流程已达40步，请在图片工作台另存修订。');
+    await readResizeSource(id => artifactStore.read(id), sources[slot].id, run.projectId, run.id);
+    const edit = { id: randomUUID(), name: '调整红包封面构图', role: 'producer', kind: 'image-editing', enabled: true,
+      inputSource: 'previous', imageSourceStepId: producer.id, prompt: '保留原图角色、文字内容和风格，重新排布主体与题字，将面部和题字错开，保持主体清晰足够大并避开微信界面遮挡。不要缩小整张图，不绘制开按钮或系统界面。',
+      modelConfigId: binding.modelConfigId, credentialId: binding.credentialId, count: 1, imageOutputFormat: 'png', imageSize: producer.imageSize || 'auto',
+      ...(producer.budgetCents !== undefined ? { budgetCents: producer.budgetCents } : {}) };
+    if (exporter.contentSourceStepIds) exporter.contentSourceStepIds = ids.map((id, index) => index === slot ? edit.id : id);
+    else exporter.contentSourceStepId = edit.id;
+    gate.repairStepId = edit.id;
+    steps.splice(reviewIndex, 0, edit); run.stepIndex = reviewIndex;
+    run.repairCounts = { ...run.repairCounts, [reviewer.id]: count + 1 };
+  }
+
+  async function automaticQuality(record, step, attempt, controller, deliveryError) {
     const run = record.run;
-    if (!step.qualityGate?.maxRepairs || run.retryStepOnly || run.pauseRequested || shuttingDown || controller.signal.aborted) return {};
+    if ((!deliveryError && !step.qualityGate?.maxRepairs) || run.retryStepOnly || run.pauseRequested || shuttingDown || controller.signal.aborted) return {};
     const next = structuredClone(run); next.status = 'waiting-review';
     const request = safeRequest(record.request);
     try {
-      await prepareAutomaticQuality(next, request, attempt.id, undefined, undefined, false);
+      if (deliveryError) {
+        const failed = next.attempts.find(row => row.id === attempt.id);
+        Object.assign(failed, { status: 'failed', errorCode: deliveryError.code, error: deliveryError.message, summary: deliveryError.message, completedAt: now() });
+        await prepareCoverRepair(next, failed, false);
+      } else await prepareAutomaticQuality(next, request, attempt.id, undefined, undefined, false);
       next.snapshot = await prepareWorkflow({ ...request, workflow: next.snapshot }); request.workflow = next.snapshot;
       await checkRemaining(record, next, request, record.legacyBaseCostCents || 0, true);
     } catch (error) { return { issue: error.message }; }
@@ -557,7 +586,14 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           else update(record, {});
           await persist();
           if (paused) break;
-        } catch (error) { await finishFailure(record, attempt, error); break; }
+        } catch (error) {
+          if (step.kind === 'export' && error.code === 'COVER_LAYOUT_REJECTED' && isRedPacketCoverWorkflow(run.snapshot, run.projectId)) {
+            const recovery = await automaticQuality(record, step, attempt, controller, error);
+            if (recovery.scheduled) continue;
+            if (recovery.issue) error.publicMessage = `${error.message} ${recovery.issue}`;
+          }
+          await finishFailure(record, attempt, error); break;
+        }
       }
     } finally { if (controllers.get(id) === controller) controllers.delete(id); }
   }
@@ -812,6 +848,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         if (project && (project.id !== run.projectId || project.kind !== run.snapshot.outputKind)) throw new Error('续跑项目与原运行不匹配。');
         const nextRequest = safeRequest({ ...record.request, project: project || record.request.project, connections: connections || record.request.connections, models: models || record.request.models });
         const nextRun = structuredClone(run);
+        let coverRepair = false;
         if (resize) nextRun.snapshot.steps[resize.exportIndex].imageExportSize = { width: imageExportSize.width, height: imageExportSize.height };
         if (stepBudgetCents !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].budgetCents = stepBudgetCents ?? undefined;
         if (stepMaxOutputTokens !== undefined) nextRun.snapshot.steps[nextRun.stepIndex].maxOutputTokens = stepMaxOutputTokens;
@@ -834,6 +871,10 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
           nextRun.stepIndex = index; nextRun.retryStepOnly = true;
         } else {
           const current = nextRun.snapshot.steps[nextRun.stepIndex];
+          const failed = nextRun.attempts.findLast(item => item.stepId === current?.id);
+          if (action === 'continue' && run.status === 'failed' && current?.kind === 'export' && failed?.errorCode === 'COVER_LAYOUT_REJECTED') {
+            await prepareCoverRepair(nextRun, failed, true); coverRepair = true;
+          }
           const cancelledLocalExport = run.status === 'cancelled' && !run.supersededByRunId && (current?.kind === 'animation-compose' || current?.kind === 'export' && (current.wallpaperTarget !== undefined || current.engineeringReferenceId !== undefined || current.imageExportSize !== undefined || isRedPacketCoverWorkflow(run.snapshot, run.projectId)));
           if (!(['resume', 'continue'].includes(action) && (['paused', 'failed', 'interrupted'].includes(run.status) || cancelledLocalExport))) throw new Error('当前状态不能执行这个操作。');
         }
@@ -845,7 +886,7 @@ function createLiveWorkflowEngine({ directory, archiveRedPacketCover, credential
         nextRun.snapshot = await prepareWorkflow({ ...nextRequest, workflow: nextRun.snapshot });
         nextRequest.workflow = nextRun.snapshot;
         const nextBaseline = project ? Math.max(record.legacyBaseCostCents || 0, project.costCents - projectLedgerCost(project.id)) : record.legacyBaseCostCents || 0;
-        await checkRemaining(record, nextRun, nextRequest, nextBaseline, action === 'auto-quality');
+        await checkRemaining(record, nextRun, nextRequest, nextBaseline, action === 'auto-quality' || coverRepair);
         const previous = { run: structuredClone(run), request: record.request, legacyBaseCostCents: record.legacyBaseCostCents };
         record.request = nextRequest; record.legacyBaseCostCents = nextBaseline;
         Object.assign(run, nextRun); update(record, { status: 'running', error: undefined, referenceIssue: undefined, pauseRequested: false });

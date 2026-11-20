@@ -44,6 +44,22 @@ it('将冲突的独立题字放上方，角色保持大图，两者均不进入�
   expect(title[3]).toBeLessThanOrEqual(titleBand.bottom + 0.001);
   expect(input.data).toEqual(original);
 });
+it('识别主体上方居中的分段题字，保留题字各部分与浅色角色细节', () => {
+  const input = artwork(168, 224);
+  const red = [181, 0, 0, 255];
+  input.rect(18, 99, 150, 215, [2, 1, 180, 255]);
+  input.rect(47, 105, 95, 123, [230, 228, 220, 255]);
+  input.rect(34, 33, 104, 48, red);
+  input.rect(111, 33, 134, 48, red);
+  input.rect(109, 74, 123, 88, [120, 180, 24, 255]);
+  input.rect(34, 81, 48, 102, [120, 180, 24, 255]);
+  const out = composeCover(input), [hero, title] = verifyInk(out);
+  expect(out.data.includes(Buffer.from([230, 228, 220, 255]))).toBe(true);
+  expect(hero[2] - hero[0]).toBeGreaterThan(0.38);
+  expect(title[2] - title[0]).toBeGreaterThan(0.32);
+  expect(title[1]).toBeGreaterThanOrEqual(titleBand.top - 0.001);
+  expect(title[3]).toBeLessThanOrEqual(titleBand.bottom + 0.001);
+});
 it('本来就在两侧可见区的细节保留原始构图，不强制压进中下部', () => {
   const input = artwork();
   input.rect(0, 18, 18, 147, [0, 0, 180, 255]);

@@ -18,7 +18,7 @@ function createCpuTasks({ workerFile = path.join(__dirname, 'cpu-worker.cjs'), t
         Promise.resolve().then(() => worker.terminate()).catch(() => undefined).then(() => { if (error) reject(error); else resolve(result); });
       };
       const timer = setTimeout(() => finish(new Error('后台文件处理超时，原稿保留，请缩小文件后重试。')), timeoutMs);
-      worker.once('message', value => finish(value.error ? new Error(value.error) : null, value.result));
+      worker.once('message', value => finish(value.error ? Object.assign(new Error(value.error), { code: value.code }) : null, value.result));
       worker.once('error', error => finish(new Error(`后台文件处理失败：${error.message}`)));
       worker.once('exit', code => { if (!settled) finish(new Error(`后台文件处理意外退出（${code}），未覆盖原稿。`)); });
       signal?.addEventListener('abort', abort, { once: true });

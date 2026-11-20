@@ -7,6 +7,7 @@ import type { ArtifactMetadata, ArtifactPreview } from '../live-types';
 import { homeCreationArtifacts, homeCreationDocumentSource, homeCreationPreviewUrl, homeCreationProgress } from '../lib/home-creation';
 import { runCostRecords, summarizeCosts } from '../lib/cost-display';
 import { workflowPublicError } from '../lib/studio-run';
+import { isCoverDeliveryLayoutFailure } from '../lib/local-image-export';
 import { hasLegacyCoverAspectReview, recoverableQualityAttempt, workflowReviewState } from '../lib/workflow-review';
 import { usePreparedRedPacketCover } from '../hooks/usePreparedRedPacketCover';
 import { RedPacketCoverPreview, coverFileSize } from './RedPacketCoverPreview';
@@ -107,6 +108,7 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
   const recoveryAttempt = recoverableQualityAttempt(actual);
   const blocked = reviewState === 'quality-failed' || reviewState === 'blocked';
   const needsHelp = ['paused', 'failed', 'interrupted', 'cancelled'].includes(actual.status);
+  const coverLayoutFailure = isCoverDeliveryLayoutFailure(actual);
   const openSteps = () => props.onOpenTask ? props.onOpenTask(actual.id, project.id) : props.navigate('activity', project.id);
   async function save() {
     if (!file || pending.current) return;
@@ -125,9 +127,9 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
       <div className={`creation-production-icon ${finished && file ? 'is-ready' : ''}`}>{finished && file ? <Check size={18} /> : actual.status === 'running' ? <LoaderCircle size={18} className="spin" /> : <Icon size={19} />}</div>
       <div>
         <div className="creation-production-stage">制作进度</div>
-        <h3>{reviewState === 'quality-failed' ? '质检未通过' : blocked ? '制作需要检查' : finished && documentSource ? '文稿已生成 · 尚未导出' : finished && file ? '作品已生成' : finished ? '制作已结束' : actual.status === 'cancelled' ? '本次制作已取消' : needsHelp ? '制作需要你处理' : '正在按方案制作'}</h3>
-        {actual.status === 'failed' && actual.snapshot.steps[actual.stepIndex] && <p className="creation-production-failed-step">失败步骤 · {progress.label}</p>}
-        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${reviewState === 'manual' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : hasLegacyCoverAspectReview(actual) ? '上次按旧画幅检查。样稿与原检查记录已保留，可按当前红包封面标准重新质检。' : needsHelp || blocked ? actual.error || '已完成的步骤和费用保留。' : `正在处理：${progress.label}`}</p>
+        <h3>{coverLayoutFailure ? '封面构图需要调整' : reviewState === 'quality-failed' ? '质检未通过' : blocked ? '制作需要检查' : finished && documentSource ? '文稿已生成 · 尚未导出' : finished && file ? '作品已生成' : finished ? '制作已结束' : actual.status === 'cancelled' ? '本次制作已取消' : needsHelp ? '制作需要你处理' : '正在按方案制作'}</h3>
+        {actual.status === 'failed' && actual.snapshot.steps[actual.stepIndex] && <p className="creation-production-failed-step">{coverLayoutFailure ? '本地封面检查未通过' : `失败步骤 · ${progress.label}`}</p>}
+        <p>{finished && documentSource ? `已保存到「${project.name}」 · 可直接检查、编辑并导出正式${names[kind]}文件` : finished && file ? `已保存到「${project.name}」${reviewState === 'manual' ? ' · 待人工验收' : ' · 可继续修改与导出'}` : finished ? '当前还没有可用的交付文件，已保存内容和费用仍保留。' : coverLayoutFailure ? actual.error || '当前样稿的构图不符合封面要求，调整后可继续导出。' : hasLegacyCoverAspectReview(actual) ? '上次按旧画幅检查。样稿与原检查记录已保留，可按当前红包封面标准重新质检。' : needsHelp || blocked ? actual.error || '已完成的步骤和费用保留。' : `正在处理：${progress.label}`}</p>
       </div>
       <div className="creation-production-cost"><span>本次制作</span><CostTotal summary={summarizeCosts(runCostRecords(actual, props.ledger))} /></div>
     </header>
@@ -135,7 +137,7 @@ export function HomeProductionResult({ props, run, kind }: { props: PageProps; r
     {recoveryAttempt && <HomeQualityRecovery key={scope + '/' + recoveryAttempt.id} run={actual} project={project} props={props} onRead={setDetail} />}
     {(needsHelp || blocked && actual.referenceIssue) && <HomeProductionRecovery key={scope} run={actual} project={project} props={props} onRead={setDetail} />}
     {reviewState === 'manual' && <div className="creation-production-progress"><button type="button" className="btn btn-primary" onClick={openSteps}>检查并交付<ArrowRight size={14} /></button></div>}
-    {file && blocked && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
+    {file && (blocked || coverLayoutFailure) && <><p className="creation-production-draft">当前样稿</p><HomeArtifactPreview key={`${scope}/draft/${file.id}`} file={file} kind={kind} props={props} /></>}
     {file && finished && <>{cover ? <RedPacketCoverPreview key={file.id} preparation={preparation} original={coverOriginal && <HomeArtifactPreview file={coverOriginal} kind={kind} props={props} />} /> : <HomeArtifactPreview key={`${scope}/${file.id}`} file={file} kind={kind} props={props} />}{files.length > 1 && <HomeResultFilePicker files={files} selectedId={file.id} runner={props.workflowRunner} onSelect={setSelectedId} />}<footer><span title={file.name}>{documentSource ? `${names[kind]}文稿 · 待检查` : file.name}<small>{cover ? originalId ? '上传 JPG · ' : '生成源图 · ' : ''}{(file.bytes / 1024).toFixed(0)} KB · {documentSource ? '生成源稿，编辑后导出正式文件' : '实际文件'}</small></span><div className="home-result-primary-actions">{!documentSource && props.onDiscussArtifact && <button type="button" className="home-result-discuss" onClick={() => props.onDiscussArtifact?.(file, kind)}><MessageSquarePlus size={16} />继续修改这份</button>}<button type="button" className={documentSource ? 'btn btn-primary' : 'btn-icon home-result-editor-trigger'} aria-label="打开编辑器" title="打开编辑器" onClick={() => props.navigate(kind === 'image' ? 'images' : 'documents', project.id)}>{documentSource ? '打开编辑器' : <PanelsTopLeft size={18} />}</button>{!documentSource && <><button type="button" className="btn btn-primary" disabled={saving || cover && !preparation.file} onClick={() => { void save(); }}>{saving ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{cover ? '导出微信封面 JPG' : `导出${names[kind]}`}</button><HomeResultMoreActions key={`${scope}/${file.id}`} props={props} project={project} file={file} /></>}</div></footer></>}
     {finished && !file && <div className="creation-production-empty"><p>这次制作尚无可用的{names[kind]}成品。已保存的步骤、源内容和费用仍保留。</p><button type="button" className="btn btn-secondary" onClick={() => props.navigate('activity', project.id)}>查看结果与步骤</button></div>}
     {error && <p className="home-plan-error" role="alert">{error}{cover && <button type="button" className="text-button" disabled={saving} onClick={() => { setError(''); preparation.retry(); }}>刷新封面</button>}</p>}

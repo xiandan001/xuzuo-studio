@@ -64,6 +64,27 @@ describe('首页异常任务就地处理', () => {
     await click('继续当前步骤'); expect(f.control).toHaveBeenCalledOnce();
     expect(f.control.mock.calls[0][0]).toMatchObject({ id: 'run', action: 'continue', stepMaxOutputTokens: 6144 });
   });
+  it.each([
+    ['COVER_LAYOUT_REJECTED', '请将猫脸和题字错开排布'],
+    [undefined, '完整保留这张图会把主体缩得过小。'],
+  ])('红包封面本地检查失败时提供构图恢复（%s）', async (errorCode, error) => {
+    const f = await render('failed', {
+      mode: 'live', stepIndex: 0, error,
+      snapshot: { outputKind: 'image', imagePreset: '微信红包封面', steps: [{ id: 'export', kind: 'export', enabled: true }] } as WorkflowRun['snapshot'],
+      attempts: [{ stepId: 'export', status: 'failed', errorCode, error }] as WorkflowRun['attempts'],
+    });
+    expect(host.textContent).toContain(errorCode ? '精修一次' : '先用现有样稿在本地重新排版');
+    expect(host.textContent).toContain('会新增费用');
+    expect(host.textContent).not.toContain('从当前步骤继续');
+    await click('打开图片工作台');
+    expect(f.navigate).toHaveBeenCalledWith('images', 'project');
+    expect(f.control).not.toHaveBeenCalled();
+    f.control.mockRejectedValueOnce(Error('已用完自动修正次数'));
+    await click('修正构图并继续');
+    expect(f.control).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'run', action: 'continue' }));
+    expect(host.querySelector('[role=alert]')?.textContent).toContain('已用完自动修正次数');
+    expect(f.onRead).not.toHaveBeenCalled();
+  });
   it('操作失败不假报完成，解除禁用并显示可读错误', async () => {
     const f = await render('interrupted'); f.control.mockRejectedValueOnce(Error('后台暂不可用')); await click('继续制作');
     expect(host.querySelector('[role=alert]')?.textContent).toContain('后台暂不可用'); expect(f.onRead).not.toHaveBeenCalled(); expect([...host.querySelectorAll('button')].every(button => !button.disabled)).toBe(true);

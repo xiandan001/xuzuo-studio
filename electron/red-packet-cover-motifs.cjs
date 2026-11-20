@@ -42,7 +42,10 @@ function coverMotifs(source, background) {
   const main = groups[0];
   const heading = groups.slice(1).find(g => g.count > main.count * 0.035 && g.count < main.count * 0.7 &&
     g.cy < main.cy && g.cy < height * 0.42 && g.y1 - g.y0 < height * 0.33 &&
-    Math.abs(g.cx - main.cx) > width * 0.12);
+    (Math.abs(g.cx - main.cx) > width * 0.12 ||
+      // A clearly detached horizontal line can be a centered title as well.
+      (g.y1 < main.y0 - height * 0.03 && g.x1 - g.x0 >= (g.y1 - g.y0) * 2)));
+  const detachedHeading = heading && heading.y1 < main.y0 - height * 0.03;
   const roles = new Uint8Array(groups.length + 1), bounds = [null, null, null, null];
   for (const group of groups) {
     const isHeading = heading && (group === heading || group !== main && group.count <= heading.count &&
@@ -50,12 +53,22 @@ function coverMotifs(source, background) {
       group.y0 < heading.y1 + height * 0.08 && group.y1 > heading.y0 - height * 0.08);
     // An isolated grain at the opposite canvas edge should not shrink the whole
     // hero. Keep such marks in their original locations on the paper instead.
-    const role = isHeading ? 2 : group !== main && group.count <= 9 ? 3 : 1;
+    const floatingAccent = detachedHeading && group.cy < main.y0 && group.y1 < main.y0 + height * 0.035 &&
+      group.count <= main.count * 0.035;
+    const role = isHeading ? 2 : group !== main && (group.count <= 9 || floatingAccent) ? 3 : 1;
     roles[group.id] = role;
     const box = bounds[role] ||= { left: source.width, right: 0, top: source.height, bottom: 0 };
     box.left = Math.min(box.left, group.x0 * unit); box.right = Math.max(box.right, Math.min(source.width, group.x1 * unit));
     box.top = Math.min(box.top, group.y0 * unit); box.bottom = Math.max(box.bottom, Math.min(source.height, group.y1 * unit));
   }
-  return { unit, width, labels, roles, bounds };
+  // When the title is on its own line above the subject, keep the original
+  // shaded region under it. A strong-colour mask alone can erase pale fur.
+  const heroRegion = detachedHeading && heading.y1 < main.y0 - height * 0.12 ? {
+    left: Math.max(0, bounds[1].left - source.width * 0.035),
+    right: Math.min(source.width, bounds[1].right + source.width * 0.035),
+    top: Math.max(bounds[2].bottom + unit * 2, bounds[1].top - source.height * 0.16),
+    bottom: Math.min(source.height, bounds[1].bottom + source.height * 0.025),
+  } : undefined;
+  return { unit, width, labels, roles, bounds, heroRegion };
 }
 module.exports = { coverMotifs };

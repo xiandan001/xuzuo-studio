@@ -23,4 +23,4 @@ async function run() {
   }
   throw new Error('Unsupported CPU task');
 }
-run().then(result => parentPort.postMessage({ result }, workerData.task === 'red-packet-cover-bitmap' ? [result.buffer] : []), error => parentPort.postMessage({ error: error.message || '后台文件处理未完成。' }));
+run().then(result => parentPort.postMessage({ result }, workerData.task === 'red-packet-cover-bitmap' ? [result.buffer] : []), error => parentPort.postMessage({ code: error.code, error: error.message || '后台文件处理未完成。' }));

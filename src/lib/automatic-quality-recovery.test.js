@@ -16,7 +16,7 @@ async function removeFixture(directory) {
   await fs.rm(owned, {recursive:true,force:true});
 }
 
-async function setup(responses, { max = 1, editBinding = binding, cover = false, budget, unknownEdit = false } = {}) {
+async function setup(responses, { max = 1, editBinding = binding, cover = false, budget, unknownEdit = false, composeBitmap = async()=>Buffer.alloc(957*1278*4) } = {}) {
   const f = await fixture(), input = request(), store = f.artifactStore;
   await f.engine.shutdown(); input.workflow.outputKind = input.project.kind = 'image'; input.project.budgetCents = budget;
   if (cover) input.workflow.imagePreset = '微信红包封面';
@@ -39,7 +39,7 @@ async function setup(responses, { max = 1, editBinding = binding, cover = false,
     const image = await store.write({projectId: task.projectId, runId: task.runId, name: task.kind + '.png', mimeType:'image/png', buffer:PNG});
     return {text:'已写入实际图片', artifacts:[image], usage:{images:1}};
   });
-  const codec = createRedPacketCoverExporter({readArtifact:store.read, writeDelivery:store.writePreparedCover, composeBitmap:async()=>Buffer.alloc(957*1278*4),
+  const codec = createRedPacketCoverExporter({readArtifact:store.read, writeDelivery:store.writePreparedCover, composeBitmap,
     nativeImage:{createFromBitmap:()=>({isEmpty:()=>false,toJPEG:()=>require('./red-packet-cover-fixture.cjs')})}});
   const options = {...f.engineOptions, archiveRedPacketCover:codec.archive, modelRuntime:{supports:()=>true, execute}};
   let engine = createLiveWorkflowEngine(options); const {id} = await engine.start(input);
@@ -49,6 +49,20 @@ async function setup(responses, { max = 1, editBinding = binding, cover = false,
     dispose: async()=>{await engine.shutdown(); await removeFixture(f.directory);},
   };
 }
+
+it('视觉通过但本地交付拒绝构图时：自动精修选中的原图、复检并归档新图，保留原图与账本', async()=>{
+  const composeBitmap=vi.fn().mockRejectedValueOnce(Object.assign(Error('完整保留这张图会把主体缩得过小。'),{code:'COVER_LAYOUT_REJECTED'})).mockResolvedValue(Buffer.alloc(957*1278*4));
+  const f=await setup([passed],{cover:true,composeBitmap});
+  try {
+    const run=await f.terminal(); expect(run.snapshot.steps[run.stepIndex].kind,run.error).toBe('manual-review');
+    expect(f.execute.mock.calls.map(([t])=>t.kind)).toEqual(['image-generation','vision','image-editing','vision']);
+    const original=run.attempts[0].artifacts[0], edited=run.attempts.find(a=>a.artifacts?.some(file=>file.id===f.execute.mock.calls[3][0].attachments[0].id))?.artifacts[0];
+    expect(f.execute.mock.calls[2][0].attachments.map(a=>a.id)).toContain(original.id);
+    expect(edited.id).not.toBe(original.id);
+    expect(composeBitmap).toHaveBeenCalledTimes(2);expect(run.attempts.filter(a=>a.stepId==='deliver').at(-1).artifacts[0].mimeType).toBe('image/jpeg');
+    expect((await f.store.read(original.id)).buffer).toEqual(PNG);expect((await f.engine.snapshot()).ledger).toHaveLength(4);
+  } finally {await f.dispose()}
+}, 20000);
 
 it('用户授权后的真实构图问题自动精修当前样稿并复检，按新结果交付，重开不再派单', async()=>{
   const f=await setup([failed('猫脸太小'), passed]);
@@ -144,3 +158,23 @@ it('需跨越其它付费步骤的手工文稿不会按自动修订的名义再�
     expect(run.status).toBe('waiting-review');expect(run.snapshot.steps[run.stepIndex].id).toBe('check');expect(run.error).toContain('其他步骤');expect(f.calls.map(t=>t.prompt)).toEqual([producer.prompt,'附加任务','最终检查']);
   }finally{await f.engine.shutdown();await removeFixture(f.directory)}
 });
+
+it.each([true,false])('交付连续拒绝时自动精修次数有界，重新打开不派单；明确续作只精修一次（成功：%s）', async(success)=>{
+  const refusal = Object.assign(Error('主体缩得过小'),{code:'COVER_LAYOUT_REJECTED'});
+  let calls = 0;
+  const composeBitmap = vi.fn(async()=>{ if (++calls < 3 || !success) throw refusal; return Buffer.alloc(957*1278*4); });
+  const f = await setup([passed],{cover:true,max:1,composeBitmap});
+  try {
+    const stopped = await f.terminal(); expect(stopped.status,stopped.error).toBe('failed');
+    expect(stopped.repairCounts.check).toBe(1); expect(stopped.attempts.at(-1).errorCode).toBe(refusal.code);
+    const latestId = stopped.attempts.at(-1).sourceArtifactIds[0];
+    await f.reopen(); expect((await f.engine.runDetail(f.id)).status).toBe('failed');
+    expect(composeBitmap).toHaveBeenCalledTimes(2); expect(f.execute).toHaveBeenCalledTimes(4);
+    await f.engine.control({id:f.id,action:'continue',project:f.input.project,models:f.input.models,connections:f.input.connections});
+    const result = await f.terminal(); expect(result.status,result.error).toBe(success?'waiting-review':'failed');
+    expect(result.snapshot.steps[result.stepIndex].kind).toBe(success?'manual-review':'export'); expect(result.repairCounts.check).toBe(2);
+    expect(f.execute.mock.calls.map(([t])=>t.kind)).toEqual(['image-generation','vision','image-editing','vision','image-editing','vision']);
+    expect(f.execute.mock.calls[4][0].attachments.map(a=>a.id)).toEqual([latestId]);
+    expect(composeBitmap).toHaveBeenCalledTimes(3); expect((await f.engine.snapshot()).ledger).toHaveLength(6);
+  } finally { await f.dispose(); }
+},20000);
